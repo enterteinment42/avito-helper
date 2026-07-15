@@ -4,8 +4,23 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Авито-помощник</title>
-  <link href="https://fonts.googleapis.com/css2?family=Literata:ital,wght@0,400;0,500;0,600;0,700;1,400&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
   <style>
+    /* UX-12/GFX-13: шрифты самохостятся из ./fonts (рядом с этим файлом) — Google Fonts CDN
+       нестабилен в РФ и раньше давал случайный system-fallback от сессии к сессии */
+    @font-face { font-family:'Literata'; font-style:normal; font-weight:400; font-display:swap; src:url('fonts/Literata-normal-400-cyrillic.woff2') format('woff2'); unicode-range:U+0301,U+0400-045F,U+0490-0491,U+04B0-04B1,U+2116; }
+    @font-face { font-family:'Literata'; font-style:normal; font-weight:400; font-display:swap; src:url('fonts/Literata-normal-400-latin.woff2') format('woff2'); unicode-range:U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD; }
+    @font-face { font-family:'Literata'; font-style:normal; font-weight:500; font-display:swap; src:url('fonts/Literata-normal-500-cyrillic.woff2') format('woff2'); unicode-range:U+0301,U+0400-045F,U+0490-0491,U+04B0-04B1,U+2116; }
+    @font-face { font-family:'Literata'; font-style:normal; font-weight:500; font-display:swap; src:url('fonts/Literata-normal-500-latin.woff2') format('woff2'); unicode-range:U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD; }
+    @font-face { font-family:'Literata'; font-style:normal; font-weight:600; font-display:swap; src:url('fonts/Literata-normal-600-cyrillic.woff2') format('woff2'); unicode-range:U+0301,U+0400-045F,U+0490-0491,U+04B0-04B1,U+2116; }
+    @font-face { font-family:'Literata'; font-style:normal; font-weight:600; font-display:swap; src:url('fonts/Literata-normal-600-latin.woff2') format('woff2'); unicode-range:U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD; }
+    @font-face { font-family:'Literata'; font-style:normal; font-weight:700; font-display:swap; src:url('fonts/Literata-normal-700-cyrillic.woff2') format('woff2'); unicode-range:U+0301,U+0400-045F,U+0490-0491,U+04B0-04B1,U+2116; }
+    @font-face { font-family:'Literata'; font-style:normal; font-weight:700; font-display:swap; src:url('fonts/Literata-normal-700-latin.woff2') format('woff2'); unicode-range:U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD; }
+    @font-face { font-family:'Literata'; font-style:italic; font-weight:400; font-display:swap; src:url('fonts/Literata-italic-400-cyrillic.woff2') format('woff2'); unicode-range:U+0301,U+0400-045F,U+0490-0491,U+04B0-04B1,U+2116; }
+    @font-face { font-family:'Literata'; font-style:italic; font-weight:400; font-display:swap; src:url('fonts/Literata-italic-400-latin.woff2') format('woff2'); unicode-range:U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD; }
+    @font-face { font-family:'JetBrains Mono'; font-style:normal; font-weight:400; font-display:swap; src:url('fonts/JetBrainsMono-normal-400-cyrillic.woff2') format('woff2'); unicode-range:U+0301,U+0400-045F,U+0490-0491,U+04B0-04B1,U+2116; }
+    @font-face { font-family:'JetBrains Mono'; font-style:normal; font-weight:400; font-display:swap; src:url('fonts/JetBrainsMono-normal-400-latin.woff2') format('woff2'); unicode-range:U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD; }
+    @font-face { font-family:'JetBrains Mono'; font-style:normal; font-weight:500; font-display:swap; src:url('fonts/JetBrainsMono-normal-500-cyrillic.woff2') format('woff2'); unicode-range:U+0301,U+0400-045F,U+0490-0491,U+04B0-04B1,U+2116; }
+    @font-face { font-family:'JetBrains Mono'; font-style:normal; font-weight:500; font-display:swap; src:url('fonts/JetBrainsMono-normal-500-latin.woff2') format('woff2'); unicode-range:U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD; }
     :root {
       --bg:       #1a1a2e;
       --card:     #16213e;
@@ -90,7 +105,14 @@
       display: none;
     }
     .settings-panel.open { display: block; }
+    /* UX-14: та же панель провайдера/модели, но всегда открыта прямо в форме генератора */
+    .ai-inline-panel {
+      background: var(--card3); border: 1px solid var(--border2);
+      border-radius: var(--r); padding: 12px 16px; margin-bottom: 14px;
+    }
     .settings-row { display: flex; flex-wrap: wrap; gap: 16px; align-items: flex-end; }
+    /* UX-15: «Ещё варианты» — визуально отделённый блок под основным набором */
+    .extra-results-sep { margin-top: 22px; padding-top: 14px; border-top: 1px dashed var(--border2); }
     .s-group { display: flex; flex-direction: column; gap: 5px; }
     .s-note { font-size: 12px; color: var(--muted); max-width: 280px; padding-top: 18px; }
 
@@ -247,6 +269,12 @@
     .vnum {
       font-family: var(--fm); font-size: 10px; color: var(--muted);
       background: var(--card3); padding: 2px 7px; border-radius: 4px; flex-shrink: 0;
+    }
+    .scan-badge { font-size: 12px; cursor: help; flex-shrink: 0; }
+    .results-product-badge {
+      display: inline-block; margin: 8px 0 2px; padding: 4px 11px; border-radius: 8px;
+      background: var(--card3); border: 1px solid var(--border2);
+      font-size: 12px; color: var(--text2); font-weight: 600; letter-spacing: .2px;
     }
     .vtags { display: flex; gap: 5px; flex-wrap: wrap; flex: 1; }
     .vtag {
@@ -490,7 +518,11 @@
 
     /* ── Covers Module ── */
     .cv-wrap { display: grid; grid-template-columns: 310px 1fr; gap: 18px; max-width: 1140px; margin: 0 auto; padding: 24px 20px; align-items: start; }
-    @media (max-width: 720px) { .cv-wrap { grid-template-columns: 1fr; } }
+    @media (max-width: 720px) {
+      .cv-wrap { grid-template-columns: 1fr; }
+      /* GFX-9: превью — первым, липнет сверху во время прокрутки настроек, а не прячется внизу */
+      .cv-preview-wrap { order: -1; top: 8px; }
+    }
     .cv-mode-tabs { display: flex; gap: 8px; margin-bottom: 4px; }
     .tab-pill { flex: 1; padding: 8px 0; border-radius: var(--rs); background: var(--card2); color: var(--text2); border: 1px solid var(--border2); cursor: pointer; font-family: var(--ft); font-size: 13px; font-weight: 500; transition: all .15s; text-align: center; }
     .tab-pill.active { background: var(--accent-d); color: var(--accent-h); border-color: var(--accent); }
@@ -680,6 +712,11 @@ const state = {
   titleStep: null,   // { titles, selected, form } — промежуточный выбор заголовков до генерации описаний
   regenId: null,
   results:   ls('avito_results',   []),
+  extraResults: ls('avito_extra_results', []), // UX-15: «Ещё варианты» — отдельный список, не заменяет основной
+  extraLoading: false,
+  // F12: снимок формы на момент генерации переживает F5 (для ↻ и ↻×5). Читаем напрямую, а не через
+  // ls(): ls() при def=null и пустом хранилище вернул бы {} (`{...null}`), а {} труъ — сломало бы `resultsForm || form`.
+  resultsForm: (() => { try { const v = localStorage.getItem('avito_results_form'); return v ? JSON.parse(v) : null; } catch(e) { return null; } })(),
   favorites: ls('avito_favorites', []),
   error: null,
   catalogs:   ls('avito_catalogs', {}),
@@ -691,8 +728,8 @@ const state = {
   conveyorMode: false,
   conveyorIdx: 0,
   batchMode: false,
-  batchRegions: [],
-  batchResults: [],
+  batchRegions: ls('avito_batch_regions', []), // F10: переживают F5
+  batchResults: ls('avito_batch_results', []), // F10: сгенерированный пакет не теряется при обновлении
   batchChunkProgress: null, // F2: { done, total } — прогресс чанков при генерации большого пакета
   altTitles: {}, altTitlesLoading: null,
   batchExpanded: null,
@@ -724,11 +761,16 @@ function save() {
     localStorage.setItem('avito_settings', JSON.stringify(state.settings));
     localStorage.setItem('avito_form',     JSON.stringify(state.form));
     localStorage.setItem('avito_results',  JSON.stringify(state.results));
+    localStorage.setItem('avito_extra_results', JSON.stringify(state.extraResults));
+    localStorage.setItem('avito_results_form', JSON.stringify(state.resultsForm ?? null)); // F12: снимок формы для ↻/↻×5 после F5
     localStorage.setItem('avito_favorites',JSON.stringify(state.favorites));
     localStorage.setItem('avito_catalogs',  JSON.stringify(state.catalogs));
     localStorage.setItem('avito_db',        JSON.stringify(state.db));
     localStorage.setItem('avito_queue',     JSON.stringify(state.postQueue));
     localStorage.setItem('avito_presets',   JSON.stringify(state.presets));
+    // F10: пакет по регионам переживает F5 (был только в памяти — случайное обновление сжигало токены)
+    localStorage.setItem('avito_batch_results', JSON.stringify(state.batchResults));
+    localStorage.setItem('avito_batch_regions', JSON.stringify(state.batchRegions));
   } catch(e) {}
 }
 
@@ -895,7 +937,11 @@ async function callAI(messages, opts = {}) {
       headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + getProxyToken() },
       body: JSON.stringify(body),
     });
-    if (!r.ok) throw new Error(`Claude ${r.status}: ${await r.text()}`);
+    if (!r.ok) {
+      // F13: неверный токен иначе сохранён навсегда — сбрасываем, чтобы следующий запрос переспросил
+      if (r.status === 401) localStorage.removeItem('avito_admin_token');
+      throw new Error(`Claude ${r.status}: ${await r.text()}`);
+    }
     const d = await r.json();
     return d.content?.filter(b => b.type === 'text').map(b => b.text).join('\n') || '';
   }
@@ -911,7 +957,10 @@ async function callAI(messages, opts = {}) {
         messages: [{ role: 'system', content: state.settings.customSys ? SYS + '\n\n' + state.settings.customSys : SYS }, ...messages],
       }),
     });
-    if (!r.ok) throw new Error(`OpenRouter ${r.status}: ${await r.text()}`);
+    if (!r.ok) {
+      if (r.status === 401) localStorage.removeItem('avito_admin_token');
+      throw new Error(`OpenRouter ${r.status}: ${await r.text()}`);
+    }
     const d = await r.json();
     return d.choices?.[0]?.message?.content || '';
   }
@@ -1042,6 +1091,18 @@ function validateForm(f = state.form) {
   return miss;
 }
 
+// UX-15: «Ещё варианты» живут отдельно от основного набора — эти хелперы
+// ищут/мутируют вариант в обоих списках сразу, чтобы карточка вела себя одинаково в обоих местах
+function resultsPool() { return [...state.results, ...state.extraResults]; }
+function findResult(id) { return state.results.find(r => r.id === id) || state.extraResults.find(r => r.id === id); }
+function findResultRef(id) {
+  let idx = state.results.findIndex(r => r.id === id);
+  if (idx !== -1) return { arr: state.results, idx };
+  idx = state.extraResults.findIndex(r => r.id === id);
+  if (idx !== -1) return { arr: state.extraResults, idx };
+  return { arr: null, idx: -1 };
+}
+
 async function doGenerate() {
   if (state.loading) return;
   const miss = validateForm();
@@ -1049,7 +1110,7 @@ async function doGenerate() {
   if (state.batchMode && !state.batchRegions.length) { toast('Пакетный режим включён — выберите хотя бы один регион'); return; }
   if (state.batchMode && state.batchRegions.length) { doBatchGenerate(); return; }
   state.loading = true; state.error = null; state.loadingKind = null;
-  state.batchResults = []; state.titleStep = null;
+  state.batchResults = []; state.titleStep = null; state.extraResults = [];
   refreshResults();
   try {
     const webSearch = state.form.isPreorder && state.form.category === 'game';
@@ -1058,7 +1119,10 @@ async function doGenerate() {
     // F4: снимок формы + штамп товара/категории на каждый вариант — чтобы действия
     // карточки (Размещено/Сканер/Экспорт/↻×5) не читали форму, переключённую позже
     state.resultsForm = JSON.parse(JSON.stringify(state.form));
-    state.results.forEach(v => { v._product = currentProductName(state.form); v._category = state.form.category; });
+    state.results.forEach(v => {
+      v._product = currentProductName(state.form); v._category = state.form.category;
+      v._scan = checkAds(v.title || '', v.description || '', state.form.category); // автопроверка сразу после генерации
+    });
     state.conveyorIdx = 0;
     save();
   } catch(e) {
@@ -1070,9 +1134,38 @@ async function doGenerate() {
   }
 }
 
+// UX-15: «➕ Ещё варианты» — дописывает в отдельный список, НЕ трогая основной набор
+// (в отличие от doGenerate/doRegen, которые заменяют state.results целиком)
+async function doGenerateMore() {
+  if (state.loading || state.extraLoading || !state.results.length) return;
+  state.extraLoading = true;
+  refreshResults();
+  try {
+    const snapForm = state.resultsForm || state.form; // F4: та же форма, что породила основной набор
+    const excl = resultsPool().map(v => v.title);
+    const webSearch = snapForm.isPreorder && snapForm.category === 'game';
+    const text = await callAI([{ role: 'user', content: buildMsg(snapForm.count, excl, snapForm) }], { webSearch });
+    const fresh = parseVariants(text);
+    if (!fresh.length) throw new Error('AI не вернул варианты');
+    const product  = state.results[0]?._product  || currentProductName(snapForm);
+    const category = state.results[0]?._category || snapForm.category;
+    fresh.forEach(v => {
+      v._product = product; v._category = category;
+      v._scan = checkAds(v.title || '', v.description || '', category);
+    });
+    state.extraResults.push(...fresh);
+    save();
+  } catch(e) {
+    toast('Ошибка: ' + e.message);
+  } finally {
+    state.extraLoading = false;
+    refreshResults();
+  }
+}
+
 async function doBatchGenerate() {
   const regions = state.batchRegions;
-  state.loading = true; state.error = null; state.loadingKind = null; state.batchResults = []; state.titleStep = null;
+  state.loading = true; state.error = null; state.loadingKind = null; state.batchResults = []; state.titleStep = null; state.extraResults = [];
   // Пакет и обычные варианты взаимоисключающие — чистим обычный набор,
   // чтобы он не всплыл после «✕ Очистить» или перезагрузки (UX-3)
   state.results = []; state.conveyorIdx = 0;
@@ -1101,7 +1194,10 @@ async function doBatchGenerate() {
     }
     if (!variants.length) throw new Error('Не удалось сгенерировать ни одного варианта — все запросы завершились ошибкой');
     // F4: штамп товара/категории по форме на момент генерации (регион у пакета свой на каждой позиции)
-    variants.forEach(v => { v._product = currentProductName(state.form); v._category = state.form.category; });
+    variants.forEach(v => {
+      v._product = currentProductName(state.form); v._category = state.form.category;
+      v._scan = checkAds(v.title || '', v.description || '', state.form.category); // автопроверка сразу после генерации
+    });
     if (variants.length < regions.length) {
       toast(`⚠️ AI вернул ${variants.length} из ${regions.length} вариантов — ${regions.length - variants.length} регионов без текста${chunkFails ? ` (${chunkFails} запрос(ов) не удалось)` : ''}. Повторите генерацию.`);
     }
@@ -1130,7 +1226,8 @@ async function doBatchGenerate() {
 
 function buildTitlesMsg(n) {
   const f = state.form;
-  return `${catInfoBlock(f)}
+  const notes = f.notes ? `\nДополнительно: ${f.notes}` : '';
+  return `${catInfoBlock(f)}${notes}
 
 ЗАДАЧА: сгенерируй ${n} вариантов НАЗВАНИЙ (только названия, БЕЗ описаний) для одного и того же объявления. Каждое — из РАЗНОЙ точки пространства вариаций (разный крючок, разное написание/сокращение, разный порядок слов). Строго следуй формуле и правилам названий из системного промпта (лимит 50 символов, запрещённые слова, для игр — без цены).${fewShotBlock(f.category)}
 
@@ -1169,19 +1266,20 @@ async function doGenDescriptionsForTitles() {
   if (!step) return;
   const chosen = step.titles.filter(t => step.selected[t.id]);
   if (!chosen.length) { toast('Выберите хотя бы одно название'); return; }
-  state.loading = true; state.error = null; state.loadingKind = 'descriptions';
+  state.loading = true; state.error = null; state.loadingKind = 'descriptions'; state.extraResults = [];
   refreshResults();
   try {
     const f = step.form;
     const webSearch = f.isPreorder && f.category === 'game';
+    const notes = f.notes ? `\nДополнительно: ${f.notes}` : '';
     const list = chosen.map((t, i) => `${i + 1}. "${t.title}" (крючок: ${t.hook || '—'})`).join('\n');
-    const msg = `${catInfoBlock(f)}
+    const msg = `${catInfoBlock(f)}${notes}
 Стиль: ${styleLabel(f)}
 
 Названия УЖЕ ВЫБРАНЫ продавцом — менять текст названия НЕЛЬЗЯ, перенеси его в поле title символ-в-символ:
 ${list}
 
-Для каждого напиши полное описание — разное по структуре и подаче цены между вариантами (см. правила описаний в системном промпте).
+Для каждого напиши полное описание — разное по структуре и подаче цены между вариантами (см. правила описаний в системном промпте).${fewShotBlock(f.category)}
 Верни строго JSON без markdown-обёртки:
 {"variants":[{"id":1,"title":"(как в списке, без изменений)","title_length":число,"description":"...","style":"...","price_format":"...","hook":"...","structure":"..."}]}`;
     const text = await callAI([{ role: 'user', content: msg }], { webSearch, max_tokens: Math.min(8000, 800 + chosen.length * 1200) });
@@ -1201,7 +1299,10 @@ ${list}
     }
     state.results = results;
     state.resultsForm = JSON.parse(JSON.stringify(f));
-    state.results.forEach(v => { v._product = currentProductName(f); v._category = f.category; });
+    state.results.forEach(v => {
+      v._product = currentProductName(f); v._category = f.category;
+      v._scan = checkAds(v.title || '', v.description || '', f.category); // автопроверка сразу после генерации
+    });
     state.conveyorIdx = 0;
     state.titleStep = null;
     save();
@@ -1220,14 +1321,15 @@ async function doGenAltTitles(id) {
   delete state.altTitles[id];
   refreshResults();
   try {
-    const v = state.results.find(r => r.id === id);
+    const v = findResult(id);
     const base = buildMsg(1, [], state.resultsForm);  // F4: промпт из формы на момент генерации, не из живой
     const msg = `${base}
 Текущее название: ${v?.title || ''}
 
 ЗАДАЧА: сгенерируй 5 альтернативных названий для этого же объявления. Каждое — в ДРУГОЙ стилистической точке: разный крючок, разные слова, для игры — обязательно разная форма написания названия (рус/англ/аббревиатура, транслит). Строго до 50 символов. ЗАПРЕЩЕНО: для категории «Игра» — любая цена/сумма/₽ в названии; для любой категории — слова «рублей»/«руб», даты/годы/«старт»/«релиз». Верни только JSON:
 {"titles":[{"title":"...","hook":"крючок одним словом"},{"title":"...","hook":"..."},{"title":"...","hook":"..."},{"title":"...","hook":"..."},{"title":"...","hook":"..."}]}`;
-    const webSearch = state.form.isPreorder && state.form.category === 'game';
+    const snapForm = state.resultsForm || state.form; // F12: webSearch из того же снимка, что и промпт (buildMsg выше)
+    const webSearch = snapForm.isPreorder && snapForm.category === 'game';
     // F5: при webSearch сама генерация вспомогательных tool-use блоков ест бюджет
     // до финального текста — 600 обрезало 5 заголовков; 2000 — тот же запас, что в doRephrase
     const text = await callAI([{ role: 'user', content: msg }], { webSearch, max_tokens: webSearch ? 2000 : 600 });
@@ -1244,11 +1346,23 @@ async function doRegen(id) {
   if (state.regenId !== null) return;
   state.regenId = id; refreshResults();
   try {
-    const excl = state.results.filter(v => v.id !== id).map(v => v.title);
-    const text = await callAI([{ role: 'user', content: buildMsg(1, excl) }]);
+    // F12: перегенерация одного варианта должна опираться на форму НА МОМЕНТ генерации
+    // (снимок resultsForm + штампы варианта), а не на живую форму — иначе после переключения
+    // формы ↻ выдаёт ДРУГОЙ товар, теряет _product/_category и не ищет бонусы предзаказа (Bug #6).
+    const prev = findResult(id) || {};
+    const snapForm = state.resultsForm || state.form;
+    const category = prev._category || snapForm.category;
+    const product  = prev._product  || currentProductName(snapForm);
+    const excl = resultsPool().filter(v => v.id !== id).map(v => v.title);
+    const webSearch = snapForm.isPreorder && category === 'game';
+    const text = await callAI([{ role: 'user', content: buildMsg(1, excl, snapForm) }], { webSearch });
     const [v] = parseVariants(text);
-    const idx = state.results.findIndex(r => r.id === id);
-    if (idx !== -1 && v) { state.results[idx] = { ...v, id }; save(); }
+    const { arr, idx } = findResultRef(id);
+    if (arr && idx !== -1 && v) {
+      arr[idx] = { ...v, id, _product: product, _category: category }; // штампы F4 сохраняются
+      arr[idx]._scan = checkAds(v.title || '', v.description || '', category); // бейдж под НОВЫЙ текст
+      save();
+    }
   } catch(e) {
     toast('Ошибка: ' + e.message);
   } finally {
@@ -1262,7 +1376,7 @@ async function doRephrase(vid, fid) {
   if (!box) return;
   const v = fid
     ? state.favorites.find(x => x._fid === fid)
-    : state.results.find(x => x.id === vid);
+    : findResult(vid);
   if (!v) return;
 
   box.innerHTML = `<div style="padding:10px 12px;color:var(--muted);font-size:13px">⏳ Перефразирую...</div>`;
@@ -1320,14 +1434,20 @@ ${v.description}
 function toggleFav(variant) {
   const key = variant.title + variant.description;
   const idx = state.favorites.findIndex(f => f.title + f.description === key);
-  if (idx !== -1) state.favorites.splice(idx, 1);
-  else state.favorites.push({ ...variant, _fid: Date.now() });
+  if (idx !== -1) {
+    // F15: удаление из избранного = потеря few-shot/источника очереди; если варианта уже нет
+    // в результатах — текст безвозвратен. Добавление (else) не подтверждаем — оно не деструктивно.
+    if (!confirm('Убрать вариант из избранного? Если его уже нет в результатах — текст будет потерян.')) return;
+    state.favorites.splice(idx, 1);
+  } else state.favorites.push({ ...variant, _fid: Date.now() });
   save(); refreshResults(); refreshFavs();
 }
 
 function removeFav(fid) {
+  // F15: то же удаление, но из списка избранного (кнопка ★ на карточке избранного)
+  if (!confirm('Убрать вариант из избранного? Если его уже нет в результатах — текст будет потерян.')) return;
   state.favorites = state.favorites.filter(f => f._fid !== fid);
-  save(); refreshFavs();
+  save(); refreshResults(); refreshFavs();
 }
 
 function isFav(v) {
@@ -1399,6 +1519,7 @@ function vcardHTML(v, inFav) {
   return `<div class="vcard ${fav ? 'is-fav' : ''}" data-vid="${v.id}" data-fid="${fidAttr}">
   <div class="vcard-head">
     <span class="vnum">#${v.id}</span>
+    ${scanBadgeHTML(v)}
     <div class="vtags">
       ${v.style        ? `<span class="vtag">${esc(v.style)}</span>` : ''}
       ${v.price_format ? `<span class="vtag">${esc(v.price_format)}</span>` : ''}
@@ -1589,13 +1710,30 @@ function refreshResults() {
 
   const toggleBtn = `<button class="conv-mode-toggle ${state.conveyorMode?'active':''}" data-act="toggle-conveyor">
     ${state.conveyorMode ? '☰ Список' : '▶ Конвейер'}
-  </button>${(state.results.length || state.favorites.length) ? `<button class="conv-mode-toggle" data-act="export-pkg" style="margin-right:6px" title="Скачать варианты + избранное как .txt">📦 Экспорт</button>` : ''}`;
+  </button>${(state.results.length || state.favorites.length) ? `<button class="conv-mode-toggle" data-act="export-pkg" style="margin-right:6px" title="Скачать варианты + избранное как .txt">📦 Экспорт</button>` : ''}
+  <button class="conv-mode-toggle" data-act="gen-more" ${state.extraLoading?'disabled':''} title="Догенерировать ещё варианты, не заменяя текущие">${state.extraLoading?'⏳':'➕'} Ещё варианты</button>`;
+
+  // F16: подпись «какой товар · когда» над вариантами — вернулся через неделю (персона 2),
+  // форма уже переключена, а тут варианты старого товара; данные берём из штампа/снимка, не из живой формы.
+  const _rp = state.results[0];
+  const _prodName = _rp?._product || (state.resultsForm ? currentProductName(state.resultsForm) : '');
+  const _genDate  = _rp?.id ? new Date(_rp.id).toLocaleDateString('ru') : '';
+  const productBadge = _prodName
+    ? `<div class="results-product-badge">📦 ${esc(_prodName)}${_genDate ? ` · ${_genDate}` : ''}</div>` : '';
+
+  // UX-15: «Ещё варианты» — отдельный блок под основным набором, не смешивается со списком/конвейером
+  const extraSection = (state.extraResults.length || state.extraLoading) ? `
+    <div class="extra-results-sep">
+      <div class="card-title" style="font-size:13px">➕ Ещё варианты${state.extraResults.length ? ` (${state.extraResults.length})` : ''}</div>
+      ${state.extraLoading ? `<div class="loading-box" style="padding:14px 0"><div class="spinner"></div><div style="font-size:12px;color:var(--muted)">Генерирую ещё варианты…</div></div>` : ''}
+      <div class="results-list" style="margin-top:10px;">${state.extraResults.map(v => vcardHTML(v, false)).join('')}</div>
+    </div>` : '';
 
   if (state.conveyorMode) {
-    el.innerHTML = toggleBtn + conveyorHTML();
+    el.innerHTML = toggleBtn + productBadge + conveyorHTML() + extraSection;
     bindConveyorSwipe();
   } else {
-    el.innerHTML = toggleBtn + `<div class="results-list" style="margin-top:10px;">${state.results.map(v => vcardHTML(v, false)).join('')}</div>`;
+    el.innerHTML = toggleBtn + productBadge + `<div class="results-list" style="margin-top:10px;">${state.results.map(v => vcardHTML(v, false)).join('')}</div>` + extraSection;
   }
 }
 
@@ -1625,6 +1763,7 @@ function refreshBatchResults() {
     return `<div class="batch-row ${expanded?'expanded':''}" data-batch-i="${i}">
       <div class="batch-row-head" data-act="batch-expand" data-i="${i}">
         <span class="batch-region-badge">📍 ${esc(item.region)}</span>
+        ${scanBadgeHTML(item.variant)}
         <span class="batch-title-preview">${esc(item.variant?.title || '—')}</span>
         <span class="batch-tlen tlen ${lenClass(len)}">${len}/50</span>
         <div class="batch-row-btns">
@@ -1632,6 +1771,7 @@ function refreshBatchResults() {
           <button class="btn-copy" data-act="copy" data-text="${dAttr}" title="Копировать описание">📋 Опис</button>
           <button class="btn-copy" data-act="conv-photo" title="Обложки">🖼️</button>
           <button class="btn-copy" data-act="scan-check" data-i="${i}" title="Проверить в Сканере">🔍</button>
+          <button class="btn-copy" data-act="batch-fav" data-i="${i}" title="Сохранить в избранное (для few-shot)">☆</button>
           <button class="btn-copy" data-act="batch-mark-posted" data-i="${i}" title="Отметить как размещено (${esc(item.region)})">✓</button>
         </div>
       </div>
@@ -1642,6 +1782,7 @@ function refreshBatchResults() {
           <button class="btn-copy" data-act="copy" data-text="${dAttr}">📋 Копировать описание</button>
           <button class="btn-copy" data-act="conv-photo">🖼️ Обложки</button>
           <button class="btn-copy" data-act="scan-check" data-i="${i}">🔍 Проверить</button>
+          <button class="btn-copy" data-act="batch-fav" data-i="${i}">☆ В избранное</button>
           <button class="btn-copy" data-act="batch-mark-posted" data-i="${i}">✓ Размещено (${esc(item.region)})</button>
         </div>
       </div>
@@ -1788,6 +1929,7 @@ function formHTML() {
     </div>`;
 
   return `<div class="form-body">
+    <div id="ai-inline-panel" class="ai-inline-panel">${settingsHTML()}</div>
     ${state.presets.length ? `<div class="preset-bar">
       <select id="preset-sel">
         <option value="">— выбрать пресет —</option>
@@ -1871,6 +2013,7 @@ function formHTML() {
 
 function settingsHTML() {
   const s = state.settings;
+  const hasToken = !!localStorage.getItem('avito_admin_token');
   return `<div class="settings-row">
     <div class="s-group">
       <label>Провайдер</label>
@@ -1893,7 +2036,11 @@ function settingsHTML() {
       <input id="som" type="text" value="${esc(s.orModel)}"
         placeholder="anthropic/claude-3.5-sonnet" style="width:280px">
     </div>`}
-    <div class="s-note">Запросы идут через прокси poigraem.shop. Ключи на VPS, не в браузере.</div>
+    <div class="s-group">
+      <label>Токен доступа</label>
+      <button class="ai-btn" id="token-change" type="button">🔑 ${hasToken ? 'Сменить токен' : 'Задать токен'}</button>
+    </div>
+    <div class="s-note">Запросы идут через прокси poigraem.shop. Ключи на VPS, не в браузере.${hasToken ? '' : ' <span style="color:var(--warn)">Токен не задан — спросит при первом запросе.</span>'}</div>
   </div>`;
 }
 
@@ -1915,7 +2062,7 @@ function queueTabHTML() {
       <span class="queue-item-num">${i+1}</span>
       <span class="queue-item-product">${esc(item.product)}</span>
       <span class="queue-item-region">📍 ${esc(item.region)}</span>
-      <span class="queue-item-source">${item.source === 'fav' ? '★ избранное' : '✨ авто'}</span>
+      <span class="queue-item-source">${item.source === 'fav' ? '★ избранное' : item.source === 'batch' ? '📦 пакет' : '✨ авто'}</span>
       <button class="btn-sm" data-act="queue-del" data-i="${i}" title="Удалить">✕</button>
     </div>`).join('')
     : '<div class="queue-empty">Очередь пуста — добавьте позиции</div>';
@@ -2281,8 +2428,7 @@ const CV_PLATFORMS = [
 
 const cv = {
   mode:'collage', images:[], layout:'auto', bg:'#0f172a',
-  padding:12, sticker:false, stickerText:'', stickerPos:'br',
-  stickerBg:'#B45309', stickerColor:'#ffffff', ratio:'4:5', igdbNames:'',
+  padding:12, ratio:'4:5', igdbNames:'',
   maskSticker:false, maskStickerText:'ЛУЧШАЯ ЦЕНА', maskStickerShape:'burst',
   maskStickerSize:180, maskStickerPos:'tr', maskStickerBg:'#B45309', maskStickerColor:'#ffffff',
   coverSource:'igdb',
@@ -2300,6 +2446,24 @@ const cv = {
   _pendingSearchName:null,
 };
 let _cvId = 0;
+
+// GFX-10: настройки обложек (рамка/цвета/стикер/раскладка/формат/эффекты) переживают F5.
+// Не сохраняем сами картинки (blob/Image — несериализуемы, живут одну сессию) и служебные _-поля.
+function cvSave() {
+  try {
+    const persist = {};
+    for (const k in cv) { if (k === 'images' || k.startsWith('_')) continue; persist[k] = cv[k]; }
+    localStorage.setItem('avito_cv', JSON.stringify(persist));
+  } catch(e) {}
+}
+function cvLoad() {
+  try {
+    const saved = JSON.parse(localStorage.getItem('avito_cv') || 'null');
+    if (!saved) return;
+    for (const k in saved) { if (k === 'images' || k.startsWith('_')) continue; if (k in cv) cv[k] = saved[k]; }
+  } catch(e) {}
+}
+cvLoad();
 
 // F8: перед заменой обложки игры освобождаем blob-URL старой картинки —
 // иначе при долгом подборе (несколько загрузок с диска подряд) они копятся в памяти
@@ -2338,12 +2502,18 @@ function cvAddFiles(files) {
 async function cvFetchFromIGDB() {
   const ta = document.getElementById('cv-igdb-names');
   if (!ta) return;
-  const names = ta.value.split('\n').map(s => s.trim()).filter(Boolean);
-  if (!names.length) return;
+  const allNames = ta.value.split('\n').map(s => s.trim()).filter(Boolean);
+  if (!allNames.length) return;
   cv.igdbNames = ta.value;
 
-  const btn  = document.getElementById('cv-igdb-btn');
   const prog = document.getElementById('cv-igdb-prog');
+  // F18: коллаж — не больше 10 фото (как в ручной загрузке cvAddFiles); лишние имена не молчим
+  const room = Math.max(0, 10 - cv.images.length);
+  if (room === 0) { if (prog) prog.textContent = '⚠ Уже 10 обложек — удалите лишние, чтобы добавить'; return; }
+  const names = allNames.slice(0, room);
+  const skipped = allNames.slice(room);
+
+  const btn  = document.getElementById('cv-igdb-btn');
   if (btn) btn.disabled = true;
 
   let loaded = 0;
@@ -2367,7 +2537,8 @@ async function cvFetchFromIGDB() {
   }
 
   if (prog) prog.textContent = `✓ Загружено: ${loaded}/${names.length}` +
-    (failed.length ? ` · Не найдено: ${failed.join(', ')}` : '');
+    (failed.length ? ` · Не найдено: ${failed.join(', ')}` : '') +
+    (skipped.length ? ` · Пропущено (лимит 10): ${skipped.join(', ')}` : '');
   if (btn) btn.disabled = false;
   cvRenderState();
 }
@@ -2375,12 +2546,18 @@ async function cvFetchFromIGDB() {
 async function cvFetchFromPS() {
   const ta = document.getElementById('cv-igdb-names');
   if (!ta) return;
-  const names = ta.value.split('\n').map(s => s.trim()).filter(Boolean);
-  if (!names.length) return;
+  const allNames = ta.value.split('\n').map(s => s.trim()).filter(Boolean);
+  if (!allNames.length) return;
   cv.igdbNames = ta.value;
 
-  const btn  = document.getElementById('cv-igdb-btn');
   const prog = document.getElementById('cv-igdb-prog');
+  // F18: тот же лимит 10 фото для загрузки из PS Store
+  const room = Math.max(0, 10 - cv.images.length);
+  if (room === 0) { if (prog) prog.textContent = '⚠ Уже 10 обложек — удалите лишние, чтобы добавить'; return; }
+  const names = allNames.slice(0, room);
+  const skipped = allNames.slice(room);
+
+  const btn  = document.getElementById('cv-igdb-btn');
   if (btn) btn.disabled = true;
 
   let loaded = 0;
@@ -2408,7 +2585,8 @@ async function cvFetchFromPS() {
   }
 
   if (prog) prog.textContent = `✓ Загружено: ${loaded}/${names.length}` +
-    (failed.length ? ` · Не найдено: ${failed.join(', ')}` : '');
+    (failed.length ? ` · Не найдено: ${failed.join(', ')}` : '') +
+    (skipped.length ? ` · Пропущено (лимит 10): ${skipped.join(', ')}` : '');
   if (btn) btn.disabled = false;
   cvRenderState();
 }
@@ -2421,6 +2599,7 @@ function cvRemoveImage(idx) {
 
 function cvRenderState() {
   if (state.tab !== 'covers') return;
+  cvSave(); // GFX-10: изменения набора картинок/состояния — персистим текущие настройки обложек
   // Обновляем миниатюры
   const dropCard = document.querySelector('.cv-drop')?.closest('.card');
   if (dropCard) {
@@ -2577,7 +2756,7 @@ const COLLAGE_LAYOUTS = {
 const COLLAGE_UI_GROUPS = [
   { sep: null,              ids: ['auto', 'strip'] },
   { sep: '2–4 изображения', ids: ['1x2','2+1','2x2','3+1','1+3h','1v+3v','3v+1v','asym4'] },
-  { sep: '5 изображений',   ids: ['2+3','3+2','1+4','4+1','1+4h','3v+2v','2v+3v','c4','2c2','circ4','square5','frame5','arch5'] },
+  { sep: '5 изображений',   ids: ['2+3','3+2','1+4','4+1','1+4h','3v+2v','2v+3v','c4','2c2','circ4','circ4d','square5','frame5','arch5'] },
   { sep: '6 изображений',   ids: ['3x2','2x3','2+4','4+2','2v+4v','4v+2v','pyr6','rpyr6','corner6','panel6'] },
   { sep: '7 изображений',   ids: ['3+4','4+3','2+3+2'] },
   { sep: '8–10 изображений', ids: ['4x2','3x3','5x2'] },
@@ -2602,6 +2781,7 @@ function cvResolveLayout(layout, count) {
   if (layout === 'strip') return layout;
   if (layout === 'diag' || layout === 'stack') return layout;
   if (layout === 'circ4') return count === 5 ? 'circ4' : cvAutoLayout(count);
+  if (layout === 'circ4d') return count === 5 ? 'circ4d' : cvAutoLayout(count);
   if (layout === 'square5') return count === 5 ? 'square5' : cvAutoLayout(count);
   const L = COLLAGE_LAYOUTS[layout];
   if (!L) return cvAutoLayout(count);
@@ -2615,8 +2795,8 @@ function cvCells(layout, count, cw, ch, p) {
     const iw = (cw - (count + 1) * p) / count;
     return Array.from({length: count}, (_, i) => ({x: p + i * (iw + p), y: p, w: iw, h: ch - 2 * p}));
   }
-  // circ4/circ4d: imgs[0]=centre circle, imgs[1..4]=bg quads (order matches draw fn)
-  if (L === 'circ4' || L === 'circ4d') {
+  // circ4: imgs[0]=centre circle, imgs[1..4]=bg quads (order matches draw fn)
+  if (L === 'circ4') {
     const hw=(cw-3*p)/2, hw2=cw-2*p-hw-p;
     const hh=(ch-3*p)/2, hh2=ch-2*p-hh-p;
     const r=Math.floor(Math.min(cw,ch)*0.30);
@@ -2626,6 +2806,17 @@ function cvCells(layout, count, cw, ch, p) {
       {x:2*p+hw,y:p,w:hw2,h:hh},
       {x:p,y:2*p+hh,w:hw,h:hh2},
       {x:2*p+hw,y:2*p+hh,w:hw2,h:hh2},
+    ];
+  }
+  // circ4d: imgs[0]=centre circle, imgs[1..4]=диагональные (pinwheel) фоновые квадранты
+  if (L === 'circ4d') {
+    const cx=cw/2, cy=ch/2, off=Math.min(cw,ch)*0.16, r=Math.floor(Math.min(cw,ch)*0.30);
+    return [
+      {cx,cy,r,circle:true},
+      {poly:[[p,p],[cw-p,p],[cx+off,cy],[cx-off,cy]]},
+      {poly:[[cw-p,p],[cw-p,ch-p],[cx,cy+off],[cx,cy-off]]},
+      {poly:[[cw-p,ch-p],[p,ch-p],[cx-off,cy],[cx+off,cy]]},
+      {poly:[[p,ch-p],[p,p],[cx,cy-off],[cx,cy+off]]},
     ];
   }
   // square5: imgs[0]=centre square, imgs[1..4]=bg quads
@@ -2660,6 +2851,46 @@ function cvDrawCirc4(ctx, imgs, cw, ch, p, cr) {
     if (i + 1 < imgs.length) cvFit(ctx, imgs[i + 1].el, cell.x, cell.y, cell.w, cell.h, cr, imgs[i + 1].transform);
   });
   // Круг сверху по центру, перекрывает стык 4 блоков
+  const r = Math.floor(Math.min(cw, ch) * 0.30);
+  const img = imgs[0].el;
+  const d = r * 2;
+  const { sx, sy, sw, sh } = cvFitSrcRect(img, d, d, imgs[0].transform);
+  ctx.save();
+  ctx.fillStyle = cv.bg;
+  ctx.beginPath(); ctx.arc(cx, cy, r + Math.max(8, Math.round(p * 0.7)), 0, Math.PI * 2); ctx.fill();
+  ctx.restore();
+  ctx.save();
+  ctx.shadowColor = 'rgba(0,0,0,0.45)'; ctx.shadowBlur = 30;
+  ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.clip();
+  ctx.shadowColor = 'transparent';
+  ctx.drawImage(img, sx, sy, sw, sh, cx - r, cy - r, d, d);
+  ctx.restore();
+}
+
+// circ4d: те же 4 картинки + круг, но фон — 4 диагональных (pinwheel) квадранта вместо прямой сетки 2×2
+function cvDrawCirc4D(ctx, imgs, cw, ch, p, cr) {
+  if (!imgs.length) return;
+  const cx = cw / 2, cy = ch / 2;
+  const off = Math.min(cw, ch) * 0.16;
+  const polys = [
+    [[p,p],[cw-p,p],[cx+off,cy],[cx-off,cy]],
+    [[cw-p,p],[cw-p,ch-p],[cx,cy+off],[cx,cy-off]],
+    [[cw-p,ch-p],[p,ch-p],[cx-off,cy],[cx+off,cy]],
+    [[p,ch-p],[p,p],[cx,cy-off],[cx,cy+off]],
+  ];
+  polys.forEach((poly, i) => {
+    if (i + 1 >= imgs.length) return;
+    const xs = poly.map(pt => pt[0]), ys = poly.map(pt => pt[1]);
+    const bx = Math.min(...xs), by = Math.min(...ys);
+    const bw = Math.max(...xs) - bx, bh = Math.max(...ys) - by;
+    ctx.save();
+    ctx.beginPath();
+    poly.forEach(([x,y], k) => k === 0 ? ctx.moveTo(x,y) : ctx.lineTo(x,y));
+    ctx.closePath(); ctx.clip();
+    cvFitClip(ctx, imgs[i + 1].el, bx, by, bw, bh);
+    ctx.restore();
+  });
+  // Круг сверху по центру, перекрывает стык 4 квадрантов
   const r = Math.floor(Math.min(cw, ch) * 0.30);
   const img = imgs[0].el;
   const d = r * 2;
@@ -2845,6 +3076,7 @@ function cvDrawEffects(ctx, cw, ch, lay, p, count, opts) {
       const rad = Math.max(4, p * 0.7);
       cells.forEach(c => {
         if (c.circle) { ctx.beginPath(); ctx.arc(c.cx, c.cy, c.r, 0, Math.PI * 2); }
+        else if (c.poly) { ctx.beginPath(); c.poly.forEach(([x,y],k) => k===0?ctx.moveTo(x,y):ctx.lineTo(x,y)); ctx.closePath(); }
         else cvRR(ctx, c.x, c.y, c.w, c.h, rad);
         ctx.stroke(); ctx.stroke();
       });
@@ -2948,6 +3180,7 @@ function cvDrawStack(ctx, imgs, cw, ch, p) {
 
 // Redraw active preview (collage or game-mode variants)
 function cvReDraw() {
+  cvSave(); // GFX-10: слайдеры/цвета/эффекты меняют cv и зовут cvReDraw — персистим настройки
   const c = document.getElementById('cv-canvas');
   if (!c || !cv.images.length) return;
   if (cv.mode === 'game') { cvDrawGame(c, cv.images[0], {}); if (cv._gameVars) cvGenerateVariations(); }
@@ -2975,6 +3208,8 @@ function cvDrawCollage(canvas, opts) {
   const cr = Math.max(4, p * 0.7);
   if (lay === 'circ4') {
     cvDrawCirc4(ctx, imgs, cw, ch, p, cr);
+  } else if (lay === 'circ4d') {
+    cvDrawCirc4D(ctx, imgs, cw, ch, p, cr);
   } else if (lay === 'square5') {
     cvDrawSquare5(ctx, imgs, cw, ch, p, cr);
   } else if (lay === 'diag') {
@@ -2994,6 +3229,7 @@ function cvDrawCollage(canvas, opts) {
       ctx.save();
       ctx.strokeStyle = '#facc15'; ctx.lineWidth = Math.max(6, p * 0.5);
       if (_sc.circle) { ctx.beginPath(); ctx.arc(_sc.cx,_sc.cy,_sc.r-3,0,Math.PI*2); ctx.stroke(); }
+      else if (_sc.poly) { ctx.beginPath(); _sc.poly.forEach(([x,y],k) => k===0?ctx.moveTo(x,y):ctx.lineTo(x,y)); ctx.closePath(); ctx.stroke(); }
       else { ctx.strokeRect(_sc.x+3,_sc.y+3,_sc.w-6,_sc.h-6); }
       ctx.restore();
     }
@@ -3038,26 +3274,6 @@ function cvDrawGame(canvas, imgObj, opts) {
   }
   cvDrawEffects(ctx, cw, ch, 'single', pad || 12, 1, opts);
   cvDrawMaskSticker(ctx, cw, ch); cvDrawTextOverlay(ctx, cw, ch);
-  if ((opts?.sticker ?? cv.sticker) && (opts?.stickerText ?? cv.stickerText)) {
-    const tx   = opts?.stickerText  ?? cv.stickerText;
-    const sbg  = opts?.stickerBg    ?? cv.stickerBg;
-    const stc  = opts?.stickerColor ?? cv.stickerColor;
-    const pos  = opts?.stickerPos   ?? cv.stickerPos;
-    const fs   = Math.round(cw * 0.055);
-    ctx.font = `bold ${fs}px 'JetBrains Mono',monospace`;
-    const tw = ctx.measureText(tx).width;
-    const hp=fs*.55, vp=fs*.45, bw=tw+hp*2, bh=fs+vp*2, br=bh*.28, mg=cw*.042;
-    let bx, by;
-    if      (pos==='br') { bx=cw-mg-bw; by=ch-mg-bh; }
-    else if (pos==='bl') { bx=mg;        by=ch-mg-bh; }
-    else if (pos==='tl') { bx=mg;        by=mg; }
-    else                 { bx=cw-mg-bw; by=mg; }
-    ctx.save();
-    cvRR(ctx,bx,by,bw,bh,br); ctx.fillStyle=sbg; ctx.fill();
-    ctx.fillStyle=stc; ctx.textBaseline='middle';
-    ctx.fillText(tx, bx+hp, by+bh/2);
-    ctx.restore();
-  }
   cvDrawPlatBadge(ctx, cw, ch);
 }
 
@@ -3073,15 +3289,12 @@ function cvGenerateVariations() {
   const img   = cv.images[0];
   const grid  = document.getElementById('cv-vars-grid');
   if (!grid) return;
-  const sText = (document.getElementById('cv-sticker-text')?.value ?? cv.stickerText).trim();
-  cv.stickerText = sText;
-
   const vars = [
-    { label:'1. Без отступов', bg:cv.bg,     pad:0,  corner:0,  stickerPos:'br', stickerBg:cv.stickerBg },
-    { label:'2. Тонкий фон',   bg:cv.bg,     pad:36, corner:14, stickerPos:'bl', stickerBg:cv.stickerBg },
-    { label:'3. Тёмный',       bg:'#000',    pad:24, corner:10, stickerPos:'br', stickerBg:'#0F766E'     },
-    { label:'4. Синий',        bg:'#1e3a5f', pad:28, corner:12, stickerPos:'tr', stickerBg:'#B45309'     },
-  ].map(v => ({ ...v, sticker: cv.sticker, stickerText: sText }));
+    { label:'1. Без отступов', bg:cv.bg,     pad:0,  corner:0  },
+    { label:'2. Тонкий фон',   bg:cv.bg,     pad:36, corner:14 },
+    { label:'3. Тёмный',       bg:'#000',    pad:24, corner:10 },
+    { label:'4. Синий',        bg:'#1e3a5f', pad:28, corner:12 },
+  ];
 
   cv._gameVars = vars;
 
@@ -3171,13 +3384,13 @@ function cvLayoutButtonsHTML(activeLayout, imgCount) {
   const fits = id => {
     if (!imgCount) return true;
     if (id==='auto'||id==='strip'||id==='diag'||id==='stack') return true;
-    if (id==='circ4'||id==='square5') return imgCount===5;
+    if (id==='circ4'||id==='circ4d'||id==='square5') return imgCount===5;
     return COLLAGE_LAYOUTS[id]?.n === imgCount;
   };
   return COLLAGE_UI_GROUPS.map(({sep,ids})=>{
     const sepHtml = sep?`<div class="cv-layout-sep">${sep}</div>`:'';
     const btns = ids.map(id=>{
-      const nm=id==='auto'?'Авто':id==='strip'?'Полоска':id==='circ4'?'⭕ Круг+4':id==='square5'?'⬜ Квадрат+4':id==='diag'?'╱ Полосы':id==='stack'?'🃏 Стопка':(COLLAGE_LAYOUTS[id]?.name||id);
+      const nm=id==='auto'?'Авто':id==='strip'?'Полоска':id==='circ4'?'⭕ Круг+4':id==='circ4d'?'💠 Круг+4 диаг':id==='square5'?'⬜ Квадрат+4':id==='diag'?'╱ Полосы':id==='stack'?'🃏 Стопка':(COLLAGE_LAYOUTS[id]?.name||id);
       const svg=cvLayoutSVG(id,imgCount);
       const off = !fits(id);
       return `<button class="cv-layout-btn cv-layout-thumb ${activeLayout===id?'active':''}${off?' dimmed':''}" data-cv-layout="${id}" title="${off?nm+' — не подходит под число фото':nm}">${svg}<span class="cv-layout-label">${nm}</span></button>`;
@@ -3405,35 +3618,6 @@ function coversTabHTML() {
         <div id="cv-igdb-game-prog" style="font-size:12px;color:var(--muted);margin-top:6px;min-height:16px"></div>
       </div>
       <div class="card">
-        <div class="card-title">Стикер с ценой</div>
-        <div class="cv-row" style="margin-top:0">
-          <label>Показать</label>
-          <button class="toggle-btn ${cv.sticker?'on':''}" data-act="cv-sticker">${cv.sticker?'Вкл':'Выкл'}</button>
-        </div>
-        ${cv.sticker ? `
-        <div class="cv-row"><label>Текст</label>
-          <input type="text" id="cv-sticker-text" placeholder="Скидка 20%" value="${esc(cv.stickerText)}" style="flex:1">
-        </div>
-        <div class="cv-row"><label>Позиция</label>
-          <div class="cv-layouts" style="flex:1">
-            ${[['tl','↖'],['tr','↗'],['bl','↙'],['br','↘']].map(([p,l])=>
-              `<button class="cv-layout-btn ${cv.stickerPos===p?'active':''}" data-cv-spos="${p}">${l}</button>`).join('')}
-          </div>
-        </div>
-        <div class="cv-row"><label>Фон</label>
-          <div class="cv-bg-row">
-            ${CV_SC.map(c=>`<button class="cv-color ${cv.stickerBg===c?'active':''}" data-cv-sc="${c}" style="background:${c}"></button>`).join('')}
-            <input type="color" value="${cv.stickerBg}" data-act="cv-sc-custom" title="Свой цвет" style="width:28px;height:28px;border:none;border-radius:50%;cursor:pointer;padding:0">
-          </div>
-        </div>
-        <div class="cv-row"><label>Текст</label>
-          <div class="cv-bg-row">
-            ${CV_STC.map(c=>`<button class="cv-color ${cv.stickerColor===c?'active':''}" data-cv-stc="${c}" style="background:${c};${c==='#ffffff'?'border:1px solid #555':''}"></button>`).join('')}
-            <input type="color" value="${cv.stickerColor}" data-act="cv-stc-custom" title="Свой цвет" style="width:28px;height:28px;border:none;border-radius:50%;cursor:pointer;padding:0">
-          </div>
-        </div>` : ''}
-      </div>
-      <div class="card">
         <div class="card-title">Рамка и фон</div>
         <div style="font-size:11px;color:var(--muted);margin-bottom:8px">Отступ открывает фон вокруг картинки — своя рамка для каждого объявления</div>
         ${bgPicker}
@@ -3470,7 +3654,8 @@ function coversTabHTML() {
       </div>
       ${effectsSection}
       ${msSection}
-      <button class="btn-gen" id="cv-gen-vars" data-act="cv-gen-vars" ${!cv.images.length?'disabled':''}>✨ 4 варианта (разный фон)</button>
+      <button class="btn-gen" id="cv-download" data-act="cv-download" ${!cv.images.length?'disabled':''}>⬇ Скачать JPEG</button>
+      <button class="btn-gen" id="cv-gen-vars" data-act="cv-gen-vars" ${!cv.images.length?'disabled':''} style="margin-top:8px">✨ 4 варианта (разный фон)</button>
     </div>
     <div class="cv-preview-wrap">
       <div class="card-title">Превью</div>
@@ -3485,6 +3670,7 @@ function coversTabHTML() {
 }
 
 function bindCoversTab() {
+  cvSave(); // GFX-10: mode/ratio/toggle/layout меняют cv и зовут render() → сюда — персистим настройки
   // UX-8: если сюда пришли по кнопке 🖼️ с названием игры — подставить и сразу искать
   if (cv._pendingSearchName !== null) {
     const name = cv._pendingSearchName;
@@ -3623,11 +3809,56 @@ function bindCoversTab() {
     });
   }
 
+  // GFX-8: та же перестановка миниатюр на тач — HTML5 DnD там мёртв
+  if (!window._cvTouchDragBound) {
+    window._cvTouchDragBound = true;
+    let touchDragEl = null;
+    document.addEventListener('touchstart', e => {
+      const t = e.target.closest('.cv-thumbs [data-cv-didx]');
+      if (!t) return;
+      cv._dragIdx = +t.dataset.cvDidx;
+      touchDragEl = t;
+      t.style.opacity = '0.4';
+    }, {passive: true});
+    document.addEventListener('touchmove', e => {
+      if (cv._dragIdx === undefined || !touchDragEl) return;
+      e.preventDefault();
+    }, {passive: false});
+    document.addEventListener('touchend', e => {
+      if (cv._dragIdx === undefined || !touchDragEl) return;
+      const touch = e.changedTouches[0];
+      const el = touch && document.elementFromPoint(touch.clientX, touch.clientY);
+      const target = el && el.closest('.cv-thumbs [data-cv-didx]');
+      touchDragEl.style.opacity = '';
+      touchDragEl = null;
+      if (target) {
+        const toIdx = +target.dataset.cvDidx;
+        if (toIdx !== cv._dragIdx) {
+          const [moved] = cv.images.splice(cv._dragIdx, 1);
+          cv.images.splice(toIdx, 0, moved);
+          cv._selCell = null;
+          cvRenderState();
+        }
+      }
+      cv._dragIdx = undefined;
+    });
+  }
+
   // Canvas — drag to swap, click to select, wheel to zoom selected cell
   const canvas = document.getElementById('cv-canvas');
   if (canvas) {
     if (cv.images.length && cv.mode === 'collage') cvDrawCollage(canvas);
     if (cv.images.length && cv.mode === 'game') cvDrawGame(canvas, cv.images[0], {});
+
+    // GFX-8/GFX-14: точка-в-полигоне для poly-ячеек (circ4d) — общий хелпер для хит-теста и клика
+    function cvPointInPoly(mx, my, poly) {
+      let inside = false;
+      for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+        const [xi,yi] = poly[i], [xj,yj] = poly[j];
+        if (((yi > my) !== (yj > my)) && (mx < (xj-xi)*(my-yi)/(yj-yi)+xi)) inside = !inside;
+      }
+      return inside;
+    }
 
     function canvasHitCell(e) {
       const rect = canvas.getBoundingClientRect();
@@ -3637,6 +3868,8 @@ function bindCoversTab() {
       const cells = cvCells(cv.layout, cv.images.length, cw, ch, cv.padding);
       return cells.findIndex(c => c.circle
         ? Math.sqrt((mx-c.cx)**2+(my-c.cy)**2) <= c.r
+        : c.poly
+        ? cvPointInPoly(mx, my, c.poly)
         : mx>=c.x && mx<=c.x+c.w && my>=c.y && my<=c.y+c.h);
     }
 
@@ -3653,62 +3886,66 @@ function bindCoversTab() {
       };
     }
 
+    // GFX-14: круговой (rotation-invariant) хитбокс по факту размера формы стикера, не квадрат sz*1.3
+    const STICKER_HIT_R = {badge:.83, burst:.55, circle:.5, ribbon:.93, diamond:.52, pill:.79, hex:.55};
+    function stickerPos() {
+      const [cw, ch] = CV_SZ[cv.ratio] || CV_SZ['4:5'];
+      const sz = cv.maskStickerSize, mg = sz * 0.3;
+      if (cv.maskStickerX !== null && cv.maskStickerY !== null) return { scx: cv.maskStickerX, scy: cv.maskStickerY };
+      const pos = cv.maskStickerPos;
+      if      (pos==='tl') return { scx:mg+sz*.5,    scy:mg+sz*.5 };
+      else if (pos==='tr') return { scx:cw-mg-sz*.5, scy:mg+sz*.5 };
+      else if (pos==='bl') return { scx:mg+sz*.5,    scy:ch-mg-sz*.5 };
+      else if (pos==='br') return { scx:cw-mg-sz*.5, scy:ch-mg-sz*.5 };
+      else                 return { scx:cw/2,         scy:ch/2 };
+    }
     function stickerHit(mx, my) {
       if (!cv.maskSticker || !cv.maskStickerText.trim()) return false;
-      const [cw, ch] = CV_SZ[cv.ratio] || CV_SZ['4:5'];
       const sz = cv.maskStickerSize;
-      const mg = sz * 0.3;
-      let scx, scy;
-      if (cv.maskStickerX !== null && cv.maskStickerY !== null) {
-        scx = cv.maskStickerX; scy = cv.maskStickerY;
-      } else {
-        const pos = cv.maskStickerPos;
-        if      (pos==='tl') { scx=mg+sz*.5; scy=mg+sz*.5; }
-        else if (pos==='tr') { scx=cw-mg-sz*.5; scy=mg+sz*.5; }
-        else if (pos==='bl') { scx=mg+sz*.5; scy=ch-mg-sz*.5; }
-        else if (pos==='br') { scx=cw-mg-sz*.5; scy=ch-mg-sz*.5; }
-        else                 { scx=cw/2; scy=ch/2; }
-      }
-      return Math.abs(mx - scx) < sz * 0.65 && Math.abs(my - scy) < sz * 0.65;
+      const { scx, scy } = stickerPos();
+      const hitR = sz * (STICKER_HIT_R[cv.maskStickerShape] ?? 0.6);
+      return Math.sqrt((mx-scx)**2 + (my-scy)**2) <= hitR;
     }
 
-    canvas.addEventListener('mousedown', e => {
-      if (!cv.images.length || e.button !== 0) return;
+    // GFX-14: хитбокс текста по факту измеренного размера блока, не 2×fontSize
+    function textOverlayHit(mx, my) {
+      if (!cv.textOverlay || !cv.textOverlayText.trim()) return null;
+      const lines = cv.textOverlayText.trim().split('\n').filter(l => l.trim());
+      if (!lines.length) return null;
+      const [cw2, ch2] = CV_SZ[cv.ratio] || CV_SZ['4:5'];
+      const tcx = cv.textOverlayX ?? cw2 / 2;
+      const tcy = cv.textOverlayY ?? ch2 / 2;
+      const fs = cv.textOverlaySize;
+      const ctx = canvas.getContext('2d');
+      ctx.font = `${cv.textOverlayBold ? 'bold' : 'normal'} ${fs}px Literata,Georgia,serif`;
+      const lh = fs * 1.28;
+      const maxW = Math.max(...lines.map(l => ctx.measureText(l).width));
+      const totalH = lines.length * lh;
+      const hw = maxW/2 + fs*0.55, hh = totalH/2 + fs*0.32;
+      const hitR = Math.sqrt(hw*hw + hh*hh);
+      return Math.sqrt((mx-tcx)**2 + (my-tcy)**2) <= hitR ? { tcx, tcy } : null;
+    }
+
+    function onPointerDown(e) {
+      if (!cv.images.length) return;
       const { mx, my } = canvasMouse(e);
       // Text overlay drag
-      if (cv.textOverlay && cv.textOverlayText.trim()) {
-        const [cw2, ch2] = CV_SZ[cv.ratio] || CV_SZ['4:5'];
-        const tcx = cv.textOverlayX ?? cw2 / 2;
-        const tcy = cv.textOverlayY ?? ch2 / 2;
-        const hitR = cv.textOverlaySize * 2;
-        if (Math.abs(mx - tcx) < hitR && Math.abs(my - tcy) < hitR) {
-          e.preventDefault();
-          _textDrag = { offX: mx - tcx, offY: my - tcy };
-          canvas.style.cursor = 'grabbing';
-          return;
-        }
+      const th = textOverlayHit(mx, my);
+      if (th) {
+        e.preventDefault();
+        _textDrag = { offX: mx - th.tcx, offY: my - th.tcy };
+        canvas.style.cursor = 'grabbing';
+        return;
       }
       // Sticker drag takes priority
       if (stickerHit(mx, my)) {
         e.preventDefault();
-        const [cw, ch] = CV_SZ[cv.ratio] || CV_SZ['4:5'];
-        const sz = cv.maskStickerSize, mg = sz * 0.3;
-        let scx, scy;
-        if (cv.maskStickerX !== null && cv.maskStickerY !== null) { scx = cv.maskStickerX; scy = cv.maskStickerY; }
-        else {
-          const pos = cv.maskStickerPos;
-          if      (pos==='tl') { scx=mg+sz*.5; scy=mg+sz*.5; }
-          else if (pos==='tr') { scx=cw-mg-sz*.5; scy=mg+sz*.5; }
-          else if (pos==='bl') { scx=mg+sz*.5; scy=ch-mg-sz*.5; }
-          else if (pos==='br') { scx=cw-mg-sz*.5; scy=ch-mg-sz*.5; }
-          else                 { scx=cw/2; scy=ch/2; }
-        }
+        const { scx, scy } = stickerPos();
         _stickerDrag = { offX: mx - scx, offY: my - scy };
         canvas.style.cursor = 'grabbing';
         return;
       }
       if (cv.mode === 'game') {
-        if (!cv.images.length) return;
         e.preventDefault();
         const img = cv.images[0];
         if (!img.transform) img.transform = {scale:1,ox:0,oy:0};
@@ -3720,9 +3957,9 @@ function bindCoversTab() {
       if (hit === -1) return;
       e.preventDefault();
       _drag = { cellIdx: hit, startX: e.clientX, startY: e.clientY, moved: false, targetCell: -1 };
-    });
+    }
 
-    canvas.addEventListener('mousemove', e => {
+    function onPointerMove(e) {
       if (_gameDrag) {
         const { mx, my } = canvasMouse(e);
         const img = cv.images[0];
@@ -3762,17 +3999,19 @@ function bindCoversTab() {
         const cells = cvCells(cv.layout, cv.images.length, cw, ch, cv.padding);
         const ctx = canvas.getContext('2d');
         ctx.save();
-        const sc = cells[_drag.cellIdx];
-        ctx.fillStyle = 'rgba(250,204,21,0.28)';
-        if (sc.circle) { ctx.beginPath(); ctx.arc(sc.cx,sc.cy,sc.r,0,Math.PI*2); ctx.fill(); } else ctx.fillRect(sc.x,sc.y,sc.w,sc.h);
-        const tc = cells[target];
-        ctx.fillStyle = 'rgba(15,118,110,0.38)';
-        if (tc.circle) { ctx.beginPath(); ctx.arc(tc.cx,tc.cy,tc.r,0,Math.PI*2); ctx.fill(); } else ctx.fillRect(tc.x,tc.y,tc.w,tc.h);
+        const paintCell = (c, color) => {
+          ctx.fillStyle = color;
+          if (c.circle) { ctx.beginPath(); ctx.arc(c.cx,c.cy,c.r,0,Math.PI*2); ctx.fill(); }
+          else if (c.poly) { ctx.beginPath(); c.poly.forEach(([x,y],k)=>k===0?ctx.moveTo(x,y):ctx.lineTo(x,y)); ctx.closePath(); ctx.fill(); }
+          else ctx.fillRect(c.x,c.y,c.w,c.h);
+        };
+        paintCell(cells[_drag.cellIdx], 'rgba(250,204,21,0.28)');
+        paintCell(cells[target], 'rgba(15,118,110,0.38)');
         ctx.restore();
       }
-    });
+    }
 
-    canvas.addEventListener('mouseup', e => {
+    function onPointerUp() {
       if (_gameDrag) { _gameDrag = null; canvas.style.cursor = 'pointer'; return; }
       if (_textDrag) { _textDrag = null; canvas.style.cursor = 'pointer'; return; }
       if (_stickerDrag) { _stickerDrag = null; canvas.style.cursor = 'pointer'; return; }
@@ -3788,9 +4027,9 @@ function bindCoversTab() {
       }
       _drag = null;
       cvRenderState();
-    });
+    }
 
-    canvas.addEventListener('mouseleave', () => {
+    function onPointerLeave() {
       if (_gameDrag) { _gameDrag = null; canvas.style.cursor = 'pointer'; return; }
       if (_textDrag) { _textDrag = null; canvas.style.cursor = 'pointer'; return; }
       if (_stickerDrag) { _stickerDrag = null; canvas.style.cursor = 'pointer'; return; }
@@ -3798,7 +4037,28 @@ function bindCoversTab() {
       _drag = null;
       canvas.style.cursor = 'pointer';
       cvDrawCollage(canvas);
-    });
+    }
+
+    canvas.addEventListener('mousedown', e => { if (e.button === 0) onPointerDown(e); });
+    canvas.addEventListener('mousemove', onPointerMove);
+    canvas.addEventListener('mouseup', onPointerUp);
+    canvas.addEventListener('mouseleave', onPointerLeave);
+
+    // GFX-8: touch-эквиваленты — drag стикера/текста/ячеек и сдвиг кадра игры на мобиле
+    canvas.addEventListener('touchstart', e => {
+      if (e.touches.length !== 1) return;
+      const t = e.touches[0];
+      onPointerDown({ clientX: t.clientX, clientY: t.clientY, preventDefault: () => e.preventDefault() });
+    }, {passive: false});
+    canvas.addEventListener('touchmove', e => {
+      if (!_drag && !_stickerDrag && !_textDrag && !_gameDrag) return;
+      if (e.touches.length !== 1) return;
+      e.preventDefault();
+      const t = e.touches[0];
+      onPointerMove({ clientX: t.clientX, clientY: t.clientY });
+    }, {passive: false});
+    canvas.addEventListener('touchend', onPointerUp);
+    canvas.addEventListener('touchcancel', onPointerLeave);
 
     canvas.addEventListener('wheel', e => {
       if (cv.mode === 'game') {
@@ -3955,8 +4215,22 @@ function bindDbTab() {
         const data = JSON.parse(ev.target.result);
         if (!Array.isArray(data)) throw new Error('Ожидался массив');
         if (data.some(r => typeof r?.product !== 'string')) throw new Error('В записях отсутствует поле "product"');
-        state.db = data; save();
-        toast(`Импортировано: ${data.length} записей`);
+        // F14: раньше импорт молча ЗАМЕНЯЛ всю базу — бэкап со второго устройства стирал
+        // локальную историю дублей без единого подтверждения. Теперь явно спрашиваем слияние
+        // или замену, а замену дополнительно подтверждаем отдельно (двойная защита от потери).
+        const merge = confirm(`Файл содержит ${data.length} записей. Текущая база: ${state.db.length} записей.\n\nOK — слить с текущей базой (добавить новые, не трогая старые)\nОтмена — полностью заменить базу`);
+        if (merge) {
+          const key = rec => [rec.product, rec.region, rec.title || '', rec.date || ''].join('|');
+          const existing = new Set(state.db.map(key));
+          const added = data.filter(rec => !existing.has(key(rec)));
+          state.db = [...state.db, ...added];
+          save();
+          toast(`Слияние: добавлено ${added.length} из ${data.length} (пропущено дублей: ${data.length - added.length})`);
+        } else {
+          if (!confirm(`Точно заменить всю базу? Текущие ${state.db.length} записей будут удалены безвозвратно.`)) return;
+          state.db = data; save();
+          toast(`База заменена: ${data.length} записей`);
+        }
         renderDb();
       } catch(err) { toast('Ошибка импорта: ' + err.message); }
     };
@@ -3989,13 +4263,14 @@ function currentProductName(f) {
 }
 
 function exportPackage() {
-  const all  = state.results;
+  const all  = resultsPool(); // UX-15: включает и «Ещё варианты»
   const favs = state.favorites;
-  if (!all.length && !favs.length) { toast('Нечего экспортировать — сначала сгенерируйте варианты'); return; }
+  const batch = state.batchResults.filter(it => it.variant); // F10: пакет по регионам тоже выгружаем
+  if (!all.length && !favs.length && !batch.length) { toast('Нечего экспортировать — сначала сгенерируйте варианты'); return; }
 
   // F4: товар из формы на момент генерации / штампа варианта, не из живой формы
   const product = state.resultsForm ? currentProductName(state.resultsForm)
-    : (state.results[0]?._product || state.favorites[0]?._product || currentProductName(state.form));
+    : (state.results[0]?._product || batch[0]?.variant?._product || state.favorites[0]?._product || currentProductName(state.form));
   const date = new Date().toLocaleDateString('ru');
   const sep = '━'.repeat(44);
 
@@ -4017,7 +4292,7 @@ function exportPackage() {
     'АВИТО-ПОМОЩНИК — Пакет объявлений',
     `Товар: ${product}`,
     `Дата:  ${date}`,
-    `Итого: ${all.length} вариантов, ${favs.length} избранных`,
+    `Итого: ${all.length} вариантов, ${batch.length} по регионам, ${favs.length} избранных`,
     sep,
     '',
   ];
@@ -4028,6 +4303,18 @@ function exportPackage() {
     lines.push(sep);
     lines.push('');
   });
+
+  if (batch.length) {
+    lines.push('📦 ПАКЕТ ПО РЕГИОНАМ');
+    lines.push(sep);
+    lines.push('');
+    batch.forEach(it => {
+      lines.push(fmtVariant(it.variant, `РЕГИОН: ${it.region}`));
+      lines.push('');
+      lines.push(sep);
+      lines.push('');
+    });
+  }
 
   if (favs.length) {
     lines.push('★ ИЗБРАННОЕ');
@@ -4048,7 +4335,7 @@ function exportPackage() {
   a.download = `avito-pack-${slug}-${new Date().toISOString().slice(0, 10)}.txt`;
   a.click();
   URL.revokeObjectURL(a.href);
-  toast(`Экспортировано: ${all.length} вар. + ${favs.length} избр.`);
+  toast(`Экспортировано: ${all.length} вар. + ${batch.length} рег. + ${favs.length} избр.`);
 }
 
 // ══════════════════════════════════════════
@@ -4072,11 +4359,11 @@ function _dupSim(a, b) {
 }
 
 function dupCheck(vid, fid) {
-  const pool = [...state.results, ...state.favorites];
+  const pool = [...resultsPool(), ...state.favorites]; // UX-15: включает и «Ещё варианты»
   // Use _fid to identify a favorite unambiguously (avoids id collision with results)
   const cur = fid
     ? state.favorites.find(v => v._fid === fid)
-    : state.results.find(v => v.id === vid);
+    : findResult(vid);
   if (!cur) return [];
   const curText = (cur.title || '') + ' ' + (cur.description || '');
   const seen = new Set();
@@ -4088,7 +4375,7 @@ function dupCheck(vid, fid) {
     seen.add(key);
     const score = _dupSim(curText, key);
     if (score >= 0.25) {
-      const inResults = state.results.includes(v);
+      const inResults = resultsPool().includes(v);
       hits.push({ label: inResults ? `Вариант #${v.id}` : `★ Избранное`, score });
     }
   }
@@ -4190,6 +4477,18 @@ function checkAds(title, desc, category) {
   }
 
   return { errors, warnings, ok };
+}
+
+// Автопроверка вариантов: светофор-бейдж на карточке/строке пакета сразу после генерации,
+// без ручного перехода в Сканер. Использует тот же checkAds(), что и вкладка «Сканер».
+function scanBadgeHTML(v) {
+  if (!v || !v._scan) return '';
+  const { errors, warnings } = v._scan;
+  const level = errors.length ? 'error' : warnings.length ? 'warn' : 'ok';
+  const icon  = level === 'error' ? '🔴' : level === 'warn' ? '🟡' : '🟢';
+  const color = level === 'error' ? 'var(--err)' : level === 'warn' ? 'var(--warn)' : 'var(--ok)';
+  const tip   = [...errors, ...warnings].join(' · ') || 'Проверка пройдена без замечаний';
+  return `<span class="scan-badge" style="color:${color}" title="${esc(tip)}">${icon}</span>`;
 }
 
 function scannerTabHTML() {
@@ -4302,7 +4601,7 @@ function render() {
       <button class="tab-btn ${state.tab==='scanner'?'active':''}" data-tab="scanner">🔍 Сканер</button>
       <button class="tab-btn ${state.tab==='settings'?'active':''}" data-tab="settings">⚙ Настройки</button>
     </nav>
-    <button class="ai-btn ${state.aiOpen?'active':''}" data-act="toggle-ai">⚙ AI</button>
+    ${state.tab !== 'generator' ? `<button class="ai-btn ${state.aiOpen?'active':''}" data-act="toggle-ai">⚙ AI</button>` : ''}
   </div>
 </header>
 
@@ -4337,8 +4636,9 @@ function render() {
     document.getElementById('form-box').innerHTML    = formHTML();
     refreshResults();
     refreshFavs();
+    bindAISettings(); // UX-14: ai-inline-panel всегда в форме — привязываем на каждый рендер формы
   }
-  if (state.aiOpen) {
+  if (state.aiOpen && state.tab !== 'generator') {
     document.getElementById('ai-panel').innerHTML = settingsHTML();
     bindAISettings();
   }
@@ -4349,10 +4649,16 @@ function render() {
   if (state.tab === 'scanner')  bindScannerTab();
 }
 
+// UX-14: настройки AI теперь рендерятся и в шапке (ai-panel, все вкладки кроме генератора),
+// и всегда-открытыми внутри формы генератора (ai-inline-panel) — перерисовываем ту копию, что реально в DOM
+function aiSettingsContainer() {
+  return document.getElementById('sp')?.closest('#ai-panel, #ai-inline-panel')
+      || document.getElementById('token-change')?.closest('#ai-panel, #ai-inline-panel');
+}
 function bindAISettings() {
   document.getElementById('sp')?.addEventListener('change', e => {
     state.settings.provider = e.target.value; save();
-    document.getElementById('ai-panel').innerHTML = settingsHTML();
+    const c = aiSettingsContainer(); if (c) c.innerHTML = settingsHTML();
     bindAISettings();
   });
   document.getElementById('sm')?.addEventListener('change', e => {
@@ -4360,6 +4666,16 @@ function bindAISettings() {
   });
   document.getElementById('som')?.addEventListener('change', e => {
     state.settings.orModel = e.target.value; save();
+  });
+  document.getElementById('token-change')?.addEventListener('click', () => {
+    const cur = localStorage.getItem('avito_admin_token') || '';
+    const input = prompt('Админ-токен (оставьте пустым и нажмите OK, чтобы удалить):', cur);
+    if (input === null) return; // отмена — ничего не трогаем
+    const val = input.trim();
+    if (val) { localStorage.setItem('avito_admin_token', val); toast('Токен сохранён'); }
+    else { localStorage.removeItem('avito_admin_token'); toast('Токен удалён — при следующем запросе спросит заново'); }
+    const c = aiSettingsContainer(); if (c) c.innerHTML = settingsHTML();
+    bindAISettings();
   });
 }
 
@@ -4369,7 +4685,7 @@ function bindAISettings() {
 
 function reForm() {
   const el = document.getElementById('form-box');
-  if (el) el.innerHTML = formHTML();
+  if (el) { el.innerHTML = formHTML(); bindAISettings(); }
 }
 
 function reDurs() {
@@ -4392,7 +4708,7 @@ function reDurs() {
 
 document.addEventListener('click', e => {
   // Covers module — data-cv-* attributes
-  const cvEl = e.target.closest('[data-cv-mode],[data-cv-layout],[data-cv-ratio],[data-cv-bg],[data-cv-bg-style],[data-cv-toggle],[data-cv-grade],[data-cv-plat-sel],[data-cv-plat-pos],[data-cv-sc],[data-cv-stc],[data-cv-spos],[data-cv-del],[data-cv-ms-shape],[data-cv-ms-pos],[data-cv-ms-bg],[data-cv-ms-tc],[data-cv-tz],[data-cv-to-color],[data-cv-to-bg],[data-cv-src]');
+  const cvEl = e.target.closest('[data-cv-mode],[data-cv-layout],[data-cv-ratio],[data-cv-bg],[data-cv-bg-style],[data-cv-toggle],[data-cv-grade],[data-cv-plat-sel],[data-cv-plat-pos],[data-cv-del],[data-cv-ms-shape],[data-cv-ms-pos],[data-cv-ms-bg],[data-cv-ms-tc],[data-cv-tz],[data-cv-to-color],[data-cv-to-bg],[data-cv-src]');
   if (cvEl) {
     if (cvEl.dataset.cvSrc) {
       cv.coverSource = cvEl.dataset.cvSrc;
@@ -4445,21 +4761,6 @@ document.addEventListener('click', e => {
       cv.platBadgePos = cvEl.dataset.cvPlatPos;
       document.querySelectorAll('[data-cv-plat-pos]').forEach(b => b.classList.toggle('active', b.dataset.cvPlatPos === cv.platBadgePos));
       cvReDraw(); return;
-    }
-    if (cvEl.dataset.cvSc) {
-      cv.stickerBg = cvEl.dataset.cvSc;
-      document.querySelectorAll('[data-cv-sc]').forEach(b => b.classList.toggle('active', b.dataset.cvSc === cv.stickerBg));
-      if (cv.images.length) cvRenderState(); return;
-    }
-    if (cvEl.dataset.cvStc) {
-      cv.stickerColor = cvEl.dataset.cvStc;
-      document.querySelectorAll('[data-cv-stc]').forEach(b => b.classList.toggle('active', b.dataset.cvStc === cv.stickerColor));
-      if (cv.images.length) cvRenderState(); return;
-    }
-    if (cvEl.dataset.cvSpos) {
-      cv.stickerPos = cvEl.dataset.cvSpos;
-      document.querySelectorAll('[data-cv-spos]').forEach(b => b.classList.toggle('active', b.dataset.cvSpos === cv.stickerPos));
-      if (cv.images.length) cvRenderState(); return;
     }
     if (cvEl.dataset.cvMsShape) {
       cv.maskStickerShape = cvEl.dataset.cvMsShape;
@@ -4559,7 +4860,7 @@ document.addEventListener('click', e => {
     case 'apply-title': {
       const vid = +el.dataset.vid, tidx = +el.dataset.tidx;
       const alts = state.altTitles[vid];
-      const v = state.results.find(r => r.id === vid);
+      const v = findResult(vid);
       if (v && alts?.[tidx]) { v.title = alts[tidx].title; delete state.altTitles[vid]; save(); refreshResults(); }
       break;
     }
@@ -4568,10 +4869,12 @@ document.addEventListener('click', e => {
 
     case 'fav': {
       const vid = +el.dataset.vid;
-      const v = state.results.find(r => r.id === vid);
+      const v = findResult(vid);
       if (v) toggleFav(v);
       break;
     }
+
+    case 'gen-more': doGenerateMore(); break;
 
     case 'unfav': {
       const fid = +el.dataset.fid;
@@ -4650,7 +4953,9 @@ document.addEventListener('click', e => {
     }
 
     case 'batch-clear':
-      state.batchResults = []; state.batchExpanded = null; refreshResults(); break;
+      // UX-10: пакет = сожжённые токены на N регионов, не стираем молча
+      if (state.batchResults.length && !confirm(`Очистить весь пакет (${state.batchResults.length} объявлений)? Восстановить нельзя.`)) break;
+      state.batchResults = []; state.batchExpanded = null; save(); refreshResults(); break;
 
     case 'queue-add': {
       const qf = state.queueForm;
@@ -4673,7 +4978,7 @@ document.addEventListener('click', e => {
 
     case 'queue-add-batch':
       state.batchResults.forEach(item => {
-        state.postQueue.push({ id: Date.now() + Math.random(), product: currentProductName(state.form), region: item.region, source: 'fav', favId: null, variant: item.variant });
+        state.postQueue.push({ id: Date.now() + Math.random(), product: currentProductName(state.form), region: item.region, source: 'batch', favId: null, variant: item.variant });
       });
       save(); render(); break;
 
@@ -4682,6 +4987,8 @@ document.addEventListener('click', e => {
       save(); render(); break;
 
     case 'queue-clear':
+      // UX-10: вся очередь постинга — не стираем молча
+      if (state.postQueue.length && !confirm(`Очистить всю очередь (${state.postQueue.length} позиций)?`)) break;
       state.postQueue = []; save(); render(); break;
 
     case 'queue-start':
@@ -4794,13 +5101,12 @@ document.addEventListener('click', e => {
       if (!cv.images.length) break;
       cv._selCell = null;
       const tmp = document.createElement('canvas');
-      cvDrawCollage(tmp);
-      cvDownload(tmp, 'collage.jpg');
+      // F11: в режиме «Игра» скачиваем основное превью с текущими настройками (рамка/скругление/
+      // обводка/тень/стикер/текст), а не через «4 варианта», которые перетирают их пресетами.
+      if (cv.mode === 'game') { cvDrawGame(tmp, cv.images[0], {}); cvDownload(tmp, 'game.jpg'); }
+      else { cvDrawCollage(tmp); cvDownload(tmp, 'collage.jpg'); }
       break;
     }
-    case 'cv-sticker':
-      cv.sticker = !cv.sticker; render(); break;
-
     case 'cv-mask-toggle':
       cv.maskSticker = !cv.maskSticker; render(); break;
 
@@ -5002,7 +5308,7 @@ document.addEventListener('click', e => {
       } else {
         const vid = el.dataset.vid ? +el.dataset.vid : null;
         const fid = el.dataset.fid ? +el.dataset.fid : null;
-        v = fid ? state.favorites.find(f => f._fid === fid) : state.results.find(r => r.id === vid);
+        v = fid ? state.favorites.find(f => f._fid === fid) : findResult(vid);
       }
       if (!v) break;
       goToScanner(v.title, v.description, v._category || state.form.category);  // F4: категория из варианта
@@ -5013,7 +5319,7 @@ document.addEventListener('click', e => {
       // UX-4: обычный поток (список/конвейер) раньше нигде не фиксировал факт постинга
       const vid = el.dataset.vid ? +el.dataset.vid : null;
       const fid = el.dataset.fid ? +el.dataset.fid : null;
-      const v = fid ? state.favorites.find(f => f._fid === fid) : state.results.find(r => r.id === vid);
+      const v = fid ? state.favorites.find(f => f._fid === fid) : findResult(vid);
       if (!v) break;
       const region = prompt('Регион размещения?', (state.settings.regions || REGIONS)[0] || 'Москва');
       if (!region || !region.trim()) break;
@@ -5024,6 +5330,19 @@ document.addEventListener('click', e => {
       });
       save();
       toast('Отмечено как размещено: ' + region.trim());
+      break;
+    }
+
+    case 'batch-fav': {
+      // F17: сохранить региональный вариант из пакета в избранное (попадает в few-shot-пул).
+      const i = +el.dataset.i;
+      const v = state.batchResults[i]?.variant;
+      if (!v) break;
+      const key = (v.title || '') + (v.description || '');
+      if (state.favorites.some(f => (f.title || '') + (f.description || '') === key)) { toast('Уже в избранном'); break; }
+      state.favorites.push({ ...v, _fid: Date.now() });
+      save(); refreshFavs();
+      toast('Сохранено в избранное');
       break;
     }
 
@@ -5105,18 +5424,6 @@ document.addEventListener('input', e => {
     if (c) { cv.mode === 'game' ? cvDrawGame(c, img, {}) : cvDrawCollage(c); }
     return;
   }
-  if (el.id === 'cv-sticker-text') {
-    cv.stickerText = el.value;
-    if (cv.images.length) cvRenderState();
-  }
-  if (act === 'cv-sc-custom') {
-    cv.stickerBg = el.value;
-    if (cv.images.length) cvRenderState();
-  }
-  if (act === 'cv-stc-custom') {
-    cv.stickerColor = el.value;
-    if (cv.images.length) cvRenderState();
-  }
 });
 
 // ══════════════════════════════════════════
@@ -5124,6 +5431,13 @@ document.addEventListener('input', e => {
 // ══════════════════════════════════════════
 
 render();
+
+// GFX-13: шрифты грузятся асинхронно — если канвас с текстом успел отрисоваться
+// на системном fallback раньше, чем догрузился self-host шрифт, перерисовать заново
+document.fonts?.ready.then(() => {
+  const c = document.getElementById('cv-canvas');
+  if (c && cv.images.length) cv.mode === 'game' ? cvDrawGame(c, cv.images[0], {}) : cvDrawCollage(c);
+});
 </script>
 </body>
 </html>
