@@ -1112,6 +1112,7 @@ async function doGenerate() {
   state.loading = true; state.error = null; state.loadingKind = null;
   state.batchResults = []; state.titleStep = null; state.extraResults = [];
   refreshResults();
+  scrollToResults(); // UX-11
   try {
     const webSearch = state.form.isPreorder && state.form.category === 'game';
     const text = await callAI([{ role: 'user', content: buildMsg() }], { webSearch });
@@ -1176,6 +1177,7 @@ async function doBatchGenerate() {
   for (let i = 0; i < regions.length; i += CHUNK) chunks.push(regions.slice(i, i + CHUNK));
   state.batchChunkProgress = chunks.length > 1 ? { done: 0, total: chunks.length } : null;
   refreshResults();
+  scrollToResults(); // UX-11
   try {
     const webSearch = state.form.isPreorder && state.form.category === 'game';
     const variants = [];
@@ -1242,6 +1244,7 @@ async function doGenTitlesOnly() {
   state.loading = true; state.error = null; state.loadingKind = 'titles';
   state.titleStep = null;
   refreshResults();
+  scrollToResults(); // UX-11
   try {
     const webSearch = state.form.isPreorder && state.form.category === 'game';
     const n = Math.max(8, Math.min(12, (state.form.count || 5) * 2));
@@ -1268,6 +1271,7 @@ async function doGenDescriptionsForTitles() {
   if (!chosen.length) { toast('Выберите хотя бы одно название'); return; }
   state.loading = true; state.error = null; state.loadingKind = 'descriptions'; state.extraResults = [];
   refreshResults();
+  scrollToResults(); // UX-11
   try {
     const f = step.form;
     const webSearch = f.isPreorder && f.category === 'game';
@@ -1410,7 +1414,7 @@ ${v.description}
       <div style="font-size:11px;color:var(--teal-h);font-weight:600;margin-bottom:8px;letter-spacing:.3px">↺ ПЕРЕФРАЗ</div>
       <div style="display:flex;align-items:baseline;gap:8px;margin-bottom:6px">
         <span style="font-size:14px;font-weight:600">${esc(nv.title || '')}</span>
-        <span class="tlen ${lenClass(nLen)}">${nLen}/50</span>
+        ${tlenHTML(nLen)}
       </div>
       <div class="copy-row" style="margin-bottom:8px">
         <button class="btn-copy" data-act="copy" data-text="${tAttr}">📋 Название</button>
@@ -1498,6 +1502,13 @@ function lenClass(n) {
   return n <= 44 ? 'ok' : n <= 50 ? 'warn' : 'over';
 }
 
+// UX-13: пороги счётчика длины объяснены в подсказке (раньше «N/50» желтел молча).
+// Лимит Авито — 50; жёлтый с 45 (впритык), красный с 51 (лимит превышен).
+const LEN_TIP = 'Лимит названия на Авито — 50 символов. Жёлтый с 45 (впритык к лимиту — Авито может обрезать название в списке), красный с 51 (лимит превышен, объявление не примут).';
+function tlenHTML(len, cls, style) {
+  return `<span class="tlen ${cls ? cls + ' ' : ''}${lenClass(len)}"${style ? ` style="${style}"` : ''} title="${LEN_TIP}">${len}/50</span>`;
+}
+
 // ══════════════════════════════════════════
 // VARIANT CARD HTML
 // ══════════════════════════════════════════
@@ -1539,7 +1550,7 @@ function vcardHTML(v, inFav) {
 
   <div class="title-row">
     <span class="title-val">${titleEsc}</span>
-    <span class="tlen ${lenClass(len)}">${len}/50</span>
+    ${tlenHTML(len)}
   </div>
   <div class="copy-row">
     <button class="btn-copy" data-act="copy" data-text="${tAttr}">📋 Название</button>
@@ -1600,7 +1611,7 @@ function conveyorHTML() {
 
     <div>
       <div class="conv-title">${esc(v.title || '')}</div>
-      <div class="conv-tlen-row"><span class="tlen ${lenClass(len)}">${len}/50</span></div>
+      <div class="conv-tlen-row">${tlenHTML(len)}</div>
     </div>
 
     <button class="conv-btn conv-btn-title" data-act="conv-copy-title" data-text="${tAttr}">
@@ -1661,7 +1672,7 @@ function titleStepHTML() {
         <label class="title-step-item ${step.selected[t.id] ? 'on' : ''}" data-act="title-pick" data-id="${t.id}">
           <input type="checkbox" ${step.selected[t.id] ? 'checked' : ''} style="pointer-events:none;accent-color:var(--teal);width:15px;height:15px;flex-shrink:0;">
           <span class="title-step-text">${esc(t.title)}</span>
-          <span class="tlen ${lenClass(t.len)}">${t.len}/50</span>
+          ${tlenHTML(t.len)}
         </label>`).join('')}
     </div>
     <div style="display:flex;gap:8px;margin-top:12px;">
@@ -1672,6 +1683,15 @@ function titleStepHTML() {
     </div>
     <button class="conv-mode-toggle" data-act="titles-cancel" style="margin-top:8px;width:100%;text-align:center;">← Назад к форме</button>
   </div>`;
+}
+
+// UX-11: на мобиле (≤780px форма и результаты в одну колонку) результаты уходят вниз
+// под длинную форму — подскроллим к ним при старте генерации, чтобы продавец сразу видел
+// спиннер/варианты и не решил, что кнопка не сработала.
+function scrollToResults() {
+  if (window.innerWidth > 780) return;
+  const el = document.getElementById('results-box');
+  if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
 
 function refreshResults() {
@@ -1765,7 +1785,7 @@ function refreshBatchResults() {
         <span class="batch-region-badge">📍 ${esc(item.region)}</span>
         ${scanBadgeHTML(item.variant)}
         <span class="batch-title-preview">${esc(item.variant?.title || '—')}</span>
-        <span class="batch-tlen tlen ${lenClass(len)}">${len}/50</span>
+        ${tlenHTML(len, 'batch-tlen')}
         <div class="batch-row-btns">
           <button class="btn-copy" data-act="copy" data-text="${tAttr}" title="Копировать название">📋 Назв</button>
           <button class="btn-copy" data-act="copy" data-text="${dAttr}" title="Копировать описание">📋 Опис</button>
@@ -2233,7 +2253,7 @@ function renderSession() {
       </div>
       ${v ? `
       <div>
-        <div class="session-label">Название <span class="tlen ${lenClass(v.title ? [...v.title].length : 0)}" style="margin-left:6px;">${v.title ? [...v.title].length : 0}/50</span></div>
+        <div class="session-label">Название ${tlenHTML(v.title ? [...v.title].length : 0, '', 'margin-left:6px;')}</div>
         <div class="session-title-val">${esc(v.title||'')}</div>
         <button class="conv-btn conv-btn-title" data-act="conv-copy-title" data-text="${tAttr}" style="margin-top:6px;">📋 Копировать название</button>
       </div>
@@ -4415,6 +4435,10 @@ const SCAN_WARNINGS = [
   { re: /telegram|телеграм/i, label: 'Упоминание Telegram — Авито может расценить как контакт' },
   { re: /whatsapp|вацап|ватсап/i, label: 'Упоминание WhatsApp — Авито может расценить как контакт' },
   { re: /viber|вайбер/i,      label: 'Упоминание Viber — Авито может расценить как контакт' },
+  // F19: синхронизация сканера с запретами SYS-промпта. Раньше вставленный руками или
+  // «уплывший» текст AI проходил «🎉 Всё чисто», хотя нарушал правила объявления.
+  { re: /(?<![а-яёa-z0-9])подар(ок|к[а-яё]+|очн[а-яё]+)(?![а-яёa-z0-9])/i, label: '«Подарок» — запрещено правилами объявления (риск как передача аккаунта)' },
+  { re: /(?<![а-яёa-z0-9])(плат(ишь|ить|ежи?|ежом|ежа)|оплат[а-яё]*|оплачива[а-яё]*|купишь|покупаешь|покупк[а-яё]+)(?![а-яёa-z0-9])|(?<![а-яёa-z0-9])стоит\s+\d/i, label: 'Слова оплаты («платишь/оплата/купишь») — по правилам только «оформляешь»' },
 ];
 
 const PLATFORM_RE = /ps4|ps5|пс4|пс5|xbox|иксбокс|playstation|nintendo|switch/i;
@@ -4474,6 +4498,12 @@ function checkAds(title, desc, category) {
 
   if (category === 'game' && /\d[\d\s]*₽|\d+\s*руб|\d+\s*рублей|\d+\s*р(?![а-яёa-z0-9])/i.test(desc)) {
     errors.push('Цена в описании игры — ЗАПРЕЩЕНА (клиент видит цену в поле Авито)');
+  }
+
+  // F19: «цена: N» как ярлык-ценник (все категории). Для игр цена-с-валютой уже ошибка выше,
+  // но голая «Цена: 3000» без ₽/руб её не триггерит — этот warning закрывает и такой пробел.
+  if (/(?<![а-яёa-z0-9])цена\s*[:—\-]?\s*\d/i.test(full)) {
+    warnings.push('«Цена: N» как ярлык — по правилам сумму указывают без слова «цена» («… ₽», «оформляешь за …»)');
   }
 
   return { errors, warnings, ok };
