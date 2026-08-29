@@ -2460,6 +2460,9 @@ const cv = {
   bgStyle:'solid', bg2:'#1a1a2e', vignette:false, grade:'none',
   neonGap:false, neonColor:'#B45309',
   platBadge:false, platSel:['PS5'], platBadgePos:'bl',
+  // 📋 Инфографика — пилюли-характеристики поверх обложки (стиль карточек маркетплейсов)
+  infog:false, infogText:'', infogSize:38, infogBg:'#0f172a', infogBgOpacity:0.82,
+  infogColor:'#ffffff', infogAlign:'left', infogX:null, infogY:null,
   // рамка одиночной картинки (режим Игра)
   gamePad:0, gameCorner:0, gameBorder:0, gameBorderColor:'#B45309', gameShadow:false,
   _selCell:null, _dragIdx:undefined, _canvasDrag:null,
@@ -3081,6 +3084,106 @@ function cvDrawTextOverlay(ctx, cw, ch) {
   ctx.restore();
 }
 
+// ── 📋 Инфографика: пилюли-характеристики поверх обложки ──
+// ov (переопределение для «✨ 4 варианта»): {align, bg, shift} — позиция/цвет/порядок строк
+// как оси антидубля; при ov drag-позиция игнорируется, чтобы варианты реально отличались
+function cvInfogLines(shift) {
+  let ls = (cv.infogText || '').split('\n').map(l => l.trim()).filter(Boolean).slice(0, 6);
+  // shift вращает строки, но первая (название товара) остаётся на месте
+  if (shift && ls.length > 2) {
+    const rest = ls.slice(1), s = shift % rest.length;
+    ls = [ls[0], ...rest.slice(s), ...rest.slice(0, s)];
+  }
+  return ls;
+}
+function cvInfogMetrics(ctx, cw, ch, ov) {
+  const lines = cvInfogLines(ov?.shift);
+  if (!lines.length) return null;
+  const fs = cv.infogSize;
+  ctx.font = `bold ${fs}px 'JetBrains Mono',monospace`;
+  const padX = fs * 0.75, bh = fs * 1.75, gap = fs * 0.42;
+  const widths = lines.map(l => Math.min(ctx.measureText(l).width + padX * 2, cw * 0.92));
+  const maxW = Math.max(...widths);
+  const totalH = lines.length * bh + (lines.length - 1) * gap;
+  const align = ov?.align ?? cv.infogAlign;
+  const mg = cw * 0.045;
+  let x, y;
+  if (!ov && cv.infogX !== null && cv.infogY !== null) { x = cv.infogX; y = cv.infogY; }
+  else {
+    x = align === 'right' ? cw - mg - maxW : mg;
+    y = ch - ch * 0.06 - totalH;
+  }
+  return { lines, fs, padX, bh, gap, widths, maxW, totalH, x, y, align };
+}
+function cvDrawInfog(ctx, cw, ch, ov) {
+  if (!cv.infog) return;
+  const m = cvInfogMetrics(ctx, cw, ch, ov);
+  if (!m) return;
+  const bg = ov?.bg ?? cv.infogBg;
+  ctx.save();
+  ctx.font = `bold ${m.fs}px 'JetBrains Mono',monospace`;
+  ctx.textBaseline = 'middle';
+  m.lines.forEach((l, i) => {
+    const py = m.y + i * (m.bh + m.gap);
+    const w = m.widths[i];
+    const px = m.align === 'right' ? m.x + m.maxW - w : m.x;
+    ctx.globalAlpha = cv.infogBgOpacity;
+    ctx.shadowColor = 'rgba(0,0,0,0.35)'; ctx.shadowBlur = m.fs * 0.4; ctx.shadowOffsetY = m.fs * 0.08;
+    cvRR(ctx, px, py, w, m.bh, m.bh / 2); ctx.fillStyle = bg; ctx.fill();
+    ctx.shadowColor = 'transparent'; ctx.shadowBlur = 0; ctx.shadowOffsetY = 0;
+    ctx.globalAlpha = 1;
+    ctx.fillStyle = cv.infogColor; ctx.textAlign = 'left';
+    let t = l;
+    while (t.length > 1 && ctx.measureText(t).width > w - m.padX * 2) t = t.slice(0, -1);
+    ctx.fillText(t, px + m.padX, py + m.bh / 2 + m.fs * 0.04);
+  });
+  ctx.restore();
+}
+
+// ⚡ Автозаполнение инфографики из формы генератора — набор строк зависит от категории.
+// Для игр цену НЕ подставляем (запрет цен в объявлениях игр — тот же принцип, что в сканере),
+// вместо неё — обязательная фраза «Оформляется в цифре».
+function cvInfogBuildLines() {
+  const f = state.form;
+  const L = [];
+  if (f.category === 'gaming_sub') {
+    L.push(`🎮 ${f.subType}`);
+    if (f.platforms?.length) L.push(`✔️ ${f.platforms.join(' / ')}`);
+    const games = (f.games || '').split(',').map(s => s.trim()).filter(Boolean);
+    if (games.length) L.push(`🔥 ${games.length > 1 ? `${games[0]} +${games.length - 1} игр` : games[0]}`);
+    const ds = (f.durations || []).filter(d => d.price && +String(d.price).replace(/\D/g, ''));
+    if (ds.length) {
+      const last = ds[ds.length - 1];
+      const months = parseInt(last.period) || 1;
+      const price = +String(last.price).replace(/\D/g, '');
+      L.push(months > 1 ? `💲 от ${Math.round(price / months)}₽/мес` : `💲 ${price}₽`);
+    }
+  } else if (f.category === 'ai_sub') {
+    if (f.aiService) L.push(`🧠 ${f.aiService}`);
+    (f.aiFeatures || '').split(',').map(s => s.trim()).filter(Boolean).slice(0, 2)
+      .forEach(x => L.push(`✔️ ${x}`));
+    if (f.aiPrice) L.push(`💲 ${f.aiPrice}₽ / ${f.aiDuration || '1 месяц'}`);
+  } else if (f.category === 'game') {
+    if (f.gameName) L.push(`🕹️ ${f.gameName}`);
+    if (f.gamePlatforms?.length) L.push(`✔️ ${f.gamePlatforms.join(' / ')}`);
+    if (f.gameGenre) L.push(`🎯 ${f.gameGenre}`);
+    L.push('⚡ Оформляется в цифре');
+  } else if (f.category === 'digital') {
+    if (f.digitalName) L.push(`📦 ${f.digitalName}`);
+    if (f.digitalPrice) L.push(`💲 ${f.digitalPrice}₽`);
+    L.push('⚡ Быстрая выдача');
+  }
+  return L.slice(0, 5);
+}
+function cvInfogFillFromForm() {
+  const lines = cvInfogBuildLines();
+  if (!lines.length) { toast('Форма генератора пуста — заполнить нечего'); return; }
+  cv.infogText = lines.join('\n');
+  const ta = document.getElementById('cv-ig-text');
+  if (ta) ta.value = cv.infogText;
+  cvReDraw();
+}
+
 // ── Effects over collage (vignette / tone / neon seam) ──
 function cvDrawEffects(ctx, cw, ch, lay, p, count, opts) {
   const special = ['diag','stack'];
@@ -3258,6 +3361,7 @@ function cvDrawCollage(canvas, opts) {
   cvDrawMaskSticker(ctx, cw, ch);
   cvDrawTextOverlay(ctx, cw, ch);
   cvDrawPlatBadge(ctx, cw, ch);
+  cvDrawInfog(ctx, cw, ch, opts?.infog);
 }
 
 function cvDrawGame(canvas, imgObj, opts) {
@@ -3295,6 +3399,7 @@ function cvDrawGame(canvas, imgObj, opts) {
   cvDrawEffects(ctx, cw, ch, 'single', pad || 12, 1, opts);
   cvDrawMaskSticker(ctx, cw, ch); cvDrawTextOverlay(ctx, cw, ch);
   cvDrawPlatBadge(ctx, cw, ch);
+  cvDrawInfog(ctx, cw, ch, opts?.infog);
 }
 
 function cvDownload(canvas, name) {
@@ -3309,11 +3414,12 @@ function cvGenerateVariations() {
   const img   = cv.images[0];
   const grid  = document.getElementById('cv-vars-grid');
   if (!grid) return;
+  // infog-переопределения — ось антидубля: позиция/цвет плашек/порядок строк меняются между вариантами
   const vars = [
-    { label:'1. Без отступов', bg:cv.bg,     pad:0,  corner:0  },
-    { label:'2. Тонкий фон',   bg:cv.bg,     pad:36, corner:14 },
-    { label:'3. Тёмный',       bg:'#000',    pad:24, corner:10 },
-    { label:'4. Синий',        bg:'#1e3a5f', pad:28, corner:12 },
+    { label:'1. Без отступов', bg:cv.bg,     pad:0,  corner:0,  infog:{align:'left',  bg:cv.infogBg, shift:0} },
+    { label:'2. Тонкий фон',   bg:cv.bg,     pad:36, corner:14, infog:{align:'right', bg:'#0F766E',  shift:1} },
+    { label:'3. Тёмный',       bg:'#000',    pad:24, corner:10, infog:{align:'left',  bg:'#7c2d12',  shift:2} },
+    { label:'4. Синий',        bg:'#1e3a5f', pad:28, corner:12, infog:{align:'right', bg:cv.infogBg, shift:3} },
   ];
 
   cv._gameVars = vars;
@@ -3342,11 +3448,12 @@ function cvGenerateCollageVars() {
   if (!cv.images.length) return;
   const grid = document.getElementById('cv-collage-vars-grid');
   if (!grid) return;
+  // infog-переопределения — та же ось антидубля, что в вариантах игры
   const vars = [
-    { label: '1. Чёрный · 0px',   bg: '#000000', padding: 0  },
-    { label: '2. Синий · 20px',    bg: '#1a1a2e', padding: 20 },
-    { label: '3. Зелёный · 16px',  bg: '#0f2010', padding: 16 },
-    { label: '4. Текущий · ' + cv.padding + 'px', bg: cv.bg, padding: cv.padding },
+    { label: '1. Чёрный · 0px',   bg: '#000000', padding: 0,  infog:{align:'left',  bg:cv.infogBg, shift:0} },
+    { label: '2. Синий · 20px',    bg: '#1a1a2e', padding: 20, infog:{align:'right', bg:'#0F766E',  shift:1} },
+    { label: '3. Зелёный · 16px',  bg: '#0f2010', padding: 16, infog:{align:'left',  bg:'#7c2d12',  shift:2} },
+    { label: '4. Текущий · ' + cv.padding + 'px', bg: cv.bg, padding: cv.padding, infog:{align:'right', bg:cv.infogBg, shift:3} },
   ];
   grid.innerHTML = vars.map((v,i) => `
     <div class="cv-var">
@@ -3357,13 +3464,13 @@ function cvGenerateCollageVars() {
     `<button class="btn-copy" data-act="cv-dl-all-collage" style="margin-top:8px;width:100%;justify-content:center;padding:7px">⬇ Скачать все 4</button>`;
   vars.forEach((v,i) => {
     const c = document.getElementById(`cv-cvar-${i}`);
-    if (c) cvDrawCollage(c, { bg: v.bg, padding: v.padding });
+    if (c) cvDrawCollage(c, { bg: v.bg, padding: v.padding, infog: v.infog });
   });
   grid.querySelectorAll('[data-cv-dl-cvar]').forEach(btn => {
     const i = +btn.dataset.cvDlCvar;
     btn.addEventListener('click', () => {
       const tmp = document.createElement('canvas');
-      cvDrawCollage(tmp, { bg: vars[i].bg, padding: vars[i].padding });
+      cvDrawCollage(tmp, { bg: vars[i].bg, padding: vars[i].padding, infog: vars[i].infog });
       cvDownload(tmp, `collage-var-${i+1}.jpg`);
     });
   });
@@ -3561,6 +3668,49 @@ function coversTabHTML() {
     ` : ''}
   </div>`;
 
+  const igSection = `<div class="card">
+    <div class="card-title">📋 Инфографика</div>
+    <div style="font-size:11px;color:var(--muted);margin-bottom:8px">Плашки-характеристики поверх обложки — как продающие карточки маркетплейсов</div>
+    <div class="cv-row" style="margin-top:0">
+      <label>Показать</label>
+      <button class="toggle-btn ${cv.infog?'on':''}" data-act="cv-ig-toggle">${cv.infog?'Вкл':'Выкл'}</button>
+    </div>
+    ${cv.infog ? `
+    <div class="cv-row" style="align-items:flex-start"><label style="padding-top:4px">Строки</label>
+      <textarea id="cv-ig-text" rows="4" style="flex:1;font-size:13px;resize:vertical"
+        placeholder="✔️ 405+ игр&#10;✔️ PS4 / PS5&#10;💲 от 608₽/мес&#10;(строка = плашка, до 6)">${esc(cv.infogText)}</textarea>
+    </div>
+    <button class="btn-sm" data-act="cv-ig-fill" style="margin:2px 0 6px">⚡ Заполнить из формы генератора</button>
+    <div class="cv-row"><label>Размер</label>
+      <input type="range" id="cv-ig-size" min="24" max="64" value="${cv.infogSize}">
+      <span class="cv-val" id="cv-ig-size-val">${cv.infogSize}px</span>
+    </div>
+    <div class="cv-row"><label>Прозрачность</label>
+      <input type="range" id="cv-ig-opacity" min="20" max="100" value="${Math.round(cv.infogBgOpacity*100)}">
+      <span class="cv-val" id="cv-ig-opacity-val">${Math.round(cv.infogBgOpacity*100)}%</span>
+    </div>
+    <div class="cv-row"><label>Сторона</label>
+      <div class="cv-layouts" style="flex:1">
+        ${[['left','⬅ Слева'],['right','➡ Справа']].map(([v,l])=>
+          `<button class="cv-layout-btn ${cv.infogAlign===v?'active':''}" data-cv-ig-align="${v}">${l}</button>`).join('')}
+      </div>
+    </div>
+    <div class="cv-row"><label>Плашка</label>
+      <div class="cv-bg-row">
+        ${CV_SC.map(c=>`<button class="cv-color ${cv.infogBg===c?'active':''}" data-cv-ig-bg="${c}" style="background:${c}"></button>`).join('')}
+        <input type="color" id="cv-ig-bg-custom" value="${cv.infogBg}" title="Свой цвет" style="width:28px;height:28px;border:none;border-radius:50%;cursor:pointer;padding:0">
+      </div>
+    </div>
+    <div class="cv-row"><label>Текст</label>
+      <div class="cv-bg-row">
+        ${CV_STC.map(c=>`<button class="cv-color ${cv.infogColor===c?'active':''}" data-cv-ig-tc="${c}" style="background:${c};${c==='#ffffff'?'border:1px solid #555':''}"></button>`).join('')}
+        <input type="color" id="cv-ig-tc-custom" value="${cv.infogColor}" title="Свой цвет" style="width:28px;height:28px;border:none;border-radius:50%;cursor:pointer;padding:0">
+      </div>
+    </div>
+    <div style="font-size:11px;color:var(--teal-h);margin-top:4px">💡 Тяни блок плашек мышкой прямо на канвасе</div>
+    ` : ''}
+  </div>`;
+
   if (cv.mode === 'collage') return `<div class="cv-wrap">
     <div class="cv-controls">
       <div class="cv-mode-tabs">${pill('collage','🖼 Коллаж')}${pill('game','🎮 Игра')}</div>
@@ -3588,6 +3738,7 @@ function coversTabHTML() {
       </div>
       ${effectsSection}
       ${msSection}
+      ${igSection}
       <div class="card">
         <div class="card-title">Фон и отступы</div>${bgPicker}
         <div class="cv-row">
@@ -3674,6 +3825,7 @@ function coversTabHTML() {
       </div>
       ${effectsSection}
       ${msSection}
+      ${igSection}
       <button class="btn-gen" id="cv-download" data-act="cv-download" ${!cv.images.length?'disabled':''}>⬇ Скачать JPEG</button>
       <button class="btn-gen" id="cv-gen-vars" data-act="cv-gen-vars" ${!cv.images.length?'disabled':''} style="margin-top:8px">✨ 4 варианта (разный фон)</button>
     </div>
@@ -3781,6 +3933,26 @@ function bindCoversTab() {
     cv.textOverlayBgOpacity = +e.target.value / 100;
     const v = document.getElementById('cv-to-opacity-val'); if (v) v.textContent = e.target.value + '%';
     cvReDraw();
+  });
+  // 📋 Инфографика — live inputs
+  document.getElementById('cv-ig-text')?.addEventListener('input', e => {
+    cv.infogText = e.target.value; cvReDraw();
+  });
+  document.getElementById('cv-ig-size')?.addEventListener('input', e => {
+    cv.infogSize = +e.target.value;
+    const v = document.getElementById('cv-ig-size-val'); if (v) v.textContent = e.target.value + 'px';
+    cvReDraw();
+  });
+  document.getElementById('cv-ig-opacity')?.addEventListener('input', e => {
+    cv.infogBgOpacity = +e.target.value / 100;
+    const v = document.getElementById('cv-ig-opacity-val'); if (v) v.textContent = e.target.value + '%';
+    cvReDraw();
+  });
+  document.getElementById('cv-ig-bg-custom')?.addEventListener('input', e => {
+    cv.infogBg = e.target.value; cvReDraw();
+  });
+  document.getElementById('cv-ig-tc-custom')?.addEventListener('input', e => {
+    cv.infogColor = e.target.value; cvReDraw();
   });
   document.getElementById('cv-bg2-custom')?.addEventListener('input', e => {
     cv.bg2 = e.target.value; cvReDraw();
@@ -3897,6 +4069,7 @@ function bindCoversTab() {
     let _stickerDrag = null;
     let _textDrag = null;
     let _gameDrag = null;
+    let _infogDrag = null;
 
     function canvasMouse(e) {
       const rect = canvas.getBoundingClientRect();
@@ -3946,6 +4119,15 @@ function bindCoversTab() {
       return Math.sqrt((mx-tcx)**2 + (my-tcy)**2) <= hitR ? { tcx, tcy } : null;
     }
 
+    // 📋 Инфографика: хитбокс по факту измеренного блока плашек (как у текста — GFX-14)
+    function infogHit(mx, my) {
+      if (!cv.infog) return null;
+      const [cw2, ch2] = CV_SZ[cv.ratio] || CV_SZ['4:5'];
+      const m = cvInfogMetrics(canvas.getContext('2d'), cw2, ch2);
+      if (!m) return null;
+      return (mx >= m.x && mx <= m.x + m.maxW && my >= m.y && my <= m.y + m.totalH) ? m : null;
+    }
+
     function onPointerDown(e) {
       if (!cv.images.length) return;
       const { mx, my } = canvasMouse(e);
@@ -3962,6 +4144,14 @@ function bindCoversTab() {
         e.preventDefault();
         const { scx, scy } = stickerPos();
         _stickerDrag = { offX: mx - scx, offY: my - scy };
+        canvas.style.cursor = 'grabbing';
+        return;
+      }
+      // Infographic block drag
+      const ih = infogHit(mx, my);
+      if (ih) {
+        e.preventDefault();
+        _infogDrag = { offX: mx - ih.x, offY: my - ih.y };
         canvas.style.cursor = 'grabbing';
         return;
       }
@@ -4006,6 +4196,13 @@ function bindCoversTab() {
         cv.mode === 'game' ? cvDrawGame(canvas, cv.images[0], {}) : cvDrawCollage(canvas);
         return;
       }
+      if (_infogDrag) {
+        const { mx, my } = canvasMouse(e);
+        cv.infogX = mx - _infogDrag.offX;
+        cv.infogY = my - _infogDrag.offY;
+        cv.mode === 'game' ? cvDrawGame(canvas, cv.images[0], {}) : cvDrawCollage(canvas);
+        return;
+      }
       if (!_drag) return;
       const dx = e.clientX - _drag.startX, dy = e.clientY - _drag.startY;
       if (!_drag.moved && Math.sqrt(dx*dx+dy*dy) > 6) _drag.moved = true;
@@ -4035,6 +4232,7 @@ function bindCoversTab() {
       if (_gameDrag) { _gameDrag = null; canvas.style.cursor = 'pointer'; return; }
       if (_textDrag) { _textDrag = null; canvas.style.cursor = 'pointer'; return; }
       if (_stickerDrag) { _stickerDrag = null; canvas.style.cursor = 'pointer'; return; }
+      if (_infogDrag) { _infogDrag = null; canvas.style.cursor = 'pointer'; cvSave(); return; }
       if (!_drag) return;
       canvas.style.cursor = 'pointer';
       if (_drag.moved && _drag.targetCell !== -1 && _drag.targetCell !== _drag.cellIdx) {
@@ -4053,6 +4251,7 @@ function bindCoversTab() {
       if (_gameDrag) { _gameDrag = null; canvas.style.cursor = 'pointer'; return; }
       if (_textDrag) { _textDrag = null; canvas.style.cursor = 'pointer'; return; }
       if (_stickerDrag) { _stickerDrag = null; canvas.style.cursor = 'pointer'; return; }
+      if (_infogDrag) { _infogDrag = null; canvas.style.cursor = 'pointer'; cvSave(); return; }
       if (!_drag) return;
       _drag = null;
       canvas.style.cursor = 'pointer';
@@ -4071,7 +4270,7 @@ function bindCoversTab() {
       onPointerDown({ clientX: t.clientX, clientY: t.clientY, preventDefault: () => e.preventDefault() });
     }, {passive: false});
     canvas.addEventListener('touchmove', e => {
-      if (!_drag && !_stickerDrag && !_textDrag && !_gameDrag) return;
+      if (!_drag && !_stickerDrag && !_textDrag && !_gameDrag && !_infogDrag) return;
       if (e.touches.length !== 1) return;
       e.preventDefault();
       const t = e.touches[0];
@@ -4738,7 +4937,7 @@ function reDurs() {
 
 document.addEventListener('click', e => {
   // Covers module — data-cv-* attributes
-  const cvEl = e.target.closest('[data-cv-mode],[data-cv-layout],[data-cv-ratio],[data-cv-bg],[data-cv-bg-style],[data-cv-toggle],[data-cv-grade],[data-cv-plat-sel],[data-cv-plat-pos],[data-cv-del],[data-cv-ms-shape],[data-cv-ms-pos],[data-cv-ms-bg],[data-cv-ms-tc],[data-cv-tz],[data-cv-to-color],[data-cv-to-bg],[data-cv-src]');
+  const cvEl = e.target.closest('[data-cv-mode],[data-cv-layout],[data-cv-ratio],[data-cv-bg],[data-cv-bg-style],[data-cv-toggle],[data-cv-grade],[data-cv-plat-sel],[data-cv-plat-pos],[data-cv-del],[data-cv-ms-shape],[data-cv-ms-pos],[data-cv-ms-bg],[data-cv-ms-tc],[data-cv-tz],[data-cv-to-color],[data-cv-to-bg],[data-cv-src],[data-cv-ig-align],[data-cv-ig-bg],[data-cv-ig-tc]');
   if (cvEl) {
     if (cvEl.dataset.cvSrc) {
       cv.coverSource = cvEl.dataset.cvSrc;
@@ -4825,6 +5024,22 @@ document.addEventListener('click', e => {
     if (cvEl.dataset.cvToBg) {
       cv.textOverlayBgColor = cvEl.dataset.cvToBg;
       document.querySelectorAll('[data-cv-to-bg]').forEach(b => b.classList.toggle('active', b.dataset.cvToBg === cv.textOverlayBgColor));
+      cvReDraw(); return;
+    }
+    if (cvEl.dataset.cvIgAlign) {
+      cv.infogAlign = cvEl.dataset.cvIgAlign;
+      cv.infogX = null; cv.infogY = null; // сброс drag-позиции, как у стикера
+      document.querySelectorAll('[data-cv-ig-align]').forEach(b => b.classList.toggle('active', b.dataset.cvIgAlign === cv.infogAlign));
+      cvReDraw(); return;
+    }
+    if (cvEl.dataset.cvIgBg) {
+      cv.infogBg = cvEl.dataset.cvIgBg;
+      document.querySelectorAll('[data-cv-ig-bg]').forEach(b => b.classList.toggle('active', b.dataset.cvIgBg === cv.infogBg));
+      cvReDraw(); return;
+    }
+    if (cvEl.dataset.cvIgTc) {
+      cv.infogColor = cvEl.dataset.cvIgTc;
+      document.querySelectorAll('[data-cv-ig-tc]').forEach(b => b.classList.toggle('active', b.dataset.cvIgTc === cv.infogColor));
       cvReDraw(); return;
     }
     if (cvEl.dataset.cvDel !== undefined) { cvRemoveImage(+cvEl.dataset.cvDel); return; }
@@ -5147,6 +5362,11 @@ document.addEventListener('click', e => {
     case 'cv-to-bg-toggle':
       cv.textOverlayBg = !cv.textOverlayBg; render(); break;
 
+    case 'cv-ig-toggle':
+      cv.infog = !cv.infog; render(); break;
+    case 'cv-ig-fill':
+      cvInfogFillFromForm(); break;
+
     case 'cv-gen-vars':
       cvGenerateVariations(); break;
 
@@ -5159,7 +5379,7 @@ document.addEventListener('click', e => {
       if (!vars) break;
       vars.forEach((v,i) => setTimeout(() => {
         const tmp = document.createElement('canvas');
-        cvDrawCollage(tmp, { bg: v.bg, padding: v.padding });
+        cvDrawCollage(tmp, { bg: v.bg, padding: v.padding, infog: v.infog });
         cvDownload(tmp, `collage-var-${i+1}.jpg`);
       }, i * 350));
       break;
