@@ -760,6 +760,16 @@ function ls(key, def) {
 
 function save() {
   try {
+    _saveAll();
+  } catch(e) {
+    // Упёрлись в квоту localStorage: часть ключей записана, часть нет — на F5 это
+    // потеря результатов/очереди/истории. Журнал самообучения делит ту же квоту и
+    // всегда уступает: сбрасываем его буфер и повторяем запись целиком.
+    try { jPurgeBuffer(); _saveAll(); } catch(e2) {}
+  }
+}
+
+function _saveAll() {
     localStorage.setItem('avito_settings', JSON.stringify(state.settings));
     localStorage.setItem('avito_form',     JSON.stringify(state.form));
     localStorage.setItem('avito_results',  JSON.stringify(state.results));
@@ -774,7 +784,6 @@ function save() {
     // F10: пакет по регионам переживает F5 (был только в памяти — случайное обновление сжигало токены)
     localStorage.setItem('avito_batch_results', JSON.stringify(state.batchResults));
     localStorage.setItem('avito_batch_regions', JSON.stringify(state.batchRegions));
-  } catch(e) {}
 }
 
 // ══════════════════════════════════════════
@@ -790,11 +799,20 @@ function save() {
 
 const J_BUF_KEY   = 'avito_journal_buf';
 const J_OFF_KEY   = 'avito_journal_off';
-const J_MAX_BYTES = 1500000; // ~1.5МБ на буфер неотправленного — дальше вытесняем старейшие
+// Кап буфера сознательно небольшой: localStorage делится с реальными данными
+// продавца (результаты, избранное, очередь, история). Журнал ОБЯЗАН уступать им
+// место — при рабочем эндпоинте буфер живёт секунды, большой запас нужен только
+// на офлайн/до-деплойный период, и ~0.8МБ (400k символов UTF-16) его закрывают.
+const J_MAX_BYTES   = 400000;
+const J_BATCH_MAX   = 40;     // событий в одном POST
+const J_BATCH_BYTES = 300000; // и не больше ~0.6МБ телом — иначе упрёмся в лимит body на прокси
+const J_FORCE_MS    = 30000;  // старейшее неотправленное ждёт не дольше этого, даже если клики идут потоком
+const J_FORCE_COUNT = 25;
 
 let _jBuf = (() => { try { const v = JSON.parse(localStorage.getItem(J_BUF_KEY) || '[]'); return Array.isArray(v) ? v : []; } catch(e) { return []; } })();
 let _jBufBytes = _jBuf.reduce((s, e) => s + JSON.stringify(e).length, 0);
 let _jDropped = 0;
+let _jOldestAt = _jBuf.length ? Date.now() : 0;
 
 // Ид устройства — различает телефон/ПК в общем журнале на сервере
 function _jDevice() {
@@ -807,7 +825,10 @@ function _jDevice() {
 
 function jEnabled() { try { return localStorage.getItem(J_OFF_KEY) !== '1'; } catch(e) { return false; } }
 
+function _jRecount() { _jBufBytes = _jBuf.reduce((s, ev) => s + JSON.stringify(ev).length, 0); }
+
 function _jSaveBuf() {
+  try { clearTimeout(_jSaveT); } catch(e) {}
   try { localStorage.setItem(J_BUF_KEY, JSON.stringify(_jBuf)); }
   catch(e) {
     // Квота localStorage: жертвуем старой половиной буфера, но не роняем ничего
@@ -815,10 +836,26 @@ function _jSaveBuf() {
       const drop = Math.ceil(_jBuf.length / 2);
       _jDropped += drop;
       _jBuf.splice(0, drop);
-      _jBufBytes = _jBuf.reduce((s, ev) => s + JSON.stringify(ev).length, 0);
+      _jRecount();
       localStorage.setItem(J_BUF_KEY, JSON.stringify(_jBuf));
     } catch(e2) {}
   }
+}
+
+// Запись буфера — отложенная: сериализовать весь буфер на КАЖДЫЙ клик заметно
+// подтормаживает телефон (основное устройство). Синхронно пишем только там, где
+// страницу могут закрыть (visibilitychange/pagehide) и перед отправкой.
+let _jSaveT = null;
+function _jSaveBufSoon() { try { clearTimeout(_jSaveT); _jSaveT = setTimeout(_jSaveBuf, 800); } catch(e) { _jSaveBuf(); } }
+
+// Аварийный сброс буфера, если в квоту localStorage упёрлись реальные данные
+// продавца: журнал всегда уступает место результатам/избранному/очереди/истории.
+function jPurgeBuffer() {
+  try {
+    _jDropped += _jBuf.length;
+    _jBuf.length = 0; _jBufBytes = 0; _jOldestAt = 0;
+    localStorage.removeItem(J_BUF_KEY);
+  } catch(e) {}
 }
 
 function jlog(event, chainId, fields) {
@@ -831,39 +868,73 @@ function jlog(event, chainId, fields) {
     };
     if (_jDropped) { e._dropped = _jDropped; _jDropped = 0; }
     const sz = JSON.stringify(e).length;
+    if (!_jBuf.length) _jOldestAt = Date.now();
     _jBuf.push(e); _jBufBytes += sz;
     while (_jBufBytes > J_MAX_BYTES && _jBuf.length > 1) {
       _jBufBytes -= JSON.stringify(_jBuf[0]).length;
       _jBuf.shift(); _jDropped++;
     }
-    _jSaveBuf();
+    _jSaveBufSoon();
     _jScheduleFlush();
   } catch(err) { console.error('journal:', err); }
 }
 
 let _jFlushT = null, _jFlushing = false;
-function _jScheduleFlush() { try { clearTimeout(_jFlushT); _jFlushT = setTimeout(jFlush, 4000); } catch(e) {} }
-
-async function jFlush() {
+// Обычно — дебаунс 4с (склеиваем серию кликов в один POST). Но дебаунс без потолка
+// голодает: во время активной работы клики идут чаще, чем раз в 4с, и отправка
+// откладывалась бы бесконечно — поэтому по возрасту/количеству шлём немедленно.
+function _jScheduleFlush() {
   try {
-    if (_jFlushing || !_jBuf.length || !jEnabled()) return;
+    const overdue = _jBuf.length >= J_FORCE_COUNT || (_jOldestAt && Date.now() - _jOldestAt > J_FORCE_MS);
+    if (overdue) { clearTimeout(_jFlushT); jFlush(); return; }
+    clearTimeout(_jFlushT); _jFlushT = setTimeout(jFlush, 4000);
+  } catch(e) {}
+}
+
+// force=true — отправить, даже если журнал только что выключили (иначе уже собранные
+// события навсегда осели бы в localStorage и занимали место)
+async function jFlush(force) {
+  try {
+    if (_jFlushing || !_jBuf.length || (!force && !jEnabled())) return;
     const token = localStorage.getItem('avito_admin_token'); // не спрашиваем — только берём готовый
     if (!token) return;
     _jFlushing = true;
     try {
-      const batch = _jBuf.slice(0, 50);
+      // Батч ограничен и по числу событий, и по размеру тела: одно событие пакета
+      // по регионам несёт полные тексты всех объявлений и может весить десятки КБ
+      const batch = [];
+      let bytes = 0;
+      for (const ev of _jBuf) {
+        const sz = JSON.stringify(ev).length;
+        if (batch.length && (batch.length >= J_BATCH_MAX || bytes + sz > J_BATCH_BYTES)) break;
+        batch.push(ev); bytes += sz;
+      }
+      _jSaveBuf(); // фиксируем состояние до сети
       const r = await fetch(PROXY_JOURNAL, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
         body: JSON.stringify({ events: batch }),
       });
-      if (r.ok) {
-        _jBuf.splice(0, batch.length);
-        _jBufBytes = _jBuf.reduce((s, ev) => s + JSON.stringify(ev).length, 0);
+      // Удаляем ИМЕННО отправленные события по тождеству объектов: за время await
+      // начало буфера могло сдвинуться (вытеснение по капу/квоте), и splice по
+      // количеству снёс бы чужие, ещё не отправленные события.
+      const drop = () => {
+        const sent = new Set(batch);
+        _jBuf = _jBuf.filter(ev => !sent.has(ev));
+        _jRecount();
+        _jOldestAt = _jBuf.length ? _jOldestAt : 0;
         _jSaveBuf();
-        if (_jBuf.length) setTimeout(jFlush, 400); // дожимаем остаток батчами
+      };
+      if (r.ok) {
+        drop();
+        if (_jBuf.length) setTimeout(() => jFlush(force), 400); // дожимаем остаток батчами
+      } else if (r.status === 400 || r.status === 413 || r.status === 422) {
+        // Невосстановимое: этот батч не примут никогда. Если не выбросить — он
+        // навсегда заткнёт голову очереди, а все новые события вытеснит по капу.
+        drop();
+        console.error('journal: батч отвергнут сервером (' + r.status + '), выброшен');
       }
-      // 401/404/5xx — молчим и ждём: токен чинит callAI, эндпоинт доедет с деплоем, буфер не теряется
+      // 401/404/5xx — молчим и ждём: токен чинит callAI, эндпоинт доедет с деплоем, буфер цел
     } catch(e) { /* офлайн — буфер ждёт следующего повода */ }
     finally { _jFlushing = false; }
   } catch(e) { _jFlushing = false; }
@@ -942,12 +1013,16 @@ function jCopied(el) {
       const item = state.batchResults[+el.dataset.jbi];
       v = item && item.variant; extra.region = item && item.region;
       extra.pos = +el.dataset.jbi;
+    } else if (el.dataset.jfid !== undefined) {
+      v = state.favorites.find(f => f._fid === +el.dataset.jfid);
+      extra.fromFav = true; // копия из избранного — не из свежего набора
     } else if (el.dataset.jvid !== undefined) {
       const vid = +el.dataset.jvid;
-      v = findResult(vid) || state.favorites.find(f => f.id === vid);
+      v = findResult(vid);
       const pool = resultsPool();
       const pos = pool.findIndex(x => x.id === vid);
       if (pos !== -1) extra.pos = pos; // индекс варианта в наборе: побеждают первые или поздние?
+      if (state.extraResults.some(x => x.id === vid)) extra.fromExtra = true; // из блока «Ещё варианты»
     } else if (el.dataset.jsess !== undefined) {
       const it = state.postSession.items[state.postSession.idx];
       v = it && it.variant; extra.region = it && it.region; extra.session = true;
@@ -965,8 +1040,9 @@ window.addEventListener('error', e => {
   try { jlog('error', null, { stage: 'window', message: String(e.message || '').slice(0, 300) }); } catch(err) {}
 });
 document.addEventListener('visibilitychange', () => {
-  try { if (document.visibilityState === 'hidden') jFlush(); } catch(e) {}
+  try { if (document.visibilityState === 'hidden') { _jSaveBuf(); jFlush(); } } catch(e) {}
 });
+window.addEventListener('pagehide', () => { try { _jSaveBuf(); } catch(e) {} });
 
 // ══════════════════════════════════════════
 // CATALOG HELPERS
@@ -1356,7 +1432,13 @@ async function doGenerateMore() {
     if (!fresh.length) throw new Error('AI не вернул варианты');
     const product  = state.results[0]?._product  || currentProductName(snapForm);
     const category = state.results[0]?._category || snapForm.category;
+    // Bug #11: parseVariants нумерует ответ заново с 1, поэтому «Ещё варианты»
+    // получали те же id, что и основной набор, а findResult()/findResultRef()
+    // ищут сначала в state.results — все действия карточки (↻, ☆, 🔎, 🔍, ✓ Размещено)
+    // молча применялись к ОДНОИМЁННОЙ карточке основного набора. Нумеруем дальше пула.
+    let nextId = resultsPool().reduce((m, v) => Math.max(m, v.id || 0), 0);
     fresh.forEach(v => {
+      v.id = ++nextId;
       v._product = product; v._category = category;
       v._scan = checkAds(v.title || '', v.description || '', category);
       v._chain = jChain;
@@ -1786,6 +1868,10 @@ function vcardHTML(v, inFav) {
   const tAttr = (v.title || '').replace(/&/g,'&amp;').replace(/"/g,'&quot;');
   const dAttr = (v.description || '').replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/\n/g,'&#10;');
   const fidAttr = v._fid || '';
+  // Журнал: у избранного id варианта не уникален (в избранное попадают варианты
+  // разных генераций, у каждой своя нумерация с 1) — адресуем копию по _fid,
+  // иначе событие copied описало бы одноимённый вариант ТЕКУЩЕГО набора.
+  const jAttr = inFav && v._fid ? `data-jfid="${v._fid}"` : `data-jvid="${v.id}"`;
 
   return `<div class="vcard ${fav ? 'is-fav' : ''}" data-vid="${v.id}" data-fid="${fidAttr}">
   <div class="vcard-head">
@@ -1813,7 +1899,7 @@ function vcardHTML(v, inFav) {
     ${tlenHTML(len)}
   </div>
   <div class="copy-row">
-    <button class="btn-copy" data-act="copy" data-text="${tAttr}" data-j="title" data-jvid="${v.id}">📋 Название</button>
+    <button class="btn-copy" data-act="copy" data-text="${tAttr}" data-j="title" ${jAttr}>📋 Название</button>
   </div>
   ${(state.altTitles[v.id]||[]).length ? `<div style="display:flex;flex-direction:column;gap:4px;margin:6px 0;padding:8px;background:var(--card2);border-radius:var(--rs);border:1px solid var(--border)">
     <div style="font-size:11px;color:var(--muted);margin-bottom:2px">Выбери название — заменит текущее:</div>
@@ -1835,9 +1921,9 @@ function vcardHTML(v, inFav) {
   <div class="desc-label">Описание</div>
   <div class="desc-val">${descEsc}</div>
   <div class="copy-row">
-    <button class="btn-copy" data-act="copy" data-text="${dAttr}" data-j="desc" data-jvid="${v.id}">📋 Описание</button>
+    <button class="btn-copy" data-act="copy" data-text="${dAttr}" data-j="desc" ${jAttr}>📋 Описание</button>
     <button class="btn-copy" data-act="copy-both"
-      data-t="${tAttr}" data-d="${dAttr}" data-j="both" data-jvid="${v.id}">📋 Всё</button>
+      data-t="${tAttr}" data-d="${dAttr}" data-j="both" ${jAttr}>📋 Всё</button>
     <button class="btn-copy" data-act="dup-check" data-vid="${v.id}" data-fid="${fidAttr}" title="Проверить на дубли среди вариантов, избранного и истории размещений">🔎 Дубли</button>
     <button class="btn-copy" data-act="rephrase" data-vid="${v.id}" data-fid="${fidAttr}" style="color:var(--teal-h)" title="Перефразировать с помощью AI">↺ Перефраз</button>
     <button class="btn-copy" data-act="scan-check" data-vid="${v.id}" data-fid="${fidAttr}" title="Проверить на запрещёнку в Сканере">🔍 Проверить</button>
@@ -2706,14 +2792,20 @@ function bindSettingsTab() {
   });
   document.getElementById('journal-toggle')?.addEventListener('click', () => {
     try {
-      if (jEnabled()) { jlog('journal_off', null, {}); localStorage.setItem(J_OFF_KEY, '1'); }
-      else { localStorage.removeItem(J_OFF_KEY); jlog('journal_on', null, {}); }
+      if (jEnabled()) {
+        jlog('journal_off', null, {});
+        localStorage.setItem(J_OFF_KEY, '1');
+        // Выключение останавливает СБОР, но уже собранное надо отдать — иначе оно
+        // навсегда осталось бы в localStorage, занимая место и не доехав до разбора
+        jFlush(true);
+      } else { localStorage.removeItem(J_OFF_KEY); jlog('journal_on', null, {}); }
     } catch(e) {}
     render();
   });
   document.getElementById('journal-dump')?.addEventListener('click', () => {
     try {
-      if (!_jBuf.length) { toast('Буфер пуст — всё отправлено (или журнал выключен)'); return; }
+      if (!_jBuf.length) { toast('Буфер пуст — всё отправлено на сервер'); return; }
+      _jSaveBuf();
       const blob = new Blob([_jBuf.map(e => JSON.stringify(e)).join('\n') + '\n'], { type: 'application/x-ndjson' });
       const a = document.createElement('a');
       a.href = URL.createObjectURL(blob);
@@ -5515,8 +5607,12 @@ document.addEventListener('click', e => {
     state.tab = tab; render(); return;
   }
 
-  // Журнал: перепись кликов по крупным функциям — мёртвые видны нулями при разборе
-  if (J_UI_ACTS.has(act)) jlog('ui', null, { act });
+  // Журнал: перепись кликов по крупным функциям — мёртвые видны нулями при разборе.
+  // Повторный клик по кнопке генерации, пока генерация уже идёт, — это нетерпение,
+  // а не использование функции: обработчик всё равно выйдет сразу, счётчик не портим.
+  if (J_UI_ACTS.has(act) && !(state.loading && (act === 'gen' || act === 'gen-titles' || act === 'gen-more'))) {
+    jlog('ui', null, { act });
+  }
 
   switch (act) {
     case 'toggle-ai':
@@ -5877,7 +5973,9 @@ document.addEventListener('click', e => {
               cvRevokeGameBlobs();
               cv.images = [{ id: ++_cvId, url: img.src, el: img, transform:{scale:1,ox:0,oy:0} }];
               if (prog) prog.textContent = '✓ Загружено';
-              jlog('cv_images', null, { source: cv.coverSource === 'ps' ? 'ps' : 'igdb', mode: 'game', added: 1, names: [name] });
+              // Ветка известна статически; читать cv.coverSource здесь нельзя —
+              // за время загрузки переключатель источника мог уехать
+              jlog('cv_images', null, { source: 'ps', mode: 'game', added: 1, names: [name] });
               cvRenderState();
             };
             img.onerror = () => { if (prog) prog.textContent = '❌ Ошибка загрузки'; };
@@ -5898,7 +5996,7 @@ document.addEventListener('click', e => {
               cvRevokeGameBlobs();
               cv.images = [{ id: ++_cvId, url: img.src, el: img, transform:{scale:1,ox:0,oy:0} }];
               if (prog) prog.textContent = '✓ Загружено';
-              jlog('cv_images', null, { source: cv.coverSource === 'ps' ? 'ps' : 'igdb', mode: 'game', added: 1, names: [name] });
+              jlog('cv_images', null, { source: 'igdb', mode: 'game', added: 1, names: [name] });
               cvRenderState();
             };
             img.onerror = () => { if (prog) prog.textContent = '❌ Ошибка загрузки'; };
