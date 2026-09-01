@@ -615,6 +615,7 @@
 
 const PROXY_CLAUDE      = 'https://api.poigraem.shop/api/claude';
 const PROXY_OPENROUTER  = 'https://api.poigraem.shop/api/openrouter';
+const PROXY_JOURNAL     = 'https://api.poigraem.shop/api/journal';
 
 const CLAUDE_MODELS = [
   { id: 'claude-sonnet-4-6',          label: 'Claude Sonnet 4.6 (рекомендуется)' },
@@ -722,6 +723,7 @@ const state = {
   catalogs:   ls('avito_catalogs', {}),
   catEditSub: 'PS Plus Extra',
   db:       ls('avito_db', []),
+  refs:     ls('avito_refs', []), // эталоны: объявления без инструмента + чужие удачные (журнал самообучения)
   dbForm:   { product: '', region: 'Москва', status: 'active', note: '' },
   dbEditId: null,
   dbFilter: { product: '', status: '' },
@@ -766,6 +768,7 @@ function save() {
     localStorage.setItem('avito_favorites',JSON.stringify(state.favorites));
     localStorage.setItem('avito_catalogs',  JSON.stringify(state.catalogs));
     localStorage.setItem('avito_db',        JSON.stringify(state.db));
+    localStorage.setItem('avito_refs',      JSON.stringify(state.refs));
     localStorage.setItem('avito_queue',     JSON.stringify(state.postQueue));
     localStorage.setItem('avito_presets',   JSON.stringify(state.presets));
     // F10: пакет по регионам переживает F5 (был только в памяти — случайное обновление сжигало токены)
@@ -773,6 +776,197 @@ function save() {
     localStorage.setItem('avito_batch_regions', JSON.stringify(state.batchRegions));
   } catch(e) {}
 }
+
+// ══════════════════════════════════════════
+// ЖУРНАЛ САМООБУЧЕНИЯ (методика bot-selflearn-log)
+// Сырьё — в журнал, смысл — постфактум. Каждое событие: что инструмент
+// сгенерировал, что Денис выбрал/скопировал/перегенерил/скачал/донёс с Авито.
+// События уходят батчами на VPS (/api/journal, тот же админ-токен) — журналы
+// телефона и ПК стекаются в один. Пока сети/токена/эндпоинта нет — копятся
+// в локальном буфере (localStorage) и уходят при первой возможности.
+// ЖЕЛЕЗНОЕ ПРАВИЛО: журнал не имеет права уронить основной поток — всё в try/catch,
+// и токен журнал НИКОГДА не запрашивает сам (только пользуется уже сохранённым).
+// ══════════════════════════════════════════
+
+const J_BUF_KEY   = 'avito_journal_buf';
+const J_OFF_KEY   = 'avito_journal_off';
+const J_MAX_BYTES = 1500000; // ~1.5МБ на буфер неотправленного — дальше вытесняем старейшие
+
+let _jBuf = (() => { try { const v = JSON.parse(localStorage.getItem(J_BUF_KEY) || '[]'); return Array.isArray(v) ? v : []; } catch(e) { return []; } })();
+let _jBufBytes = _jBuf.reduce((s, e) => s + JSON.stringify(e).length, 0);
+let _jDropped = 0;
+
+// Ид устройства — различает телефон/ПК в общем журнале на сервере
+function _jDevice() {
+  try {
+    let d = localStorage.getItem('avito_journal_device');
+    if (!d) { d = Math.random().toString(16).slice(2, 8); localStorage.setItem('avito_journal_device', d); }
+    return d;
+  } catch(e) { return '?'; }
+}
+
+function jEnabled() { try { return localStorage.getItem(J_OFF_KEY) !== '1'; } catch(e) { return false; } }
+
+function _jSaveBuf() {
+  try { localStorage.setItem(J_BUF_KEY, JSON.stringify(_jBuf)); }
+  catch(e) {
+    // Квота localStorage: жертвуем старой половиной буфера, но не роняем ничего
+    try {
+      const drop = Math.ceil(_jBuf.length / 2);
+      _jDropped += drop;
+      _jBuf.splice(0, drop);
+      _jBufBytes = _jBuf.reduce((s, ev) => s + JSON.stringify(ev).length, 0);
+      localStorage.setItem(J_BUF_KEY, JSON.stringify(_jBuf));
+    } catch(e2) {}
+  }
+}
+
+function jlog(event, chainId, fields) {
+  try {
+    if (!jEnabled()) return;
+    const e = {
+      ts: new Date().toISOString(), event, chainId: chainId || null,
+      device: _jDevice(), build: document.lastModified || '',
+      ...(fields || {}),
+    };
+    if (_jDropped) { e._dropped = _jDropped; _jDropped = 0; }
+    const sz = JSON.stringify(e).length;
+    _jBuf.push(e); _jBufBytes += sz;
+    while (_jBufBytes > J_MAX_BYTES && _jBuf.length > 1) {
+      _jBufBytes -= JSON.stringify(_jBuf[0]).length;
+      _jBuf.shift(); _jDropped++;
+    }
+    _jSaveBuf();
+    _jScheduleFlush();
+  } catch(err) { console.error('journal:', err); }
+}
+
+let _jFlushT = null, _jFlushing = false;
+function _jScheduleFlush() { try { clearTimeout(_jFlushT); _jFlushT = setTimeout(jFlush, 4000); } catch(e) {} }
+
+async function jFlush() {
+  try {
+    if (_jFlushing || !_jBuf.length || !jEnabled()) return;
+    const token = localStorage.getItem('avito_admin_token'); // не спрашиваем — только берём готовый
+    if (!token) return;
+    _jFlushing = true;
+    try {
+      const batch = _jBuf.slice(0, 50);
+      const r = await fetch(PROXY_JOURNAL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
+        body: JSON.stringify({ events: batch }),
+      });
+      if (r.ok) {
+        _jBuf.splice(0, batch.length);
+        _jBufBytes = _jBuf.reduce((s, ev) => s + JSON.stringify(ev).length, 0);
+        _jSaveBuf();
+        if (_jBuf.length) setTimeout(jFlush, 400); // дожимаем остаток батчами
+      }
+      // 401/404/5xx — молчим и ждём: токен чинит callAI, эндпоинт доедет с деплоем, буфер не теряется
+    } catch(e) { /* офлайн — буфер ждёт следующего повода */ }
+    finally { _jFlushing = false; }
+  } catch(e) { _jFlushing = false; }
+}
+
+// Светофор варианта для журнала — тот же уровень, что показывает бейдж
+function jScanLevel(v) {
+  const s = v && v._scan;
+  if (!s) return null;
+  return s.errors.length ? 'error' : s.warnings.length ? 'warn' : 'ok';
+}
+
+// Доля изменённого текста (0..1): 1 - 2*LCS/(a+b) по словам. Считается при
+// «доносе» финального текста с Авито — что Денис стабильно правит руками.
+function jEditShare(a, b) {
+  try {
+    const wa = String(a || '').toLowerCase().split(/\s+/).filter(Boolean).slice(0, 800);
+    const wb = String(b || '').toLowerCase().split(/\s+/).filter(Boolean).slice(0, 800);
+    if (!wa.length && !wb.length) return 0;
+    if (!wa.length || !wb.length) return 1;
+    let prev = new Array(wb.length + 1).fill(0);
+    for (let i = 1; i <= wa.length; i++) {
+      const cur = [0];
+      for (let j = 1; j <= wb.length; j++) {
+        cur[j] = wa[i-1] === wb[j-1] ? prev[j-1] + 1 : Math.max(prev[j], cur[j-1]);
+      }
+      prev = cur;
+    }
+    const lcs = prev[wb.length];
+    return Math.round((1 - (2 * lcs) / (wa.length + wb.length)) * 100) / 100;
+  } catch(e) { return null; }
+}
+
+// Компактные выжимки вариантов для события generated — полные тексты (правило:
+// писать то, что нельзя восстановить), плюс светофор
+function jVariants(list) {
+  return (list || []).map(v => ({ title: v.title || '', description: v.description || '', scan: jScanLevel(v) }));
+}
+
+// Счётчики графических действий за сессию канваса — копятся в памяти,
+// уходят одной строкой вместе с cv_download (не событие-на-каждый-drag)
+const _jCv = { drags: 0, layouts: 0, toggles: 0, tz: 0 };
+function jCvBump(k) { try { _jCv[k] = (_jCv[k] || 0) + 1; } catch(e) {} }
+function jCvTakeCounters() {
+  const out = { drags: _jCv.drags, layouts: _jCv.layouts, toggles: _jCv.toggles, tz: _jCv.tz };
+  _jCv.drags = 0; _jCv.layouts = 0; _jCv.toggles = 0; _jCv.tz = 0;
+  return out;
+}
+
+// Снимок настроек обложки (та же фильтрация, что cvSave: без картинок и _служебных)
+function jCvSnapshot() {
+  try {
+    const out = {};
+    for (const k in cv) { if (k === 'images' || k.startsWith('_')) continue; out[k] = cv[k]; }
+    return out;
+  } catch(e) { return null; }
+}
+
+// Перепись использования UI: только крупные действия (мёртвые функции через месяц видны нулями)
+const J_UI_ACTS = new Set([
+  'gen','gen-titles','gen-more','titles-next','titles-regen','titles-cancel','alt-titles','regen','rephrase',
+  'toggle-conveyor','export-pkg','dup-check','scan-check','preset-save','preset-load','toggle-batch',
+  'queue-add','queue-add-batch','queue-start','queue-clear','session-done','session-skip',
+  'cv-download','cv-gen-vars','cv-gen-collage-vars','cv-dl-all-game','cv-dl-all-collage',
+  'cv-igdb-fetch','cv-igdb-game-fetch','cv-mask-toggle','cv-to-toggle','cv-ig-toggle','cv-ig-fill',
+  'db-export','db-add','db-final','ref-add','conv-photo',
+]);
+
+// Копирование = «этот текст пошёл в дело» — главный сигнал выбора в текстовом контуре.
+// kind/vid/bi читаются из data-j* атрибутов кнопок копирования.
+function jCopied(el) {
+  try {
+    const kind = el.dataset.j || 'other';
+    let v = null, extra = {};
+    if (el.dataset.jbi !== undefined) {
+      const item = state.batchResults[+el.dataset.jbi];
+      v = item && item.variant; extra.region = item && item.region;
+      extra.pos = +el.dataset.jbi;
+    } else if (el.dataset.jvid !== undefined) {
+      const vid = +el.dataset.jvid;
+      v = findResult(vid) || state.favorites.find(f => f.id === vid);
+      const pool = resultsPool();
+      const pos = pool.findIndex(x => x.id === vid);
+      if (pos !== -1) extra.pos = pos; // индекс варианта в наборе: побеждают первые или поздние?
+    } else if (el.dataset.jsess !== undefined) {
+      const it = state.postSession.items[state.postSession.idx];
+      v = it && it.variant; extra.region = it && it.region; extra.session = true;
+    }
+    jlog('copied', (v && v._chain) || null, {
+      kind, category: v && v._category || null, product: v && v._product || null,
+      title: v && v.title || null, titleLen: v && v.title ? [...v.title].length : null,
+      scan: jScanLevel(v), ...extra,
+    });
+  } catch(e) { console.error('journal:', e); }
+}
+
+// Глобальная сеть безопасности: необработанные исключения тоже в журнал
+window.addEventListener('error', e => {
+  try { jlog('error', null, { stage: 'window', message: String(e.message || '').slice(0, 300) }); } catch(err) {}
+});
+document.addEventListener('visibilitychange', () => {
+  try { if (document.visibilityState === 'hidden') jFlush(); } catch(e) {}
+});
 
 // ══════════════════════════════════════════
 // CATALOG HELPERS
@@ -1113,6 +1307,8 @@ async function doGenerate() {
   state.batchResults = []; state.titleStep = null; state.extraResults = [];
   refreshResults();
   scrollToResults(); // UX-11
+  const jChain = 'gen-' + Date.now(); // журнал: одна генерация и вся её судьба — одна цепочка
+  const jT0 = Date.now();
   try {
     const webSearch = state.form.isPreorder && state.form.category === 'game';
     const text = await callAI([{ role: 'user', content: buildMsg() }], { webSearch });
@@ -1123,12 +1319,20 @@ async function doGenerate() {
     state.results.forEach(v => {
       v._product = currentProductName(state.form); v._category = state.form.category;
       v._scan = checkAds(v.title || '', v.description || '', state.form.category); // автопроверка сразу после генерации
+      v._chain = jChain;
     });
     state.conveyorIdx = 0;
     save();
+    jlog('generated', jChain, {
+      path: 'main', category: state.form.category, product: currentProductName(state.form),
+      provider: state.settings.provider, model: state.settings.provider === 'claude' ? state.settings.model : state.settings.orModel,
+      style: state.form.style, notes: state.form.notes || '', webSearch,
+      latencyMs: Date.now() - jT0, variants: jVariants(state.results),
+    });
   } catch(e) {
     state.error = e.message;
     console.error(e);
+    jlog('error', jChain, { stage: 'generate_main', message: String(e.message || '').slice(0, 300), latencyMs: Date.now() - jT0 });
   } finally {
     state.loading = false;
     refreshResults();
@@ -1141,6 +1345,8 @@ async function doGenerateMore() {
   if (state.loading || state.extraLoading || !state.results.length) return;
   state.extraLoading = true;
   refreshResults();
+  const jChain = state.results[0]?._chain || ('gen-' + Date.now()); // журнал: «ещё» — та же цепочка, что основной набор
+  const jT0 = Date.now();
   try {
     const snapForm = state.resultsForm || state.form; // F4: та же форма, что породила основной набор
     const excl = resultsPool().map(v => v.title);
@@ -1153,11 +1359,17 @@ async function doGenerateMore() {
     fresh.forEach(v => {
       v._product = product; v._category = category;
       v._scan = checkAds(v.title || '', v.description || '', category);
+      v._chain = jChain;
     });
     state.extraResults.push(...fresh);
     save();
+    jlog('generated', jChain, {
+      path: 'more', category, product, excluded: excl.length,
+      latencyMs: Date.now() - jT0, variants: jVariants(fresh),
+    });
   } catch(e) {
     toast('Ошибка: ' + e.message);
+    jlog('error', jChain, { stage: 'generate_more', message: String(e.message || '').slice(0, 300) });
   } finally {
     state.extraLoading = false;
     refreshResults();
@@ -1178,6 +1390,8 @@ async function doBatchGenerate() {
   state.batchChunkProgress = chunks.length > 1 ? { done: 0, total: chunks.length } : null;
   refreshResults();
   scrollToResults(); // UX-11
+  const jChain = 'batch-' + Date.now(); // журнал: пакет по регионам — одна цепочка
+  const jT0 = Date.now();
   try {
     const webSearch = state.form.isPreorder && state.form.category === 'game';
     const variants = [];
@@ -1199,6 +1413,7 @@ async function doBatchGenerate() {
     variants.forEach(v => {
       v._product = currentProductName(state.form); v._category = state.form.category;
       v._scan = checkAds(v.title || '', v.description || '', state.form.category); // автопроверка сразу после генерации
+      v._chain = jChain;
     });
     if (variants.length < regions.length) {
       toast(`⚠️ AI вернул ${variants.length} из ${regions.length} вариантов — ${regions.length - variants.length} регионов без текста${chunkFails ? ` (${chunkFails} запрос(ов) не удалось)` : ''}. Повторите генерацию.`);
@@ -1209,9 +1424,16 @@ async function doBatchGenerate() {
     }));
     state.batchExpanded = null;
     save();
+    jlog('generated', jChain, {
+      path: 'batch', category: state.form.category, product: currentProductName(state.form),
+      provider: state.settings.provider, model: state.settings.provider === 'claude' ? state.settings.model : state.settings.orModel,
+      regions, chunkFails, latencyMs: Date.now() - jT0,
+      variants: state.batchResults.map(it => ({ region: it.region, ...(it.variant ? { title: it.variant.title || '', description: it.variant.description || '', scan: jScanLevel(it.variant) } : { empty: true }) })),
+    });
   } catch(e) {
     state.error = e.message;
     console.error(e);
+    jlog('error', jChain, { stage: 'generate_batch', message: String(e.message || '').slice(0, 300), regions: regions.length });
   } finally {
     state.loading = false;
     state.batchChunkProgress = null;
@@ -1245,6 +1467,8 @@ async function doGenTitlesOnly() {
   state.titleStep = null;
   refreshResults();
   scrollToResults(); // UX-11
+  const jChain = 'gen-' + Date.now(); // журнал: воронка (заголовки + описания) — одна цепочка
+  const jT0 = Date.now();
   try {
     const webSearch = state.form.isPreorder && state.form.category === 'game';
     const n = Math.max(8, Math.min(12, (state.form.count || 5) * 2));
@@ -1254,10 +1478,15 @@ async function doGenTitlesOnly() {
       .map((t, i) => ({ id: i + 1, title: t.title || '', hook: t.hook || '', len: [...(t.title || '')].length }))
       .filter(t => t.title);
     if (!titles.length) throw new Error('AI не вернул названия');
-    state.titleStep = { titles, selected: {}, form: JSON.parse(JSON.stringify(state.form)) };
+    state.titleStep = { titles, selected: {}, form: JSON.parse(JSON.stringify(state.form)), _chain: jChain };
+    jlog('generated', jChain, {
+      path: 'titles', category: state.form.category, product: currentProductName(state.form),
+      latencyMs: Date.now() - jT0, titles: titles.map(t => t.title),
+    });
   } catch(e) {
     state.error = e.message;
     console.error(e);
+    jlog('error', jChain, { stage: 'generate_titles', message: String(e.message || '').slice(0, 300) });
   } finally {
     state.loading = false; state.loadingKind = null;
     refreshResults();
@@ -1272,6 +1501,8 @@ async function doGenDescriptionsForTitles() {
   state.loading = true; state.error = null; state.loadingKind = 'descriptions'; state.extraResults = [];
   refreshResults();
   scrollToResults(); // UX-11
+  const jChain = step._chain || ('gen-' + Date.now()); // журнал: продолжение цепочки шага заголовков
+  const jT0 = Date.now();
   try {
     const f = step.form;
     const webSearch = f.isPreorder && f.category === 'game';
@@ -1306,13 +1537,20 @@ ${list}
     state.results.forEach(v => {
       v._product = currentProductName(f); v._category = f.category;
       v._scan = checkAds(v.title || '', v.description || '', f.category); // автопроверка сразу после генерации
+      v._chain = jChain;
     });
     state.conveyorIdx = 0;
     state.titleStep = null;
     save();
+    jlog('generated', jChain, {
+      path: 'descriptions', category: f.category, product: currentProductName(f),
+      offered: step.titles.length, chosen: chosen.map(t => t.title), // выбор Дениса из предложенных заголовков
+      latencyMs: Date.now() - jT0, variants: jVariants(state.results),
+    });
   } catch(e) {
     state.error = e.message;
     console.error(e);
+    jlog('error', jChain, { stage: 'generate_descriptions', message: String(e.message || '').slice(0, 300) });
   } finally {
     state.loading = false; state.loadingKind = null;
     refreshResults();
@@ -1339,8 +1577,12 @@ async function doGenAltTitles(id) {
     const text = await callAI([{ role: 'user', content: msg }], { webSearch, max_tokens: webSearch ? 2000 : 600 });
     const data = JSON.parse(extractJSON(text));
     state.altTitles[id] = (data.titles || []).map(t => ({ ...t, len: [...(t.title||'')].length }));
+    jlog('generated', v?._chain || null, {
+      path: 'alt_titles', baseTitle: v?.title || '', titles: state.altTitles[id].map(t => t.title),
+    });
   } catch(e) {
     toast('Ошибка: ' + e.message);
+    jlog('error', null, { stage: 'alt_titles', message: String(e.message || '').slice(0, 300) });
   } finally {
     state.altTitlesLoading = null; refreshResults();
   }
@@ -1363,12 +1605,20 @@ async function doRegen(id) {
     const [v] = parseVariants(text);
     const { arr, idx } = findResultRef(id);
     if (arr && idx !== -1 && v) {
-      arr[idx] = { ...v, id, _product: product, _category: category }; // штампы F4 сохраняются
+      // Журнал: перегенерация = «этот вариант не устроил». Старый текст пишем ДО перезаписи —
+      // после неё он безвозвратен (правило «логировать до перезаписи»).
+      jlog('regen', prev._chain || null, {
+        category, product,
+        before: { title: prev.title || '', description: prev.description || '', scan: jScanLevel(prev) },
+        after:  { title: v.title || '', description: v.description || '' },
+      });
+      arr[idx] = { ...v, id, _product: product, _category: category, _chain: prev._chain }; // штампы F4 сохраняются
       arr[idx]._scan = checkAds(v.title || '', v.description || '', category); // бейдж под НОВЫЙ текст
       save();
     }
   } catch(e) {
     toast('Ошибка: ' + e.message);
+    jlog('error', null, { stage: 'regen', message: String(e.message || '').slice(0, 300) });
   } finally {
     state.regenId = null; refreshResults();
   }
@@ -1404,6 +1654,10 @@ ${v.description}
     const text = await callAI([{ role: 'user', content: msg }], { webSearch, max_tokens: 2000 });
     const [nv] = parseVariants(text);
     if (!nv) throw new Error('Пустой ответ от AI');
+    jlog('generated', v._chain || null, {
+      path: 'rephrase', baseTitle: v.title || '',
+      variants: [{ title: nv.title || '', description: nv.description || '' }],
+    });
 
     const nLen  = nv.title ? [...nv.title].length : 0;
     const tAttr = (nv.title || '').replace(/&/g,'&amp;').replace(/"/g, '&quot;');
@@ -1443,14 +1697,20 @@ function toggleFav(variant) {
     // в результатах — текст безвозвратен. Добавление (else) не подтверждаем — оно не деструктивно.
     if (!confirm('Убрать вариант из избранного? Если его уже нет в результатах — текст будет потерян.')) return;
     state.favorites.splice(idx, 1);
-  } else state.favorites.push({ ...variant, _fid: Date.now() });
+    jlog('fav_remove', variant._chain || null, { title: variant.title || '' });
+  } else {
+    state.favorites.push({ ...variant, _fid: Date.now() });
+    jlog('fav_add', variant._chain || null, { title: variant.title || '', category: variant._category || null, scan: jScanLevel(variant) });
+  }
   save(); refreshResults(); refreshFavs();
 }
 
 function removeFav(fid) {
   // F15: то же удаление, но из списка избранного (кнопка ★ на карточке избранного)
   if (!confirm('Убрать вариант из избранного? Если его уже нет в результатах — текст будет потерян.')) return;
+  const gone = state.favorites.find(f => f._fid === fid);
   state.favorites = state.favorites.filter(f => f._fid !== fid);
+  if (gone) jlog('fav_remove', gone._chain || null, { title: gone.title || '' });
   save(); refreshResults(); refreshFavs();
 }
 
@@ -1553,7 +1813,7 @@ function vcardHTML(v, inFav) {
     ${tlenHTML(len)}
   </div>
   <div class="copy-row">
-    <button class="btn-copy" data-act="copy" data-text="${tAttr}">📋 Название</button>
+    <button class="btn-copy" data-act="copy" data-text="${tAttr}" data-j="title" data-jvid="${v.id}">📋 Название</button>
   </div>
   ${(state.altTitles[v.id]||[]).length ? `<div style="display:flex;flex-direction:column;gap:4px;margin:6px 0;padding:8px;background:var(--card2);border-radius:var(--rs);border:1px solid var(--border)">
     <div style="font-size:11px;color:var(--muted);margin-bottom:2px">Выбери название — заменит текущее:</div>
@@ -1575,9 +1835,9 @@ function vcardHTML(v, inFav) {
   <div class="desc-label">Описание</div>
   <div class="desc-val">${descEsc}</div>
   <div class="copy-row">
-    <button class="btn-copy" data-act="copy" data-text="${dAttr}">📋 Описание</button>
+    <button class="btn-copy" data-act="copy" data-text="${dAttr}" data-j="desc" data-jvid="${v.id}">📋 Описание</button>
     <button class="btn-copy" data-act="copy-both"
-      data-t="${tAttr}" data-d="${dAttr}">📋 Всё</button>
+      data-t="${tAttr}" data-d="${dAttr}" data-j="both" data-jvid="${v.id}">📋 Всё</button>
     <button class="btn-copy" data-act="dup-check" data-vid="${v.id}" data-fid="${fidAttr}" title="Проверить на дубли среди вариантов, избранного и истории размещений">🔎 Дубли</button>
     <button class="btn-copy" data-act="rephrase" data-vid="${v.id}" data-fid="${fidAttr}" style="color:var(--teal-h)" title="Перефразировать с помощью AI">↺ Перефраз</button>
     <button class="btn-copy" data-act="scan-check" data-vid="${v.id}" data-fid="${fidAttr}" title="Проверить на запрещёнку в Сканере">🔍 Проверить</button>
@@ -1614,7 +1874,7 @@ function conveyorHTML() {
       <div class="conv-tlen-row">${tlenHTML(len)}</div>
     </div>
 
-    <button class="conv-btn conv-btn-title" data-act="conv-copy-title" data-text="${tAttr}">
+    <button class="conv-btn conv-btn-title" data-act="conv-copy-title" data-text="${tAttr}" data-j="title" data-jvid="${v.id}">
       📋 Копировать название
     </button>
 
@@ -1626,7 +1886,7 @@ function conveyorHTML() {
     </div>
 
     <div class="conv-actions-row">
-      <button class="conv-btn conv-btn-desc" data-act="conv-copy-desc" data-text="${dAttr}">
+      <button class="conv-btn conv-btn-desc" data-act="conv-copy-desc" data-text="${dAttr}" data-j="desc" data-jvid="${v.id}">
         📋 Копировать описание
       </button>
       <button class="conv-btn conv-btn-photo" data-act="conv-photo" title="Перейти к обложкам">🖼️</button>
@@ -1787,8 +2047,8 @@ function refreshBatchResults() {
         <span class="batch-title-preview">${esc(item.variant?.title || '—')}</span>
         ${tlenHTML(len, 'batch-tlen')}
         <div class="batch-row-btns">
-          <button class="btn-copy" data-act="copy" data-text="${tAttr}" title="Копировать название">📋 Назв</button>
-          <button class="btn-copy" data-act="copy" data-text="${dAttr}" title="Копировать описание">📋 Опис</button>
+          <button class="btn-copy" data-act="copy" data-text="${tAttr}" data-j="title" data-jbi="${i}" title="Копировать название">📋 Назв</button>
+          <button class="btn-copy" data-act="copy" data-text="${dAttr}" data-j="desc" data-jbi="${i}" title="Копировать описание">📋 Опис</button>
           <button class="btn-copy" data-act="conv-photo" title="Обложки">🖼️</button>
           <button class="btn-copy" data-act="scan-check" data-i="${i}" title="Проверить в Сканере">🔍</button>
           <button class="btn-copy" data-act="batch-fav" data-i="${i}" title="Сохранить в избранное (для few-shot)">☆</button>
@@ -1798,8 +2058,8 @@ function refreshBatchResults() {
       <div class="batch-row-body">
         <div class="batch-desc-box">${esc(item.variant?.description || '')}</div>
         <div class="batch-copy-row">
-          <button class="btn-copy" data-act="copy" data-text="${tAttr}">📋 Копировать название</button>
-          <button class="btn-copy" data-act="copy" data-text="${dAttr}">📋 Копировать описание</button>
+          <button class="btn-copy" data-act="copy" data-text="${tAttr}" data-j="title" data-jbi="${i}">📋 Копировать название</button>
+          <button class="btn-copy" data-act="copy" data-text="${dAttr}" data-j="desc" data-jbi="${i}">📋 Копировать описание</button>
           <button class="btn-copy" data-act="conv-photo">🖼️ Обложки</button>
           <button class="btn-copy" data-act="scan-check" data-i="${i}">🔍 Проверить</button>
           <button class="btn-copy" data-act="batch-fav" data-i="${i}">☆ В избранное</button>
@@ -2255,12 +2515,12 @@ function renderSession() {
       <div>
         <div class="session-label">Название ${tlenHTML(v.title ? [...v.title].length : 0, '', 'margin-left:6px;')}</div>
         <div class="session-title-val">${esc(v.title||'')}</div>
-        <button class="conv-btn conv-btn-title" data-act="conv-copy-title" data-text="${tAttr}" style="margin-top:6px;">📋 Копировать название</button>
+        <button class="conv-btn conv-btn-title" data-act="conv-copy-title" data-text="${tAttr}" data-j="title" data-jsess="1" style="margin-top:6px;">📋 Копировать название</button>
       </div>
       <div>
         <div class="session-label">Описание</div>
         <div class="session-desc-val">${esc(v.description||'')}</div>
-        <button class="conv-btn conv-btn-desc" data-act="conv-copy-desc" data-text="${dAttr}" style="margin-top:8px;">📋 Копировать описание</button>
+        <button class="conv-btn conv-btn-desc" data-act="conv-copy-desc" data-text="${dAttr}" data-j="desc" data-jsess="1" style="margin-top:8px;">📋 Копировать описание</button>
       </div>` : `<div style="color:var(--muted);font-size:13px;">⚠️ Нет варианта для этой позиции</div>`}
       <div class="session-actions">
         <button class="session-btn-done" data-act="session-done">✓ Готово — следующий</button>
@@ -2362,6 +2622,21 @@ function settingsTabHTML() {
         </div>
       </div>
     </div>
+    <div class="card" style="margin-top:16px">
+      <div class="card-title">📓 Журнал самообучения</div>
+      <div class="form-body">
+        <div style="font-size:12px;color:var(--muted)">
+          Пишет действия в инструменте (генерации, выборы, копии, перегенерации, скачивания обложек, финальные тексты)
+          и отправляет на сервер poigraem.shop под твоим админ-токеном — для месячного разбора «что реально работает».
+          Тексты объявлений в журнале и так публичны на Авито; паролей и токенов журнал не пишет.
+        </div>
+        <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+          <button class="ai-btn ${jEnabled() ? 'active' : ''}" id="journal-toggle">${jEnabled() ? '✓ Журнал включён' : '✗ Журнал выключен'}</button>
+          <button class="ai-btn" id="journal-dump" title="Скачать неотправленный буфер как JSONL (резервный путь, если сервер недоступен)">⬇ Буфер (JSONL)</button>
+          <span style="font-size:12px;color:var(--muted)" id="journal-status">Не отправлено: ${_jBuf.length} событий${localStorage.getItem('avito_admin_token') ? '' : ' · токен не задан — копятся локально'}</span>
+        </div>
+      </div>
+    </div>
   </div>`;
 }
 
@@ -2428,6 +2703,24 @@ function bindSettingsTab() {
     save();
     toast('Промпт сброшен до дефолтного');
     render();
+  });
+  document.getElementById('journal-toggle')?.addEventListener('click', () => {
+    try {
+      if (jEnabled()) { jlog('journal_off', null, {}); localStorage.setItem(J_OFF_KEY, '1'); }
+      else { localStorage.removeItem(J_OFF_KEY); jlog('journal_on', null, {}); }
+    } catch(e) {}
+    render();
+  });
+  document.getElementById('journal-dump')?.addEventListener('click', () => {
+    try {
+      if (!_jBuf.length) { toast('Буфер пуст — всё отправлено (или журнал выключен)'); return; }
+      const blob = new Blob([_jBuf.map(e => JSON.stringify(e)).join('\n') + '\n'], { type: 'application/x-ndjson' });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = `avito-journal-buf-${new Date().toISOString().slice(0, 10)}.jsonl`;
+      a.click();
+      URL.revokeObjectURL(a.href);
+    } catch(e) { toast('Не удалось выгрузить буфер'); }
   });
 }
 
@@ -2510,6 +2803,7 @@ function cvAddFiles(files) {
   const arr = Array.from(files).filter(f => f.type.startsWith('image/'));
   if (!arr.length) return;
   const maxAdd = cv.mode === 'game' ? 1 : Math.max(0, 10 - cv.images.length);
+  jlog('cv_images', null, { source: 'upload', mode: cv.mode, added: Math.min(arr.length, maxAdd) });
   arr.slice(0, maxAdd).forEach(f => {
     const url = URL.createObjectURL(f), id = ++_cvId;
     const el = new Image();
@@ -2563,6 +2857,7 @@ async function cvFetchFromIGDB() {
     (failed.length ? ` · Не найдено: ${failed.join(', ')}` : '') +
     (skipped.length ? ` · Пропущено (лимит 10): ${skipped.join(', ')}` : '');
   if (btn) btn.disabled = false;
+  jlog('cv_images', null, { source: 'igdb', added: loaded, failed: failed.length, names });
   cvRenderState();
 }
 
@@ -2611,6 +2906,7 @@ async function cvFetchFromPS() {
     (failed.length ? ` · Не найдено: ${failed.join(', ')}` : '') +
     (skipped.length ? ` · Пропущено (лимит 10): ${skipped.join(', ')}` : '');
   if (btn) btn.disabled = false;
+  jlog('cv_images', null, { source: 'ps', added: loaded, failed: failed.length, names });
   cvRenderState();
 }
 
@@ -3178,6 +3474,7 @@ function cvInfogBuildLines() {
 function cvInfogFillFromForm() {
   const lines = cvInfogBuildLines();
   if (!lines.length) { toast('Форма генератора пуста — заполнить нечего'); return; }
+  jlog('cv_infog_fill', null, { category: state.form.category, lines: lines.length });
   cv.infogText = lines.join('\n');
   const ta = document.getElementById('cv-ig-text');
   if (ta) ta.value = cv.infogText;
@@ -3407,6 +3704,13 @@ function cvDownload(canvas, name) {
   a.href = canvas.toDataURL('image/jpeg', 0.93);
   a.download = name || 'avito.jpg';
   a.click();
+  // Журнал: скачивание = «эта обложка пошла в дело» — точный аналог posted для графики.
+  // Снимок настроек + накопленные счётчики действий за сессию канваса одной строкой.
+  jlog('cv_download', null, {
+    name: name || 'avito.jpg', mode: cv.mode, layout: cv.layout, imageCount: cv.images.length,
+    product: currentProductName(state.form), category: state.form.category,
+    settings: jCvSnapshot(), counters: jCvTakeCounters(),
+  });
 }
 
 function cvGenerateVariations() {
@@ -3423,6 +3727,7 @@ function cvGenerateVariations() {
   ];
 
   cv._gameVars = vars;
+  jlog('cv_variants', null, { mode: 'game', infog: !!cv.infog });
 
   grid.innerHTML = vars.map((v,i) => `
     <div class="cv-var">
@@ -3455,6 +3760,7 @@ function cvGenerateCollageVars() {
     { label: '3. Зелёный · 16px',  bg: '#0f2010', padding: 16, infog:{align:'left',  bg:'#7c2d12',  shift:2} },
     { label: '4. Текущий · ' + cv.padding + 'px', bg: cv.bg, padding: cv.padding, infog:{align:'right', bg:cv.infogBg, shift:3} },
   ];
+  jlog('cv_variants', null, { mode: 'collage', layout: cv.layout, imageCount: cv.images.length, infog: !!cv.infog });
   grid.innerHTML = vars.map((v,i) => `
     <div class="cv-var">
       <canvas id="cv-cvar-${i}"></canvas>
@@ -4229,6 +4535,8 @@ function bindCoversTab() {
     }
 
     function onPointerUp() {
+      // Журнал: любой завершившийся drag на канвасе — в счётчик сессии (уйдёт с cv_download)
+      if (_gameDrag || _textDrag || _stickerDrag || _infogDrag || (_drag && _drag.moved)) jCvBump('drags');
       if (_gameDrag) { _gameDrag = null; canvas.style.cursor = 'pointer'; return; }
       if (_textDrag) { _textDrag = null; canvas.style.cursor = 'pointer'; return; }
       if (_stickerDrag) { _stickerDrag = null; canvas.style.cursor = 'pointer'; return; }
@@ -4347,6 +4655,7 @@ function dbTabHTML() {
     <td class="db-note" title="${esc(r.note || '')}">${esc(r.note || '—')}</td>
     <td style="color:var(--muted);font-size:12px;white-space:nowrap;font-family:var(--fm)">${new Date(r.id).toLocaleDateString('ru-RU',{day:'2-digit',month:'2-digit',year:'2-digit'})}</td>
     <td style="white-space:nowrap">
+      ${(r.title || r.description) ? `<button class="btn-sm" data-act="db-final" data-id="${r.id}" title="${r.editShare != null ? `Финал сохранён — изменено ~${Math.round(r.editShare*100)}% описания. Обновить?` : 'Вставить финальный текст, как он ушёл на Авито (для журнала самообучения)'}" style="margin-right:4px;${r.editShare != null ? 'color:var(--ok);border-color:var(--ok)' : ''}">${r.editShare != null ? `✓ ${Math.round(r.editShare*100)}%` : '📥 финал'}</button>` : ''}
       <button class="btn-sm" data-act="db-edit" data-id="${r.id}" title="Редактировать">✎</button>
       <button class="btn-sm" data-act="db-del"  data-id="${r.id}" title="Удалить" style="margin-left:4px">×</button>
     </td>
@@ -4414,8 +4723,65 @@ function dbTabHTML() {
             </table>
           </div></div>`
     }
+    ${refsCardHTML()}
   </div>`;
 }
+
+// ══════════════════════════════════════════
+// ЭТАЛОНЫ (журнал самообучения, вариант Г)
+// Сюда складываются объявления, составленные БЕЗ инструмента (руками), и чужие
+// понравившиеся — с пометкой источника. При месячном разборе язык эталонов
+// сравнивается с языком генератора; позже эталоны можно подмешивать в few-shot.
+// ══════════════════════════════════════════
+
+function refsCardHTML() {
+  const refs = state.refs || [];
+  const listHTML = refs.length ? `<div style="display:flex;flex-direction:column;gap:7px;margin-top:12px">
+    ${[...refs].sort((a, b) => b.id - a.id).map(r => `<div class="preset-item">
+      <span style="flex-shrink:0;font-size:11px;color:${r.source === 'mine' ? 'var(--teal-h)' : 'var(--accent-h)'}">${r.source === 'mine' ? '✍ моё' : '👀 чужое'}</span>
+      <span class="preset-item-name" title="${esc((r.title || '') + '\n\n' + (r.desc || ''))}" style="cursor:help">${esc(r.title || (r.desc || '').slice(0, 60))}</span>
+      <span class="preset-item-meta">${esc(r.date || '')}</span>
+      <button class="btn-icon" data-act="ref-del" data-id="${r.id}" title="Удалить эталон" style="color:var(--warn)">×</button>
+    </div>`).join('')}
+  </div>` : '';
+  return `<div class="card" style="margin-top:16px">
+    <div class="card-title">📥 Эталоны — объявления без инструмента и чужие удачные <span class="sec-badge">${refs.length}</span></div>
+    <div style="font-size:12px;color:var(--muted);margin-bottom:12px">
+      Скидывай сюда объявления, которые составил сам без генератора, или чужие, которые понравились.
+      Через месяц сравним их язык с языком генератора — это прямое сырьё для улучшения промпта.
+    </div>
+    <div class="form-body">
+      <div style="display:flex;gap:10px;flex-wrap:wrap">
+        <div class="field" style="min-width:170px">
+          <label>Источник</label>
+          <select id="ref-source">
+            <option value="mine">✍ Моё, написано руками</option>
+            <option value="other">👀 Чужое, понравилось</option>
+          </select>
+        </div>
+        <div class="field" style="min-width:170px">
+          <label>Категория</label>
+          <select id="ref-cat">
+            ${CATS.map(c => `<option value="${c.id}">${c.label}</option>`).join('')}
+            <option value="other">Другое</option>
+          </select>
+        </div>
+      </div>
+      <div class="field">
+        <label>Название объявления</label>
+        <input type="text" id="ref-title" placeholder="Как в объявлении на Авито" style="font-family:var(--fm);font-size:13px">
+      </div>
+      <div class="field">
+        <label>Описание</label>
+        <textarea id="ref-desc" rows="6" placeholder="Вставь полный текст описания..."></textarea>
+      </div>
+      <button class="btn-gen" data-act="ref-add" style="width:auto;padding:9px 22px">+ Сохранить эталон</button>
+    </div>
+    ${listHTML}
+  </div>`;
+}
+
+function bindRefsCard() { /* поля читаются по id в обработчике ref-add — отдельных биндов не нужно */ }
 
 function renderDb() {
   const el = document.getElementById('db-content');
@@ -4465,6 +4831,68 @@ function bindDbTab() {
   document.getElementById('db-f-status')?.addEventListener('change', e => { state.dbForm.status = e.target.value; });
   document.getElementById('db-filter-product')?.addEventListener('input',  e => { state.dbFilter.product = e.target.value; renderDb(); });
   document.getElementById('db-filter-status')?.addEventListener('change',  e => { state.dbFilter.status = e.target.value; renderDb(); });
+  bindRefsCard();
+}
+
+// ══════════════════════════════════════════
+// ФИНАЛЬНЫЙ ТЕКСТ С АВИТО (журнал самообучения)
+// Денис дошлифовывает объявление уже в форме Авито — инструмент финала не видит.
+// Диалог (необязательный) появляется после «✓ Размещено» и по кнопке «📥 финал»
+// в Истории: вставленный финал сравнивается с бот-версией (editShare — доля
+// изменённого), обе версии уходят в журнал событием edited. Что стабильно
+// правится руками → кандидаты в SYS-промпт при месячном разборе.
+// ══════════════════════════════════════════
+
+function showFinalDialog(recId) {
+  try {
+    const r = state.db.find(x => x.id === recId);
+    if (!r || (!r.title && !r.description)) return; // без бот-версии сравнивать не с чем
+    document.getElementById('final-overlay')?.remove();
+    const ov = document.createElement('div');
+    ov.id = 'final-overlay';
+    ov.style.cssText = 'position:fixed;inset:0;background:rgba(10,10,20,.82);z-index:600;display:flex;align-items:center;justify-content:center;padding:16px;overflow-y:auto';
+    ov.innerHTML = `<div class="card" style="max-width:560px;width:100%;border-color:var(--border2)">
+      <div class="card-title">📥 Финальный текст с Авито <span style="color:var(--muted);font-weight:400">— необязательно, можно пропустить</span></div>
+      <div style="font-size:12px;color:var(--muted);margin-bottom:10px">
+        ${esc(r.product)} · 📍 ${esc(r.region)}. Если правил текст уже в форме Авито — вставь сюда финальную версию:
+        инструмент сравнит с сгенерированной и запомнит, что ты меняешь руками.
+      </div>
+      <div class="form-body">
+        <div class="field">
+          <label>Финальное название${r.title ? ' (предзаполнено сгенерированным — поправь, если менял)' : ''}</label>
+          <input type="text" id="final-title" value="${esc(r.title || '')}" style="font-family:var(--fm);font-size:13px">
+        </div>
+        <div class="field">
+          <label>Финальное описание — вставь как ушло на Авито (Ctrl+V)</label>
+          <textarea id="final-desc" rows="8" placeholder="Пусто = «описание не менял, взять сгенерированное как финал»"></textarea>
+        </div>
+        <div style="display:flex;gap:8px">
+          <button class="btn-gen" id="final-save" style="flex:1;padding:10px">✓ Сохранить финал</button>
+          <button class="btn-gen-secondary" id="final-skip" style="width:auto;margin-top:0;padding:10px 18px">Пропустить</button>
+        </div>
+      </div>
+    </div>`;
+    document.body.appendChild(ov);
+    ov.querySelector('#final-skip').addEventListener('click', () => ov.remove());
+    ov.addEventListener('click', e => { if (e.target === ov) ov.remove(); });
+    ov.querySelector('#final-save').addEventListener('click', () => {
+      const ft = (ov.querySelector('#final-title')?.value || '').trim();
+      const fdRaw = (ov.querySelector('#final-desc')?.value || '').trim();
+      const fd = fdRaw || r.description || ''; // пусто = описание не менялось
+      r.finalTitle = ft; r.finalDesc = fd;
+      r.editShare = jEditShare(r.description || '', fd);
+      save();
+      jlog('edited', r._chain || null, {
+        product: r.product, region: r.region,
+        botTitle: r.title || '', finalTitle: ft, titleChanged: ft !== (r.title || ''),
+        botDescription: r.description || '', finalDescription: fd,
+        editShare: r.editShare, descPasted: !!fdRaw,
+      });
+      ov.remove();
+      toast(r.editShare != null ? `Финал сохранён — изменено ~${Math.round(r.editShare * 100)}% описания` : 'Финал сохранён');
+      if (state.tab === 'database') renderDb();
+    });
+  } catch(e) { console.error('journal:', e); }
 }
 
 // ══════════════════════════════════════════
@@ -4554,6 +4982,7 @@ function exportPackage() {
   a.download = `avito-pack-${slug}-${new Date().toISOString().slice(0, 10)}.txt`;
   a.click();
   URL.revokeObjectURL(a.href);
+  jlog('export', state.results[0]?._chain || null, { product, variants: all.length, batch: batch.length, favs: favs.length });
   toast(`Экспортировано: ${all.length} вар. + ${batch.length} рег. + ${favs.length} избр.`);
 }
 
@@ -4951,6 +5380,7 @@ document.addEventListener('click', e => {
     }
     if (cvEl.dataset.cvLayout) {
       if (cvEl.classList.contains('dimmed')) return;
+      jCvBump('layouts');
       cv.layout = cvEl.dataset.cvLayout; cv._selCell = null;
       const lb = document.getElementById('cv-layouts-box');
       if (lb) lb.innerHTML = cvLayoutButtonsHTML(cv.layout, cv.images.length);
@@ -4973,6 +5403,7 @@ document.addEventListener('click', e => {
     }
     if (cvEl.dataset.cvToggle) {
       const key = cvEl.dataset.cvToggle;
+      jCvBump('toggles');
       cv[key] = !cv[key];
       render(); cvReDraw(); return;
     }
@@ -5049,6 +5480,7 @@ document.addEventListener('click', e => {
       else if (cv._selCell !== null && cv._selCell !== undefined && cv.images[cv._selCell]) img = cv.images[cv._selCell];
       if (!img) return;
       if (!img.transform) img.transform = {scale:1,ox:0,oy:0};
+      jCvBump('tz');
       const t = img.transform, PAN = 0.05;
       switch(cvEl.dataset.cvTz) {
         case 'zoom-in':  t.scale = Math.min(4, (t.scale||1)+0.15); break;
@@ -5079,8 +5511,12 @@ document.addEventListener('click', e => {
   // Табы
   if (tab) {
     if (el.classList.contains('dimmed')) return;
+    if (tab !== state.tab) jlog('tab_open', null, { tab }); // журнал: перепись использования вкладок
     state.tab = tab; render(); return;
   }
+
+  // Журнал: перепись кликов по крупным функциям — мёртвые видны нулями при разборе
+  if (J_UI_ACTS.has(act)) jlog('ui', null, { act });
 
   switch (act) {
     case 'toggle-ai':
@@ -5106,7 +5542,11 @@ document.addEventListener('click', e => {
       const vid = +el.dataset.vid, tidx = +el.dataset.tidx;
       const alts = state.altTitles[vid];
       const v = findResult(vid);
-      if (v && alts?.[tidx]) { v.title = alts[tidx].title; delete state.altTitles[vid]; save(); refreshResults(); }
+      if (v && alts?.[tidx]) {
+        // Журнал: выбор из ↻×5 — какое название победило и что оно заменило (старое — до перезаписи)
+        jlog('applied_title', v._chain || null, { before: v.title || '', after: alts[tidx].title, pickedIdx: tidx });
+        v.title = alts[tidx].title; delete state.altTitles[vid]; save(); refreshResults();
+      }
       break;
     }
 
@@ -5133,9 +5573,9 @@ document.addEventListener('click', e => {
       break;
     }
 
-    case 'copy': copyBtn(el.dataset.text, el); break;
+    case 'copy': copyBtn(el.dataset.text, el); if (el.dataset.j) jCopied(el); break;
 
-    case 'copy-both': copyBtn(el.dataset.t + '\n\n' + el.dataset.d, el); break;
+    case 'copy-both': copyBtn(el.dataset.t + '\n\n' + el.dataset.d, el); if (el.dataset.j) jCopied(el); break;
 
     case 'preset-save': {
       const name = prompt('Название пресета:', state.form.subType || state.form.aiService || state.form.digitalName || state.form.gameName || 'Новый пресет');
@@ -5218,14 +5658,18 @@ document.addEventListener('click', e => {
         // «авто» снимает снимок текущей формы — каждая позиция генерируется из своего товара (UX-1)
         form: qf.source === 'auto' ? JSON.parse(JSON.stringify(state.form)) : null,
       });
-      save(); render(); break;
+      save(); render();
+      jlog('queue_add', null, { source: qf.source, product, region: qf.region.trim() });
+      break;
     }
 
     case 'queue-add-batch':
       state.batchResults.forEach(item => {
         state.postQueue.push({ id: Date.now() + Math.random(), product: currentProductName(state.form), region: item.region, source: 'batch', favId: null, variant: item.variant });
       });
-      save(); render(); break;
+      save(); render();
+      jlog('queue_add', state.batchResults[0]?.variant?._chain || null, { source: 'batch', count: state.batchResults.length });
+      break;
 
     case 'queue-del':
       state.postQueue.splice(+el.dataset.i, 1);
@@ -5247,8 +5691,15 @@ document.addEventListener('click', e => {
           id: Date.now(), product: item.product, region: item.region,
           title: item.variant?.title || '', description: item.variant?.description || '',
           status: 'active', note: '', date: new Date().toLocaleDateString('ru'),
+          _chain: item.variant?._chain || null,
         });
         save();
+        // Журнал: в сессии постинга диалог финала не показываем (не рвём конвейерный темп) —
+        // финал доносится кнопкой «📥 финал» в Истории
+        jlog('posted', item.variant?._chain || null, {
+          product: item.product, region: item.region, title: item.variant?.title || '',
+          scan: jScanLevel(item.variant), session: true,
+        });
       }
       si.idx++;
       renderSession();
@@ -5277,6 +5728,7 @@ document.addEventListener('click', e => {
 
     case 'conv-copy-title':
       copyBtn(el.dataset.text, el);
+      if (el.dataset.j) jCopied(el);
       el.textContent = '✓ Скопировано';
       el.classList.add('copied');
       setTimeout(() => { el.textContent = '📋 Копировать название'; el.classList.remove('copied'); }, 1800);
@@ -5284,6 +5736,7 @@ document.addEventListener('click', e => {
 
     case 'conv-copy-desc':
       copyBtn(el.dataset.text, el);
+      if (el.dataset.j) jCopied(el);
       el.innerHTML = '✓ Скопировано';
       el.classList.add('copied');
       setTimeout(() => { el.innerHTML = '📋 Копировать описание'; el.classList.remove('copied'); }, 1800);
@@ -5424,6 +5877,7 @@ document.addEventListener('click', e => {
               cvRevokeGameBlobs();
               cv.images = [{ id: ++_cvId, url: img.src, el: img, transform:{scale:1,ox:0,oy:0} }];
               if (prog) prog.textContent = '✓ Загружено';
+              jlog('cv_images', null, { source: cv.coverSource === 'ps' ? 'ps' : 'igdb', mode: 'game', added: 1, names: [name] });
               cvRenderState();
             };
             img.onerror = () => { if (prog) prog.textContent = '❌ Ошибка загрузки'; };
@@ -5444,6 +5898,7 @@ document.addEventListener('click', e => {
               cvRevokeGameBlobs();
               cv.images = [{ id: ++_cvId, url: img.src, el: img, transform:{scale:1,ox:0,oy:0} }];
               if (prog) prog.textContent = '✓ Загружено';
+              jlog('cv_images', null, { source: cv.coverSource === 'ps' ? 'ps' : 'igdb', mode: 'game', added: 1, names: [name] });
               cvRenderState();
             };
             img.onerror = () => { if (prog) prog.textContent = '❌ Ошибка загрузки'; };
@@ -5573,13 +6028,20 @@ document.addEventListener('click', e => {
       if (!v) break;
       const region = prompt('Регион размещения?', (state.settings.regions || REGIONS)[0] || 'Москва');
       if (!region || !region.trim()) break;
+      const recId = Date.now();
       state.db.push({
-        id: Date.now(), product: v._product || currentProductName(state.form), region: region.trim(),  // F4: товар из варианта
+        id: recId, product: v._product || currentProductName(state.form), region: region.trim(),  // F4: товар из варианта
         title: v.title || '', description: v.description || '',
         status: 'active', note: '', date: new Date().toLocaleDateString('ru'),
+        _chain: v._chain || null, // журнал: чтобы «донос финала» лёг в ту же цепочку
       });
       save();
+      jlog('posted', v._chain || null, {
+        product: v._product || null, category: v._category || null, region: region.trim(),
+        title: v.title || '', scan: jScanLevel(v),
+      });
       toast('Отмечено как размещено: ' + region.trim());
+      showFinalDialog(recId); // необязательная вставка финального текста с Авито (выбор Дениса: вариант А)
       break;
     }
 
@@ -5600,13 +6062,47 @@ document.addEventListener('click', e => {
       const i = +el.dataset.i;
       const item = state.batchResults[i];
       if (!item?.variant) break;
+      const recId = Date.now();
       state.db.push({
-        id: Date.now(), product: item.variant._product || currentProductName(state.form), region: item.region,  // F4: товар из варианта
+        id: recId, product: item.variant._product || currentProductName(state.form), region: item.region,  // F4: товар из варианта
         title: item.variant.title || '', description: item.variant.description || '',
         status: 'active', note: '', date: new Date().toLocaleDateString('ru'),
+        _chain: item.variant._chain || null,
       });
       save();
+      jlog('posted', item.variant._chain || null, {
+        product: item.variant._product || null, category: item.variant._category || null, region: item.region,
+        title: item.variant.title || '', scan: jScanLevel(item.variant),
+      });
       toast('Отмечено как размещено: ' + item.region);
+      showFinalDialog(recId);
+      break;
+    }
+
+    case 'db-final':
+      showFinalDialog(+el.dataset.id); break;
+
+    case 'ref-add': {
+      const title = (document.getElementById('ref-title')?.value || '').trim();
+      const desc  = (document.getElementById('ref-desc')?.value || '').trim();
+      if (!title && !desc) { toast('Вставьте название и/или описание эталона'); break; }
+      const source = document.getElementById('ref-source')?.value || 'mine';
+      const category = document.getElementById('ref-cat')?.value || 'other';
+      state.refs.push({ id: Date.now(), source, category, title, desc, date: new Date().toLocaleDateString('ru') });
+      save();
+      jlog('reference_added', null, { source, category, title, description: desc });
+      toast('Эталон сохранён');
+      renderDb();
+      break;
+    }
+
+    case 'ref-del': {
+      const rid = +el.dataset.id;
+      const ref = state.refs.find(r => r.id === rid);
+      if (!ref) break;
+      if (!confirm('Удалить эталон? Текст уже в журнале, но из этого списка пропадёт.')) break;
+      state.refs = state.refs.filter(r => r.id !== rid);
+      save(); renderDb();
       break;
     }
 
@@ -5681,6 +6177,13 @@ document.addEventListener('input', e => {
 // ══════════════════════════════════════════
 
 render();
+
+// Журнал: маркер запуска (по нему при разборе режутся «рабочие заходы») + отправка накопленного буфера
+jlog('app_start', null, {
+  w: window.innerWidth, results: state.results.length, queue: state.postQueue.length,
+  favs: state.favorites.length, db: state.db.length,
+});
+jFlush();
 
 // GFX-13: шрифты грузятся асинхронно — если канвас с текстом успел отрисоваться
 // на системном fallback раньше, чем догрузился self-host шрифт, перерисовать заново
