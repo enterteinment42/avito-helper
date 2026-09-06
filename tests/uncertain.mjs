@@ -32,6 +32,27 @@ export async function runUncertain(browser, base, t) {
   t.section('uncertain — уточняющие чипы распознавания');
   const { ctx, page, consoleErrors } = await openApp(browser, `${base}/avito-helper.html`);
   try {
+    // ── Загрузка фото настоящим input[type=file] ────────────
+    // Регресс: функция выбора файла называется visionPick, и одноимённая
+    // функция выбора варианта молча её перезаписала — фото перестало грузиться.
+    // Стенд этого не поймал, потому что нигде не грузил файл по-настоящему.
+    const PNG = Buffer.from(
+      'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
+      'base64');
+    await page.setInputFiles('#vision-file', { name: 'ps5.png', mimeType: 'image/png', buffer: PNG });
+    await page.waitForFunction(() => !!state.vision.dataUrl || !!state.vision.error, null, { timeout: 5000 })
+      .catch(() => {});
+    const loaded = await page.evaluate(() => ({
+      hasUrl: !!state.vision.dataUrl,
+      hasMedia: !!(state.vision.media && state.vision.media.data),
+      err: state.vision.error,
+      btn: !document.querySelector('[data-act="vision-recognize"]')?.disabled,
+    }));
+    t.ok('фото загрузилось через выбор файла', loaded.hasUrl, 'ошибка: ' + loaded.err);
+    t.ok('и подготовлено для отправки в модель', loaded.hasMedia);
+    t.ok('кнопка «Распознать» стала активной', loaded.btn);
+    await page.evaluate(() => visionClear());
+
     // ── Промпт ──────────────────────────────────────────────
     const vs = await page.evaluate(() => visionSys());
     t.ok('схема ответа содержит uncertain', /"uncertain": \[\{ "field"/.test(vs));
@@ -70,11 +91,11 @@ export async function runUncertain(browser, base, t) {
       const origJ = window.jlog;
       window.jlog = (ev, chain, data) => { window.__jlog.push({ ev, data }); return origJ ? origJ(ev, chain, data) : undefined; };
       // Второй вариант — то есть человек НЕ согласился с догадкой модели
-      visionPick('physName', 'PlayStation 5 Slim');
+      visionPickOption('physName', 'PlayStation 5 Slim');
       const log = window.__jlog.find(x => x.ev === 'vision_pick');
       // Первый вариант — согласие с моделью
       window.__jlog = [];
-      visionPick('physName', 'PlayStation 5 Pro');
+      visionPickOption('physName', 'PlayStation 5 Pro');
       const agree = window.__jlog.find(x => x.ev === 'vision_pick');
       return {
         form: state.form.physName, pick: state.vision.picks.physName,
@@ -93,7 +114,7 @@ export async function runUncertain(browser, base, t) {
 
     // Чужое значение через подставленный data-val не пройдёт
     const forged = await page.evaluate(() => {
-      visionPick('physName', 'PlayStation 6 Ultra');
+      visionPickOption('physName', 'PlayStation 6 Ultra');
       return state.form.physName;
     });
     t.eq('вариант не из списка игнорируется', forged, 'PlayStation 5 Pro');
@@ -148,7 +169,7 @@ export async function runUncertain(browser, base, t) {
       state.form = JSON.parse(JSON.stringify(DEF_FORM));
       state.vision.media = { media_type: 'image/jpeg', data: 'AAAA' };
       await doVisionRecognize();
-      visionPick('physName', 'PS5 Pro');
+      visionPickOption('physName', 'PS5 Pro');
       visionUndoForm();
       return { shown: formHTML().includes('По фото не отличить'), picks: Object.keys(state.vision.picks).length };
     });

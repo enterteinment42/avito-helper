@@ -2763,7 +2763,9 @@ function visionParseUncertain(r, catId) {
 
 // Выбор человека применяется к форме и запоминается: чип остаётся отмеченным,
 // чтобы было видно, что вопрос закрыт (в магазине это «липкое подтверждение»).
-function visionPick(key, val) {
+// Имя намеренно длинное: visionPick уже занят загрузкой выбранного файла,
+// и одноимённая функция молча перезаписывала его — фото переставало грузиться.
+function visionPickOption(key, val) {
   const v = state.vision;
   const item = (v.uncertain || []).find(u => u.field === key);
   if (!item || !item.options.includes(val)) return;
@@ -7149,7 +7151,7 @@ document.addEventListener('click', e => {
     case 'vision-covers':      visionToCovers(); break;
     case 'vision-undo':        visionUndoForm(); break;
     case 'vision-clear':       visionClear(); break;
-    case 'vision-pick':        visionPick(el.dataset.k, el.dataset.val); break;
+    case 'vision-pick':        visionPickOption(el.dataset.k, el.dataset.val); break;
 
     case 'title-pick': {
       const id = +el.dataset.id;
