@@ -418,6 +418,7 @@
     .cat-fld-sub { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--text2); }
     .cat-fld-note { font-size: 11.5px; color: var(--muted); }
     .cat-fld-flags { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+    .cat-rules { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 5px 14px; background: var(--card2); border: 1px solid var(--border); border-radius: var(--r); padding: 9px 11px; }
     .cat-fld-chk { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; color: var(--text2); cursor: pointer; }
     .cat-fld-chk input { accent-color: var(--teal); width: 14px; height: 14px; }
     .cat-fld-chk input:disabled { cursor: not-allowed; }
@@ -739,8 +740,9 @@ const STYLES = [
 const BUILTIN_CATS = [
   {
     id: 'gaming_sub', label: '🎮 Игровая подписка', pName: 'Игровая подписка', builtin: true,
+    visionHint: 'игровая подписка: PS Plus Essential / PS Plus Extra / PS Plus Deluxe / EA Play / Game Pass Ultimate.',
     fields: [
-      { key: 'subType', type: 'select', label: 'Тип подписки', options: () => SUB_TYPES, p: 'Тип' },
+      { key: 'subType', type: 'select', label: 'Тип подписки', options: () => SUB_TYPES, p: 'Тип', isName: true },
       { key: 'platforms', type: 'chips', label: 'Платформы', options: () => SUB_PLATS,
         p: 'Платформы', req: 'платформы' },
       { key: 'durations', type: 'durations', label: 'Сроки и цены',
@@ -772,10 +774,11 @@ const BUILTIN_CATS = [
   },
   {
     id: 'ai_sub', label: '🧠 AI-подписка', pName: 'AI-подписка', builtin: true,
+    visionHint: 'AI-подписка: Claude Pro, Claude Max, ChatGPT Plus, ChatGPT Pro, Google AI Pro, Cursor, Antigravity.',
     fields: [
-      { key: 'aiService', type: 'select', label: 'Сервис', options: () => AI_SERVICES, p: 'Сервис' },
+      { key: 'aiService', type: 'select', label: 'Сервис', options: () => AI_SERVICES, p: 'Сервис', isName: true },
       { key: 'aiDuration', type: 'select', label: 'Срок', options: () => DURATIONS, p: 'Срок' },
-      { key: 'aiPrice', type: 'num', label: 'Цена, ₽', ph: '2000', p: 'Цена', pSuffix: ' руб', req: 'цену' },
+      { key: 'aiPrice', type: 'num', label: 'Цена, ₽', ph: '2000', p: 'Цена', pSuffix: ' руб', req: 'цену', isPrice: true },
       { key: 'aiFeatures', type: 'area', label: 'Ключевые фичи', rows: 3,
         ph: 'Claude Code, Projects, Artifacts…', p: 'Фичи', pEmpty: '(не указаны)',
         req: 'ключевые фичи' },
@@ -783,24 +786,26 @@ const BUILTIN_CATS = [
   },
   {
     id: 'digital', label: '📦 Цифровой товар', pName: 'Цифровой товар', builtin: true,
+    visionHint: 'ВСЁ ОСТАЛЬНОЕ, включая физические товары: консоли, геймпады, гарнитуры, диски в коробке, техника, вещи. Состояние и комплектацию по фото пиши в поле digitalDesc.',
     fields: [
       { key: 'digitalName', type: 'text', label: 'Название товара', ph: 'Microsoft Office 2024',
-        p: 'Название', req: 'название товара' },
+        p: 'Название', req: 'название товара', isName: true },
       { key: 'digitalDesc', type: 'area', label: 'Описание', rows: 3,
         ph: 'Что входит, для кого, ключевые возможности…', p: 'Описание', req: 'описание' },
-      { key: 'digitalPrice', type: 'num', label: 'Цена, ₽', p: 'Цена', pSuffix: ' руб', req: 'цену' },
+      { key: 'digitalPrice', type: 'num', label: 'Цена, ₽', p: 'Цена', pSuffix: ' руб', req: 'цену', isPrice: true },
     ],
   },
   {
     id: 'game', label: '🕹️ Игра', pName: 'Игра', builtin: true,
+    visionHint: 'ЦИФРОВАЯ игра (обложка игры, витрина стора, ключ). Физический диск в коробке сюда НЕ относится.',
     fields: [
       { key: 'gameName', type: 'text', label: 'Название игры', ph: 'Cyberpunk 2077',
-        p: 'Название', req: 'название игры' },
+        p: 'Название', req: 'название игры', isName: true },
       { key: 'gamePlatforms', type: 'chips', label: 'Платформы', options: () => GAME_PLATS,
         p: 'Платформы', req: 'платформы' },
       // Цена игры намеренно БЕЗ p: в тексте объявления она запрещена (клиент видит её
       // в поле Авито), поле нужно только для инфографики и подстановки рыночной цены.
-      { key: 'gamePrice', type: 'num', label: 'Цена, ₽' },
+      { key: 'gamePrice', type: 'num', label: 'Цена, ₽', isPrice: true },
       { key: 'gameGenre', type: 'text', label: 'Жанр', ph: 'Экшн, RPG…', p: 'Жанр' },
       { key: 'isPreorder', type: 'toggle', label: '🔖 Предзаказ',
         hint: 'AI поищет актуальные бонусы в сети' },
@@ -876,6 +881,7 @@ function fieldFromData(d) {
   if (Array.isArray(d.options)) fd.options = d.options;
   if (d.hint) fd.hint = d.hint;
   if (d.isName) fd.isName = true;
+  if (d.isPrice) fd.isPrice = true;
   // p — подпись в промпте. Пустая (снят флаг «в промпт») означает: поле в промпт
   // не идёт. Так живёт цена игры — по правилам площадки её нет в тексте объявления.
   if (d.p) { fd.p = d.p; if (d.pSuffix) fd.pSuffix = d.pSuffix; if (d.pEmpty) fd.pEmpty = d.pEmpty; }
@@ -900,6 +906,7 @@ function applyCatPatch(base, p) {
       const out = { ...fd };
       if (patch.label) out.label = patch.label;
       if (patch.ph != null) out.ph = patch.ph;
+      if (patch.isPrice) out.isPrice = true;
       // Снять обязательность можно только у поля с простым req: за reqCheck
       // (сроки и цены, каталог игр) стоит логика, а не галочка.
       if (patch.req === false && out.req) delete out.req;
@@ -922,6 +929,8 @@ function applyCatPatch(base, p) {
   }
   if (Array.isArray(p.scanRequire) && p.scanRequire.length) c.scanRequire = p.scanRequire;
   if (Array.isArray(p.scanForbid)  && p.scanForbid.length)  c.scanForbid  = p.scanForbid;
+  if (p.scanRules && Object.keys(p.scanRules).length) c.scanRules = p.scanRules;
+  if (p.visionHint) c.visionHint = p.visionHint;
   return c;
 }
 
@@ -934,6 +943,8 @@ function catFromData(d) {
   if (d.extraText) c.extra = () => '\n' + d.extraText;
   if (Array.isArray(d.scanRequire) && d.scanRequire.length) c.scanRequire = d.scanRequire;
   if (Array.isArray(d.scanForbid)  && d.scanForbid.length)  c.scanForbid  = d.scanForbid;
+  if (d.scanRules && typeof d.scanRules === 'object') c.scanRules = d.scanRules;
+  if (d.visionHint) c.visionHint = d.visionHint;
   return c;
 }
 
@@ -1422,7 +1433,7 @@ function buildGamesLists(subType) {
 // SYSTEM PROMPT
 // ══════════════════════════════════════════
 
-const SYS = `Ты — эксперт по созданию объявлений на Авито для продажи цифровых товаров: игровых подписок (PS Plus, EA Play, Game Pass), AI-подписок (Claude Pro, ChatGPT, Google AI Pro, Cursor, Antigravity) и цифровых игр.
+const SYS_HEAD = `Ты — эксперт по созданию объявлений на Авито для продажи цифровых товаров: игровых подписок (PS Plus, EA Play, Game Pass), AI-подписок (Claude Pro, ChatGPT, Google AI Pro, Cursor, Antigravity) и цифровых игр.
 
 ЗАДАЧА: генерировать УНИКАЛЬНЫЕ варианты объявлений для одного и того же товара. Каждый вариант должен отличаться не рерайтом, а СТРУКТУРНО — как будто его писал другой продавец.
 
@@ -1487,11 +1498,19 @@ const SYS = `Ты — эксперт по созданию объявлений 
 ЗАПРЕЩЁННЫЕ СЛОВА И ФРАЗЫ:
 - Штампы: «захватывающее приключение», «невероятный мир», «погрузитесь», «откройте для себя», «must-have», «незабываемые эмоции», «легендарное», «эпическое», «та самая», «тот самый», «то самое»
 - Рекламный пафос: «уникальный», «революционный», «невероятный», «потрясающий», «лучший в своём роде»
-- Англицизмы-жаргон: «контент», «хайп», «тренд», «виб», «кринж», «скилл», «лор» — заменяй русскими аналогами
-- Слова оплаты: «платишь», «оплатишь», «оплата», «стоит», «купишь», «покупаешь» — ЗАПРЕЩЕНО. Вместо этого всегда используй «оформляешь», «оформить», «оформляется» (юридический момент)
-- Слово «цена» как ценник: «цена — 7500», «цена: 7500 руб» — ЗАПРЕЩЕНО. Допустимо только в контексте фиксации: «цена не изменится», «цена зафиксирована». Для указания суммы пиши «оформляешь за X руб» или просто «X руб»
-- «В подарок», «подарок», «в качестве подарка» — ЗАПРЕЩЕНО в любом контексте
-- «Аккаунт», «учётная запись», «учетная запись», «профиль» — КАТЕГОРИЧЕСКИ ЗАПРЕЩЕНО. Авито банит объявления за продажу аккаунтов — это запрещённая категория товаров. Любое упоминание этих слов может привести к блокировке. Правильная нейтральная формулировка — «оформляется в цифре». НЕ пиши «оформляется в цифре на ваш аккаунт» — только «оформляется в цифре», без уточнений.
+- Англицизмы-жаргон: «контент», «хайп», «тренд», «виб», «кринж», «скилл», «лор» — заменяй русскими аналогами`;
+
+// Запреты, которыми категория управляет теми же галочками, что и Сканером
+// (см. SCAN_RULES). Иначе для физического товара Сканер разрешал бы «купить»,
+// а модель всё равно писала бы «оформляешь» — рассинхрон уровня F19.
+const SYS_BANS = [
+  { rule: 'payment',     text: '- Слова оплаты: «платишь», «оплатишь», «оплата», «стоит», «купишь», «покупаешь» — ЗАПРЕЩЕНО. Вместо этого всегда используй «оформляешь», «оформить», «оформляется» (юридический момент)' },
+  { rule: 'price_label', text: '- Слово «цена» как ценник: «цена — 7500», «цена: 7500 руб» — ЗАПРЕЩЕНО. Допустимо только в контексте фиксации: «цена не изменится», «цена зафиксирована». Для указания суммы пиши «оформляешь за X руб» или просто «X руб»' },
+  { rule: 'gift',        text: '- «В подарок», «подарок», «в качестве подарка» — ЗАПРЕЩЕНО в любом контексте' },
+  { rule: 'account',     text: '- «Аккаунт», «учётная запись», «учетная запись», «профиль» — КАТЕГОРИЧЕСКИ ЗАПРЕЩЕНО. Авито банит объявления за продажу аккаунтов — это запрещённая категория товаров. Любое упоминание этих слов может привести к блокировке. Правильная нейтральная формулировка — «оформляется в цифре». НЕ пиши «оформляется в цифре на ваш аккаунт» — только «оформляется в цифре», без уточнений.' },
+];
+
+const SYS_TAIL = `
 
 ФОРМАТ ОТВЕТА — строго JSON без markdown-обёртки:
 {
@@ -1510,6 +1529,16 @@ const SYS = `Ты — эксперт по созданию объявлений 
 }
 
 ВАЖНО: только JSON в ответе. Названия строго ≤50 символов. Описания реально разные по структуре.`;
+
+// Системный промпт под конкретную категорию: запреты из SYS_BANS попадают в него
+// только там, где включено соответствующее правило. Без категории (или для той,
+// где всё включено) получается ровно прежний текст — это проверяется паритетом.
+function buildSys(category) {
+  // Своё правило категории сюда НЕ дописывается: оно уже уходит в пользовательском
+  // сообщении через catInfoBlock (c.extra) — иначе текст задваивался бы.
+  const bans = SYS_BANS.filter(b => category == null || scanRuleOn(category, b.rule)).map(b => b.text);
+  return SYS_HEAD + (bans.length ? '\n' + bans.join('\n') : '') + SYS_TAIL;
+}
 
 // ══════════════════════════════════════════
 // AI CALL
@@ -1535,7 +1564,10 @@ async function callAI(messages, opts = {}) {
   const temperature = opts.temperature ?? 0.8;
   // opts.system — задача не про генерацию объявления (напр. распознавание товара по фото):
   // общий SYS с правилами Авито там только мешает, и пользовательский customSys к ней не относится.
-  const system = opts.system || (state.settings.customSys ? SYS + '\n\n' + state.settings.customSys : SYS);
+  // opts.category — под какую категорию собирать запреты (см. buildSys). Не передали —
+  // собирается прежний полный набор, то есть путь без категории деградирует безопасно.
+  const sys = buildSys(opts.category);
+  const system = opts.system || (state.settings.customSys ? sys + '\n\n' + state.settings.customSys : sys);
 
   if (provider === 'claude') {
     const caps = modelCaps(model);
@@ -1690,7 +1722,7 @@ async function doGenerate() {
   const jT0 = Date.now();
   try {
     const webSearch = state.form.isPreorder && state.form.category === 'game';
-    const text = await callAI([{ role: 'user', content: buildMsg() }], { webSearch });
+    const text = await callAI([{ role: 'user', content: buildMsg() }], { webSearch, category: state.form.category });
     state.results = parseVariants(text);
     // F4: снимок формы + штамп товара/категории на каждый вариант — чтобы действия
     // карточки (Размещено/Сканер/Экспорт/↻×5) не читали форму, переключённую позже
@@ -1730,7 +1762,7 @@ async function doGenerateMore() {
     const snapForm = state.resultsForm || state.form; // F4: та же форма, что породила основной набор
     const excl = resultsPool().map(v => v.title);
     const webSearch = snapForm.isPreorder && snapForm.category === 'game';
-    const text = await callAI([{ role: 'user', content: buildMsg(snapForm.count, excl, snapForm) }], { webSearch });
+    const text = await callAI([{ role: 'user', content: buildMsg(snapForm.count, excl, snapForm) }], { webSearch, category: snapForm.category });
     const fresh = parseVariants(text);
     if (!fresh.length) throw new Error('AI не вернул варианты');
     const product  = state.results[0]?._product  || currentProductName(snapForm);
@@ -1785,7 +1817,7 @@ async function doBatchGenerate() {
       try {
         const msg = buildMsg(chunk.length, variants.map(v => v.title));
         const text = await callAI([{ role: 'user', content: msg }],
-          { webSearch, max_tokens: Math.min(8000, 800 + chunk.length * 1200) });
+          { webSearch, category: state.form.category, max_tokens: Math.min(8000, 800 + chunk.length * 1200) });
         variants.push(...parseVariants(text));
       } catch(e) {
         console.error('Пакет: чанк не удался', e);
@@ -1857,7 +1889,7 @@ async function doGenTitlesOnly() {
   try {
     const webSearch = state.form.isPreorder && state.form.category === 'game';
     const n = Math.max(8, Math.min(12, (state.form.count || 5) * 2));
-    const text = await callAI([{ role: 'user', content: buildTitlesMsg(n) }], { webSearch, max_tokens: webSearch ? 2200 : 1400 });
+    const text = await callAI([{ role: 'user', content: buildTitlesMsg(n) }], { webSearch, category: state.form.category, max_tokens: webSearch ? 2200 : 1400 });
     const data = JSON.parse(extractJSON(text));
     const titles = (data.titles || [])
       .map((t, i) => ({ id: i + 1, title: t.title || '', hook: t.hook || '', len: [...(t.title || '')].length }))
@@ -1902,7 +1934,7 @@ ${list}
 Для каждого напиши полное описание — разное по структуре и подаче цены между вариантами (см. правила описаний в системном промпте).${fewShotBlock(f.category)}
 Верни строго JSON без markdown-обёртки:
 {"variants":[{"id":1,"title":"(как в списке, без изменений)","title_length":число,"description":"...","style":"...","price_format":"...","hook":"...","structure":"..."}]}`;
-    const text = await callAI([{ role: 'user', content: msg }], { webSearch, max_tokens: Math.min(8000, 800 + chosen.length * 1200) });
+    const text = await callAI([{ role: 'user', content: msg }], { webSearch, category: f.category, max_tokens: Math.min(8000, 800 + chosen.length * 1200) });
     const variants = parseVariants(text);
     if (!variants.length) throw new Error('AI не вернул описания');
     // Название продавцом уже выбрано — принудительно прописываем его поверх ответа AI
@@ -1959,7 +1991,7 @@ async function doGenAltTitles(id) {
     const webSearch = snapForm.isPreorder && snapForm.category === 'game';
     // F5: при webSearch сама генерация вспомогательных tool-use блоков ест бюджет
     // до финального текста — 600 обрезало 5 заголовков; 2000 — тот же запас, что в doRephrase
-    const text = await callAI([{ role: 'user', content: msg }], { webSearch, max_tokens: webSearch ? 2000 : 600 });
+    const text = await callAI([{ role: 'user', content: msg }], { webSearch, category: snapForm.category, max_tokens: webSearch ? 2000 : 600 });
     const data = JSON.parse(extractJSON(text));
     state.altTitles[id] = (data.titles || []).map(t => ({ ...t, len: [...(t.title||'')].length }));
     jlog('generated', v?._chain || null, {
@@ -1986,7 +2018,7 @@ async function doRegen(id) {
     const product  = prev._product  || currentProductName(snapForm);
     const excl = resultsPool().filter(v => v.id !== id).map(v => v.title);
     const webSearch = snapForm.isPreorder && category === 'game';
-    const text = await callAI([{ role: 'user', content: buildMsg(1, excl, snapForm) }], { webSearch });
+    const text = await callAI([{ role: 'user', content: buildMsg(1, excl, snapForm) }], { webSearch, category });
     const [v] = parseVariants(text);
     const { arr, idx } = findResultRef(id);
     if (arr && idx !== -1 && v) {
@@ -2036,7 +2068,7 @@ ${v.description}
 {"variants": [{"id": 1, "title": "...", "title_length": 0, "description": "...", "style": "...", "price_format": "...", "hook": "...", "structure": "..."}]}`;
 
     const webSearch = state.form.isPreorder && state.form.category === 'game';
-    const text = await callAI([{ role: 'user', content: msg }], { webSearch, max_tokens: 2000 });
+    const text = await callAI([{ role: 'user', content: msg }], { webSearch, category: v._category || state.form.category, max_tokens: 2000 });
     const [nv] = parseVariants(text);
     if (!nv) throw new Error('Пустой ответ от AI');
     jlog('generated', v._chain || null, {
@@ -2480,37 +2512,52 @@ function refreshBatchResults() {
 
 const VISION_MAX_PX = 1568; // рекомендация Anthropic: больший размер модель всё равно ужмёт сама
 
-const VISION_SYS = `Ты — помощник продавца на Авито. По фотографии определяешь, ЧТО это за товар, и заполняешь карточку товара для генератора объявлений.
+// Типы полей, которые распознавание умеет заполнять. num исключён: цену модель
+// придумывать не должна — её узнаёт веб-поиск отдельной кнопкой.
+const VISION_FIELD_TYPES = ['text', 'area', 'select', 'chips'];
+function visionFields(c) {
+  return c.fields.filter(fd => VISION_FIELD_TYPES.includes(fd.type) && !fd.isPrice);
+}
 
-КАТЕГОРИЯ — строго одна из четырёх, других нет:
-- "game" — ЦИФРОВАЯ игра (обложка игры, витрина стора, ключ). Физический диск в коробке сюда НЕ относится.
-- "gaming_sub" — игровая подписка: PS Plus Essential / PS Plus Extra / PS Plus Deluxe / EA Play / Game Pass Ultimate.
-- "ai_sub" — AI-подписка: Claude Pro, Claude Max, ChatGPT Plus, ChatGPT Pro, Google AI Pro, Cursor, Antigravity.
-- "digital" — ВСЁ ОСТАЛЬНОЕ, включая физические товары: консоли, геймпады, гарнитуры, диски в коробке, техника, вещи.
+// Список категорий и их полей собирается из дескрипторов: категория, заведённая
+// в Настройках, распознаётся так же, как встроенная — ровно та дыра, ради
+// которой начиналось направление 1 (физтовар сваливался в «Цифровой товар»).
+function visionCatBlock() {
+  return CATS.map(c => {
+    const fields = visionFields(c).map(fd => {
+      const opts = ['select', 'chips'].includes(fd.type) ? fdOptions(fd) : [];
+      const listed = opts.length ? ` — строго одно из: ${opts.join(', ')}` : '';
+      return `    ${fd.key} (${fd.label}${fd.type === 'chips' ? ', массив' : ''})${listed}`;
+    });
+    return `- "${c.id}" — ${c.visionHint || c.pName || c.label}\n  поля:\n${fields.join('\n') || '    (нет заполняемых полей)'}`;
+  }).join('\n');
+}
+
+function visionSys() {
+  return `Ты — помощник продавца на Авито. По фотографии определяешь, ЧТО это за товар, и заполняешь карточку товара для генератора объявлений.
+
+КАТЕГОРИЯ — строго один из id ниже, других нет:
+${visionCatBlock()}
 
 ПРАВИЛА:
 - Пиши только то, что реально видно на фото. НЕ додумывай объём памяти, ревизию, комплектацию, год — если этого не видно на самом товаре или упаковке.
-- Для физического товара в поле digitalDesc опиши состояние и комплектацию ровно по фото: коробка есть/нет, провода, следы использования, царапины, потёртости.
+- Для физического товара опиши состояние и комплектацию ровно по фото: коробка есть/нет, провода, следы использования, царапины, потёртости.
 - Если разобрать невозможно (темно, размыто, товара не видно) — поставь confidence "low" и объясни в recognized, что именно мешает.
 - Цену НЕ придумывай никогда — её узнают отдельно веб-поиском.
-- Платформы бери строго из списков: для игры — PS4, PS5, Xbox One, Xbox Series; для подписки — PS4, PS5, Xbox.
+- Где у поля перечислены допустимые значения — бери строго из этого списка, ничего своего.
 - Значения полей — на русском, кроме оригинальных названий игр, сервисов и моделей техники.
-- Заполняй только те поля, которые относятся к выбранной категории; остальные оставь пустыми.
+- В "fields" клади ТОЛЬКО ключи выбранной категории, остальные не упоминай вовсе.
 
 ФОРМАТ ОТВЕТА — ТОЛЬКО JSON, без единого слова до или после:
 {
   "recognized": "коротко, что на фото",
   "confidence": "high|medium|low",
-  "category": "game|gaming_sub|ai_sub|digital",
-  "fields": {
-    "gameName": "", "gamePlatforms": [], "gameGenre": "",
-    "subType": "", "platforms": [],
-    "aiService": "", "aiFeatures": "",
-    "digitalName": "", "digitalDesc": ""
-  },
+  "category": "<id из списка выше>",
+  "fields": { "<ключ поля этой категории>": "<значение>" },
   "notes": "одна строка доп. указаний генератору: состояние, комплектация, чем зацепить",
   "priceQuery": "поисковый запрос для рыночной цены, например: PlayStation 5 Slim бу цена авито"
 }`;
+}
 
 // Отдельный промпт для шага цены. Раньше сюда уходил VISION_SYS — а он требует
 // схему распознавания и прямым текстом запрещает называть цену, то есть модель
@@ -2593,21 +2640,25 @@ function visionApplyToForm(r) {
   f.category = cat;
   let filled = 0; // сколько полей ЭТОЙ категории реально заполнено ответом модели
 
-  if (cat === 'game') {
-    if (fl.gameName)  { f.gameName  = String(fl.gameName);  filled++; }
-    if (fl.gameGenre) { f.gameGenre = String(fl.gameGenre); filled++; }
-    const plats = pick(fl.gamePlatforms, GAME_PLATS);
-    if (plats.length) { f.gamePlatforms = plats; filled++; }
-  } else if (cat === 'gaming_sub') {
-    if (SUB_TYPES.includes(fl.subType)) { f.subType = fl.subType; filled++; }
-    const plats = pick(fl.platforms, SUB_PLATS);
-    if (plats.length) { f.platforms = plats; filled++; }
-  } else if (cat === 'ai_sub') {
-    if (fl.aiService) { f.aiService = AI_SERVICES.includes(fl.aiService) ? fl.aiService : 'Другой'; filled++; }
-    if (fl.aiFeatures) { f.aiFeatures = String(fl.aiFeatures); filled++; }
-  } else {
-    if (fl.digitalName) { f.digitalName = String(fl.digitalName); filled++; }
-    if (fl.digitalDesc) { f.digitalDesc = String(fl.digitalDesc); filled++; }
+  // Раскладка по дескриптору категории — работает и для категорий из конструктора.
+  for (const fd of visionFields(catDef(cat))) {
+    const raw = fl[fd.key];
+    if (raw == null || raw === '') continue;
+    if (fd.type === 'chips') {
+      const picked = pick(raw, fdOptions(fd));
+      if (picked.length) { f[fd.key] = picked; filled++; }
+    } else if (fd.type === 'select') {
+      const opts = fdOptions(fd);
+      const val = String(raw);
+      if (opts.includes(val)) { f[fd.key] = val; filled++; }
+      // «Другой»/«Другое» в списке — честный приют для сервиса, которого нет в каталоге
+      else {
+        const other = opts.find(o => /^друг/i.test(o));
+        if (other) { f[fd.key] = other; filled++; }
+      }
+    } else {
+      f[fd.key] = String(raw); filled++;
+    }
   }
   if (r.notes) f.notes = String(r.notes).slice(0, 300);
   save();
@@ -2640,7 +2691,7 @@ async function doVisionRecognize() {
     const text = await callAI([{ role: 'user', content }], {
       // thinking: разглядеть товар на фото — как раз задача, где нужен разбор, а не
       // первое впечатление. max_tokens поднят: размышление тратится из того же лимита.
-      provider: 'claude', system: VISION_SYS, max_tokens: 4000, temperature: 0.2, thinking: true,
+      provider: 'claude', system: visionSys(), max_tokens: 4000, temperature: 0.2, thinking: true,
     });
     const r = JSON.parse(extractJSON(text));
     if (!r || typeof r !== 'object') throw new Error('Модель вернула не JSON');
@@ -2706,16 +2757,17 @@ async function doVisionPrice() {
   }
 }
 
-// Подставить цену в поле формы. У игровой подписки полей цены несколько (по сроку),
-// однозначного адресата нет — там кнопка не показывается вовсе.
+// Поле цены категории — то, что помечено флажком «цена товара» в редакторе.
+// У игровой подписки такого поля нет: цен там несколько (по сроку), однозначного
+// адресата не существует — там кнопка подстановки не показывается вовсе.
+function catPriceField(catId) { return catDef(catId).fields.find(fd => fd.isPrice) || null; }
+
 function visionApplyPrice(val) {
   const n = Math.round(Number(val));
   if (!Number.isFinite(n) || n <= 0) return;
-  const cat = state.form.category;
-  if      (cat === 'game')    state.form.gamePrice    = String(n);
-  else if (cat === 'digital') state.form.digitalPrice = String(n);
-  else if (cat === 'ai_sub')  state.form.aiPrice      = String(n);
-  else return;
+  const fd = catPriceField(state.form.category);
+  if (!fd) return;
+  state.form[fd.key] = String(n);
   save(); reForm();
   toast(`Цена ${n} ₽ подставлена в форму`);
 }
@@ -2763,7 +2815,7 @@ function visionCardHTML() {
   const conf = r ? (CONF[r.confidence] || CONF.medium) : null;
   const catLabel = r ? (CATS.find(c => c.id === state.form.category)?.label || '') : '';
   const p = v.price;
-  const canApplyPrice = ['game', 'digital', 'ai_sub'].includes(state.form.category);
+  const canApplyPrice = !!catPriceField(state.form.category);
   const busy = visionBusy();
   // Диапазон: у модели могла не найтись часть границ — «1200– ₽» показывать нельзя
   const bounds = [p?.low, p?.high].filter(Boolean);
@@ -3174,7 +3226,7 @@ async function doStartSession() {
         const form = it.form || state.form;
         const webSearch = form.isPreorder && form.category === 'game';
         const jT0 = Date.now();
-        const text = await callAI([{ role: 'user', content: buildMsg(1, [], form) }], { webSearch });
+        const text = await callAI([{ role: 'user', content: buildMsg(1, [], form) }], { webSearch, category: form.category });
         const v = parseVariants(text)[0] || null;
         // Это платные генерации, и раньше они не попадали в журнал вообще: путь «очередь →
         // сессия постинга» выглядел как размещения без единой генерации, а posted уходил
@@ -3304,7 +3356,7 @@ function draftFieldFromData(d) {
     req: !!d.req, reqLocked: false, reqText: d.reqText || '',
     inPrompt: !!d.p, promptLocked: false, p: d.p || '',
     options: (Array.isArray(d.options) ? d.options : []).join('\n'), optionsLocked: false,
-    isName: !!d.isName,
+    isName: !!d.isName, isPrice: !!d.isPrice,
   };
 }
 
@@ -3315,6 +3367,7 @@ function draftFieldToData(fd) {
   if (fd.inPrompt) out.p = (fd.p || '').trim() || out.label;
   if (fd.req) { out.req = true; if (fd.reqText) out.reqText = fd.reqText; }
   if (fd.isName) out.isName = true;
+  if (fd.isPrice) out.isPrice = true;
   return out;
 }
 
@@ -3340,6 +3393,7 @@ function catDraftFor(id) {
       options: fdOptions(fd).join('\n'),
       optionsLocked: typeof fd.options === 'function', // список живёт в коде
       isName: !!(fd.isName || fp[fd.key]?.isName),
+      isPrice: !!(fd.isPrice || fp[fd.key]?.isPrice),
     })).concat((Array.isArray(p.add) ? p.add : []).map(draftFieldFromData));
     if (Array.isArray(p.order) && p.order.length) {
       const pos = k => { const i = p.order.indexOf(k); return i === -1 ? 1e6 : i; };
@@ -3349,8 +3403,11 @@ function catDraftFor(id) {
       id, builtin: true, patched: !!Object.keys(p).length,
       label: p.label || base.label, pName: p.pName || base.pName || '',
       extraText: p.extraText || '',
+      visionHint: p.visionHint || base.visionHint || '',
       scanRequire: (p.scanRequire || []).join('\n'),
       scanForbid:  (p.scanForbid  || []).join('\n'),
+      scanRules: Object.fromEntries(SCAN_RULES.map(r => [r.id,
+        p.scanRules && Object.prototype.hasOwnProperty.call(p.scanRules, r.id) ? !!p.scanRules[r.id] : !!r.def(id)])),
       fields,
     };
   }
@@ -3359,8 +3416,11 @@ function catDraftFor(id) {
   return {
     id, builtin: false, patched: false,
     label: d.label || '', pName: d.pName || '', extraText: d.extraText || '',
+    visionHint: d.visionHint || '',
     scanRequire: (d.scanRequire || []).join('\n'),
     scanForbid:  (d.scanForbid  || []).join('\n'),
+    scanRules: Object.fromEntries(SCAN_RULES.map(r => [r.id,
+      d.scanRules && Object.prototype.hasOwnProperty.call(d.scanRules, r.id) ? !!d.scanRules[r.id] : !!r.def(id)])),
     fields: (Array.isArray(d.fields) ? d.fields : []).map(draftFieldFromData),
   };
 }
@@ -3385,9 +3445,17 @@ function catDraftApply(draft) {
     if (draft.label.trim() !== base.label)            p.label = draft.label.trim();
     if (draft.pName.trim() !== (base.pName || ''))    p.pName = draft.pName.trim();
     if (draft.extraText.trim())                        p.extraText = draft.extraText.trim();
+    if (draft.visionHint.trim() !== (base.visionHint || '')) p.visionHint = draft.visionHint.trim();
     const req = splitLines(draft.scanRequire), forb = splitLines(draft.scanForbid);
     if (req.length)  p.scanRequire = req;
     if (forb.length) p.scanForbid  = forb;
+    // В патч пишем только правила, отличающиеся от заводского значения
+    const rules = {};
+    for (const r of SCAN_RULES) {
+      const want = !!draft.scanRules[r.id];
+      if (want !== !!r.def(draft.id)) rules[r.id] = want;
+    }
+    if (Object.keys(rules).length) p.scanRules = rules;
     for (const fd of draft.fields) {
       if (!fd.builtin) { add.push(draftFieldToData(fd)); continue; }
       const bf = base.fields.find(x => x.key === fd.key);
@@ -3398,6 +3466,7 @@ function catDraftApply(draft) {
       if (fd.hidden)                           patch.hidden = true;
       if (!fd.req && bf.req)                   patch.req = false;
       if (fd.isName && !bf.isName)             patch.isName = true;
+      if (fd.isPrice && !bf.isPrice)           patch.isPrice = true;
       if (Object.keys(patch).length) fields[fd.key] = patch;
     }
     if (Object.keys(fields).length) p.fields = fields;
@@ -3415,10 +3484,17 @@ function catDraftApply(draft) {
       pName: draft.pName.trim() || draft.label.trim(),
       fields: draft.fields.map(draftFieldToData),
     };
-    if (draft.extraText.trim()) d.extraText = draft.extraText.trim();
+    if (draft.extraText.trim())  d.extraText  = draft.extraText.trim();
+    if (draft.visionHint.trim()) d.visionHint = draft.visionHint.trim();
     const req = splitLines(draft.scanRequire), forb = splitLines(draft.scanForbid);
     if (req.length)  d.scanRequire = req;
     if (forb.length) d.scanForbid  = forb;
+    const rules = {};
+    for (const r of SCAN_RULES) {
+      const want = !!draft.scanRules[r.id];
+      if (want !== !!r.def(draft.id)) rules[r.id] = want;
+    }
+    if (Object.keys(rules).length) d.scanRules = rules;
     if (!Array.isArray(state.catsCfg.custom)) state.catsCfg.custom = [];
     const i = state.catsCfg.custom.findIndex(c => c.id === d.id);
     if (i === -1) state.catsCfg.custom.push(d); else state.catsCfg.custom[i] = d;
@@ -3475,8 +3551,10 @@ function catEditorHTML() {
             <input type="checkbox" data-act="catf" data-i="${i}" data-k="inPrompt"${fd.inPrompt ? ' checked' : ''}${fd.promptLocked ? ' disabled' : ''}>в промпт</label>
           ${fd.inPrompt && !fd.promptLocked ? `
             <input type="text" data-act="catf" data-i="${i}" data-k="p" value="${esc(fd.p)}" placeholder="как назвать в промпте (${esc(fd.label || fd.key)})" class="cat-fld-p">` : ''}
-          <label class="cat-fld-chk" title="Это поле — название товара: попадает в штамп варианта, историю и журнал">
+          <label class="cat-fld-chk" title="Это поле — название товара: попадает в штамп варианта, историю, журнал и инфографику">
             <input type="checkbox" data-act="catf" data-i="${i}" data-k="isName"${fd.isName ? ' checked' : ''}>название товара</label>
+          <label class="cat-fld-chk" title="Это поле — цена: сюда подставляется найденная рыночная цена, и она же идёт в инфографику">
+            <input type="checkbox" data-act="catf" data-i="${i}" data-k="isPrice"${fd.isPrice ? ' checked' : ''}>цена товара</label>
         </div>
       </div>`}
     </div>`;
@@ -3508,14 +3586,26 @@ function catEditorHTML() {
     <label class="cat-fld-sub">Своё правило промпта для этой категории${d.builtin ? ' (добавится к заводскому)' : ''}
       <textarea data-act="catd" data-k="extraText" rows="3" placeholder="Например: вещь бывшая в употреблении — писать честно о состоянии, «купить» и «оплата» разрешены.">${esc(d.extraText)}</textarea>
     </label>
+    <label class="cat-fld-sub">Подсказка для распознавания по фото — как объяснить модели, что относится к этой категории
+      <textarea data-act="catd" data-k="visionHint" rows="2" placeholder="физический товар из рук: консоли, геймпады, диски в коробке, техника">${esc(d.visionHint)}</textarea>
+    </label>
     <div class="cat-ed-fields-title">Поля формы <span style="color:var(--muted);font-weight:400;font-size:12px">— порядок здесь = порядок в Генераторе</span></div>
     <div class="cat-ed-fields">${d.fields.map(fieldRow).join('') || '<div style="font-size:13px;color:var(--muted);padding:6px 0">Полей пока нет.</div>'}</div>
     <button class="btn-add" data-act="cat-fld-add">+ Добавить поле</button>
+    <div class="cat-ed-fields-title" style="margin-top:8px">Проверки категории
+      <span style="color:var(--muted);font-weight:400;font-size:12px">— управляют и Сканером, и запретами в промпте генерации</span>
+    </div>
+    <div class="cat-rules">
+      ${SCAN_RULES.map(r => `
+        <label class="cat-fld-chk" title="${esc(r.label)}">
+          <input type="checkbox" data-act="catr" data-k="${r.id}"${d.scanRules[r.id] ? ' checked' : ''}>${esc(r.label)}
+        </label>`).join('')}
+    </div>
     <div class="cat-ed-grid" style="margin-top:4px">
-      <label class="cat-fld-sub">Обязательные фразы <span class="cat-ed-soon">подключится на этапе 3</span>
+      <label class="cat-fld-sub">Свои обязательные фразы
         <textarea data-act="catd" data-k="scanRequire" rows="3" placeholder="оформляется в цифре">${esc(d.scanRequire)}</textarea>
       </label>
-      <label class="cat-fld-sub">Запрещённые слова <span class="cat-ed-soon">подключится на этапе 3</span>
+      <label class="cat-fld-sub">Свои запрещённые слова
         <textarea data-act="catd" data-k="scanForbid" rows="3" placeholder="аккаунт&#10;подарок">${esc(d.scanForbid)}</textarea>
       </label>
     </div>
@@ -3691,6 +3781,14 @@ function bindCatEditor() {
     }
   });
 
+  box.querySelectorAll('[data-act="catr"]').forEach(el => {
+    el.addEventListener('change', () => {
+      if (!d()) return;
+      d().scanRules[el.dataset.k] = el.checked;
+      dirty();
+    });
+  });
+
   box.querySelectorAll('[data-act="cat-fld-up"], [data-act="cat-fld-down"]').forEach(btn => {
     btn.addEventListener('click', () => {
       const i = +btn.dataset.i, j = btn.dataset.act === 'cat-fld-up' ? i - 1 : i + 1;
@@ -3727,7 +3825,8 @@ function bindCatEditor() {
       // буквы/цифры через \p{L}: \W в JS не считает буквой кириллицу и срезал бы
       // название целиком (та же ловушка, что была в правиле сканера F19).
       label: name.trim(), pName: name.trim().replace(/^[^\p{L}\p{N}]+/u, ''), extraText: '',
-      scanRequire: '', scanForbid: '',
+      visionHint: '', scanRequire: '', scanForbid: '',
+      scanRules: Object.fromEntries(SCAN_RULES.map(r => [r.id, !!r.def(id)])),
       fields: [{
         key: 'u_name', type: 'text', builtin: false, code: false,
         label: 'Название товара', ph: '', hidden: false, req: true, reqLocked: false,
@@ -4658,6 +4757,26 @@ function cvInfogBuildLines() {
     if (f.digitalName) L.push(`📦 ${f.digitalName}`);
     if (f.digitalPrice) L.push(`💲 ${f.digitalPrice}₽`);
     L.push('⚡ Быстрая выдача');
+  } else {
+    // Категория из конструктора: строки собираются по дескриптору — название
+    // (флажок «название товара»), цена (флажок «цена товара»), остальные
+    // заполненные поля в порядке формы.
+    const c = catDef(f.category);
+    const nameFd  = c.fields.find(fd => fd.isName);
+    const priceFd = c.fields.find(fd => fd.isPrice);
+    if (nameFd) { const v = String(fieldVal(f, nameFd)).trim(); if (v) L.push(`📦 ${v}`); }
+    const others = [];
+    for (const fd of c.fields) {
+      if (fd === nameFd || fd.isPrice) continue;
+      if (!['text', 'num', 'area', 'select', 'chips'].includes(fd.type)) continue;
+      const v = fieldVal(f, fd);
+      const s = (Array.isArray(v) ? v.join(' / ') : String(v)).trim();
+      if (s) others.push(`✔️ ${s.length > 40 ? s.slice(0, 39).trim() + '…' : s}`);
+    }
+    // Цена — последней строкой, как у встроенных категорий: оставляем ей место
+    const price = priceFd ? String(fieldVal(f, priceFd)).replace(/\D/g, '') : '';
+    L.push(...others.slice(0, price ? 3 : 4));
+    if (price) L.push(`💲 ${price}₽`);
   }
   return L.slice(0, 5);
 }
@@ -6132,11 +6251,16 @@ function showFinalDialog(recId) {
 
 // Имя товара по категории формы — subType/aiService/gameName/digitalName заполнены
 // одновременно (дефолты формы), поэтому нельзя брать первое непустое подряд
+// Название товара — поле категории с флажком «название товара» (isName).
+// У встроенных он проставлен в дескрипторе, поэтому результат прежний;
+// пользовательская категория тоже получает осмысленный штамп, а не «Товар».
 function currentProductName(f) {
-  if (f.category === 'gaming_sub') return f.subType || 'Товар';
-  if (f.category === 'ai_sub')     return f.aiService || 'Товар';
-  if (f.category === 'game')       return f.gameName || 'Товар';
-  if (f.category === 'digital')    return f.digitalName || 'Товар';
+  const fd = catDef(f.category).fields.find(x => x.isName);
+  if (fd) {
+    const v = fieldVal(f, fd);
+    const s = Array.isArray(v) ? v.join(', ') : String(v);
+    if (s.trim()) return s.trim();
+  }
   return 'Товар';
 }
 
@@ -6276,32 +6400,62 @@ function dupCheck(vid, fid) {
 // SCANNER
 // ══════════════════════════════════════════
 
+// rule — к какому именованному правилу относится строка (см. SCAN_RULES ниже):
+// категория может выключить всю группу разом.
 const SCAN_ERRORS = [
-  { re: /https?:\/\//i,      label: 'Внешняя ссылка (http/https)' },
-  { re: /www\.\S+/i,         label: 'Внешняя ссылка (www)' },
-  { re: /t\.me\//i,          label: 'Ссылка на Telegram (t.me)' },
-  { re: /qr.?код|qr.?code/i, label: 'QR-код' },
-  { re: /\+7[\s\-]?\(?\d{3}\)?[\s\-]?\d{3}[\s\-]?\d{2}[\s\-]?\d{2}/, label: 'Номер телефона (+7...)' },
-  { re: /8[\s\-]?\(?\d{3}\)?[\s\-]?\d{3}[\s\-]?\d{2}[\s\-]?\d{2}/, label: 'Номер телефона (8-...)' },
-  { re: /(пишите|напишите|пиши|пишу|писать|со\s+мной|свяжитесь|связь).{0,40}(телеграм|telegram|\btg\b|вацап|(?<![а-яёa-z0-9])вк(?![а-яёa-z0-9])|whatsapp|viber|вайбер)/i, label: 'Контакт через мессенджер (запрещено Авито)' },
-  { re: /(телеграм|telegram|\btg\b|вацап|(?<![а-яёa-z0-9])вк(?![а-яёa-z0-9])|whatsapp|viber|вайбер).{0,40}(пишите|напишите|пиши|пишу|писать|со\s+мной|свяжитесь|связь)/i, label: 'Контакт через мессенджер (запрещено Авито)' },
-  { re: /(?<![а-яёa-z0-9])аккаунт(?![а-яёa-z0-9])/i,          label: '⛔ Слово «аккаунт» — Авито банит за продажу аккаунтов' },
-  { re: /учётная\s+запись|учетная\s+запись/i, label: '⛔ «Учётная запись» — риск блокировки как продажа аккаунта' },
-  { re: /(?<![а-яёa-z0-9])профил[ья](?![а-яёa-z0-9])/i,       label: '⛔ Слово «профиль» — риск блокировки как продажа аккаунта' },
+  { rule: 'links',     re: /https?:\/\//i,      label: 'Внешняя ссылка (http/https)' },
+  { rule: 'links',     re: /www\.\S+/i,         label: 'Внешняя ссылка (www)' },
+  { rule: 'links',     re: /t\.me\//i,          label: 'Ссылка на Telegram (t.me)' },
+  { rule: 'links',     re: /qr.?код|qr.?code/i, label: 'QR-код' },
+  { rule: 'links',     re: /\+7[\s\-]?\(?\d{3}\)?[\s\-]?\d{3}[\s\-]?\d{2}[\s\-]?\d{2}/, label: 'Номер телефона (+7...)' },
+  { rule: 'links',     re: /8[\s\-]?\(?\d{3}\)?[\s\-]?\d{3}[\s\-]?\d{2}[\s\-]?\d{2}/, label: 'Номер телефона (8-...)' },
+  { rule: 'messenger', re: /(пишите|напишите|пиши|пишу|писать|со\s+мной|свяжитесь|связь).{0,40}(телеграм|telegram|\btg\b|вацап|(?<![а-яёa-z0-9])вк(?![а-яёa-z0-9])|whatsapp|viber|вайбер)/i, label: 'Контакт через мессенджер (запрещено Авито)' },
+  { rule: 'messenger', re: /(телеграм|telegram|\btg\b|вацап|(?<![а-яёa-z0-9])вк(?![а-яёa-z0-9])|whatsapp|viber|вайбер).{0,40}(пишите|напишите|пиши|пишу|писать|со\s+мной|свяжитесь|связь)/i, label: 'Контакт через мессенджер (запрещено Авито)' },
+  { rule: 'account',   re: /(?<![а-яёa-z0-9])аккаунт(?![а-яёa-z0-9])/i,          label: '⛔ Слово «аккаунт» — Авито банит за продажу аккаунтов' },
+  { rule: 'account',   re: /учётная\s+запись|учетная\s+запись/i, label: '⛔ «Учётная запись» — риск блокировки как продажа аккаунта' },
+  { rule: 'account',   re: /(?<![а-яёa-z0-9])профил[ья](?![а-яёa-z0-9])/i,       label: '⛔ Слово «профиль» — риск блокировки как продажа аккаунта' },
 ];
 
 const SCAN_WARNINGS = [
-  { re: /telegram|телеграм/i, label: 'Упоминание Telegram — Авито может расценить как контакт' },
-  { re: /whatsapp|вацап|ватсап/i, label: 'Упоминание WhatsApp — Авито может расценить как контакт' },
-  { re: /viber|вайбер/i,      label: 'Упоминание Viber — Авито может расценить как контакт' },
+  { rule: 'messenger', re: /telegram|телеграм/i, label: 'Упоминание Telegram — Авито может расценить как контакт' },
+  { rule: 'messenger', re: /whatsapp|вацап|ватсап/i, label: 'Упоминание WhatsApp — Авито может расценить как контакт' },
+  { rule: 'messenger', re: /viber|вайбер/i,      label: 'Упоминание Viber — Авито может расценить как контакт' },
   // F19: синхронизация сканера с запретами SYS-промпта. Раньше вставленный руками или
   // «уплывший» текст AI проходил «🎉 Всё чисто», хотя нарушал правила объявления.
-  { re: /(?<![а-яёa-z0-9])подар(ок|к[а-яё]+|очн[а-яё]+)(?![а-яёa-z0-9])/i, label: '«Подарок» — запрещено правилами объявления (риск как передача аккаунта)' },
-  { re: /(?<![а-яёa-z0-9])(плат(ишь|ить|ежи?|ежом|ежа)|оплат[а-яё]*|оплачива[а-яё]*|купишь|покупаешь|покупк[а-яё]+)(?![а-яёa-z0-9])|(?<![а-яёa-z0-9])стоит\s+\d/i, label: 'Слова оплаты («платишь/оплата/купишь») — по правилам только «оформляешь»' },
+  { rule: 'gift',    re: /(?<![а-яёa-z0-9])подар(ок|к[а-яё]+|очн[а-яё]+)(?![а-яёa-z0-9])/i, label: '«Подарок» — запрещено правилами объявления (риск как передача аккаунта)' },
+  { rule: 'payment', re: /(?<![а-яёa-z0-9])(плат(ишь|ить|ежи?|ежом|ежа)|оплат[а-яё]*|оплачива[а-яё]*|купишь|покупаешь|покупк[а-яё]+)(?![а-яёa-z0-9])|(?<![а-яёa-z0-9])стоит\s+\d/i, label: 'Слова оплаты («платишь/оплата/купишь») — по правилам только «оформляешь»' },
 ];
 
 const PLATFORM_RE = /ps4|ps5|пс4|пс5|xbox|иксбокс|playstation|nintendo|switch/i;
 const DIGITAL_RE  = /оформляется в цифре/i;
+
+// ══════════════════════════════════════════
+// ПРАВИЛА ПРОВЕРКИ ПО КАТЕГОРИЯМ (этап 3)
+// Заводские проверки стали именованными: категория может выключить любую.
+// Те же имена управляют и запретами в SYS-промпте — иначе Сканер и модель
+// разъезжаются (ровно тот рассинхрон, который чинили в F19). Пример: для
+// физического товара «купить» — обычное русское слово, а не юридический риск.
+// def(catId) — включено ли правило по умолчанию в этой категории.
+// ══════════════════════════════════════════
+const SCAN_RULES = [
+  { id: 'links',      label: 'Ссылки, QR и телефоны',        def: () => true },
+  { id: 'messenger',  label: 'Контакт через мессенджер',     def: () => true },
+  { id: 'account',    label: '«Аккаунт», «профиль»',         def: () => true },
+  { id: 'gift',       label: '«Подарок»',                    def: () => true },
+  { id: 'payment',    label: 'Слова оплаты («платишь», «купишь»)', def: () => true },
+  { id: 'price_label',label: '«Цена: N» как ярлык-ценник',   def: () => true },
+  { id: 'rub_word',   label: '«рублей»/«руб» в названии',    def: () => true },
+  { id: 'platform',   label: 'Платформа упомянута',          def: id => id === 'gaming_sub' || id === 'game' },
+  { id: 'digital_phrase', label: '«Оформляется в цифре»',    def: id => id === 'game' },
+  { id: 'game_price', label: 'Цена в названии и описании запрещена', def: id => id === 'game' },
+];
+
+// Включено ли правило для категории: сначала явная галочка, иначе заводской дефолт.
+function scanRuleOn(catId, ruleId) {
+  const rules = catDef(catId).scanRules;
+  if (rules && Object.prototype.hasOwnProperty.call(rules, ruleId)) return !!rules[ruleId];
+  return !!SCAN_RULES.find(r => r.id === ruleId)?.def(catId);
+}
 
 function checkAds(title, desc, category) {
   const full = title + '\n' + desc;
@@ -6314,25 +6468,31 @@ function checkAds(title, desc, category) {
     ok.push(`Длина названия: ${len}/50 символов`);
   }
 
+  const on = id => scanRuleOn(category, id);
+
   let forbiddenHit = false;
   for (const p of SCAN_ERRORS) {
+    if (!on(p.rule)) continue;
     if (p.re.test(full)) { errors.push(p.label); forbiddenHit = true; }
   }
-  if (!forbiddenHit && full.trim()) ok.push('Запрещённые ссылки и контакты не найдены');
+  if (!forbiddenHit && full.trim() && (on('links') || on('messenger') || on('account'))) {
+    ok.push('Запрещённые ссылки и контакты не найдены');
+  }
 
   const warnHits = [];
   for (const p of SCAN_WARNINGS) {
+    if (!on(p.rule)) continue;
     if (p.re.test(full)) warnHits.push(p);
   }
   // Не дублировать с ошибками о контактах
   for (const p of warnHits) {
-    const alreadyError = SCAN_ERRORS.some(e => e.re.test(full) && e.label.includes('Контакт'));
+    const alreadyError = SCAN_ERRORS.some(e => on(e.rule) && e.re.test(full) && e.label.includes('Контакт'));
     if (!alreadyError || (!p.label.includes('Telegram') && !p.label.includes('WhatsApp') && !p.label.includes('Viber'))) {
       warnings.push(p.label);
     }
   }
 
-  if (category === 'gaming_sub' || category === 'game') {
+  if (on('platform')) {
     if (!PLATFORM_RE.test(full)) {
       warnings.push('Платформа не упомянута — укажи PS4/PS5/Xbox и т.д.');
     } else {
@@ -6340,29 +6500,44 @@ function checkAds(title, desc, category) {
     }
   }
 
-  if (category === 'game') {
+  if (on('digital_phrase')) {
     if (!DIGITAL_RE.test(full)) {
       warnings.push('Нет фразы «оформляется в цифре» — обязательно для игр');
     } else {
       ok.push('«Оформляется в цифре» присутствует');
     }
+  }
+  if (on('game_price')) {
     if (/\d[\d\s]*₽|₽|\d+\s*руб|\d+\s*р\.|(?<![а-яёa-z0-9])руб(?![а-яёa-z0-9])/i.test(title)) {
       errors.push('Цена в названии — для игр ЗАПРЕЩЕНА');
     }
   }
 
-  if (/(?<![а-яёa-z0-9])рублей(?![а-яёa-z0-9])|(?<![а-яёa-z0-9])руб(?![а-яёa-z0-9])/i.test(title)) {
+  if (on('rub_word') && /(?<![а-яёa-z0-9])рублей(?![а-яёa-z0-9])|(?<![а-яёa-z0-9])руб(?![а-яёa-z0-9])/i.test(title)) {
     warnings.push('Слово «рублей»/«руб» в названии — используй символ ₽');
   }
 
-  if (category === 'game' && /\d[\d\s]*₽|\d+\s*руб|\d+\s*рублей|\d+\s*р(?![а-яёa-z0-9])/i.test(desc)) {
+  if (on('game_price') && /\d[\d\s]*₽|\d+\s*руб|\d+\s*рублей|\d+\s*р(?![а-яёa-z0-9])/i.test(desc)) {
     errors.push('Цена в описании игры — ЗАПРЕЩЕНА (клиент видит цену в поле Авито)');
   }
 
-  // F19: «цена: N» как ярлык-ценник (все категории). Для игр цена-с-валютой уже ошибка выше,
+  // F19: «цена: N» как ярлык-ценник. Для игр цена-с-валютой уже ошибка выше,
   // но голая «Цена: 3000» без ₽/руб её не триггерит — этот warning закрывает и такой пробел.
-  if (/(?<![а-яёa-z0-9])цена\s*[:—\-]?\s*\d/i.test(full)) {
+  if (on('price_label') && /(?<![а-яёa-z0-9])цена\s*[:—\-]?\s*\d/i.test(full)) {
     warnings.push('«Цена: N» как ярлык — по правилам сумму указывают без слова «цена» («… ₽», «оформляешь за …»)');
+  }
+
+  // Свои фразы категории (задаются в редакторе категорий)
+  const c = catDef(category);
+  for (const phrase of (c.scanForbid || [])) {
+    if (phrase && full.toLowerCase().includes(String(phrase).toLowerCase())) {
+      errors.push(`Запрещённое слово категории: «${phrase}»`);
+    }
+  }
+  for (const phrase of (c.scanRequire || [])) {
+    if (!phrase) continue;
+    if (full.toLowerCase().includes(String(phrase).toLowerCase())) ok.push(`Обязательная фраза «${phrase}» на месте`);
+    else warnings.push(`Нет обязательной фразы категории: «${phrase}»`);
   }
 
   return { errors, warnings, ok };
@@ -6390,10 +6565,16 @@ function scannerTabHTML() {
         <div class="field" style="max-width:280px">
           <label>Категория товара</label>
           <select id="scan-cat">
-            <option value="gaming_sub"${pre?.category==='gaming_sub'?' selected':''}>Игровая подписка</option>
-            <option value="ai_sub"${pre?.category==='ai_sub'?' selected':''}>AI-подписка</option>
-            <option value="game"${pre?.category==='game'?' selected':''}>Игра (+ проверка «оформляется в цифре»)</option>
-            <option value="digital"${pre?.category==='digital'?' selected':''}>Цифровой товар</option>
+            ${CATS.map(c => {
+              // Что именно проверяется в этой категории, видно прямо в списке —
+              // набор правил у категорий теперь разный (см. SCAN_RULES)
+              const marks = [
+                scanRuleOn(c.id, 'digital_phrase') ? '«оформляется в цифре»' : '',
+                scanRuleOn(c.id, 'game_price') ? 'без цены' : '',
+                scanRuleOn(c.id, 'payment') ? '' : 'слова оплаты разрешены',
+              ].filter(Boolean).join(', ');
+              return `<option value="${c.id}"${pre?.category === c.id ? ' selected' : ''}>${esc(c.label)}${marks ? ` (+ ${esc(marks)})` : ''}</option>`;
+            }).join('')}
           </select>
         </div>
         <div class="field">

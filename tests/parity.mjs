@@ -27,6 +27,42 @@ export const CASES = [
   { name: 'неизвестная категория', form: { category: 'нет-такой' } },
 ];
 
+// Тексты для сравнения Сканера: каждый бьёт по своему правилу.
+const SCAN_CASES = [
+  ['Doom для PS5', 'Игра оформляется в цифре на PS5. Отличный шутер.'],
+  ['Продам аккаунт PS Plus', 'Пишите в телеграм, дам профиль. Цена: 3000'],
+  ['PS Plus Extra 12 мес 3000 руб', 'Платишь один раз, подарок другу. https://example.com'],
+  ['Cyberpunk 2077 пс5 — 2500₽', 'Оформляется в цифре. Стоит 2500 рублей.'],
+  ['', ''],
+];
+
+// Системный промпт: категория теперь может выключать запреты, но при заводских
+// настройках текст обязан остаться прежним байт-в-байт.
+function sysSnapshot(page, cats) {
+  return page.evaluate(ids => {
+    const out = {};
+    for (const id of ids) {
+      // Старая версия не знает buildSys — там просто SYS
+      out[id] = typeof buildSys === 'function' ? buildSys(id) : SYS;
+    }
+    out.__none = typeof buildSys === 'function' ? buildSys(null) : SYS;
+    return out;
+  }, cats);
+}
+
+function scanSnapshot(page, cases) {
+  return page.evaluate(cs => {
+    const out = [];
+    for (const id of ['gaming_sub', 'ai_sub', 'digital', 'game']) {
+      for (const [title, desc] of cs) {
+        const r = checkAds(title, desc, id);
+        out.push(`${id} | ${title} :: E[${r.errors.join('; ')}] W[${r.warnings.join('; ')}] OK[${r.ok.join('; ')}]`);
+      }
+    }
+    return out;
+  }, cases);
+}
+
 // Снимаем промпт и валидацию настоящими функциями приложения.
 async function snapshot(page) {
   return page.evaluate(cases => {
@@ -66,6 +102,24 @@ export async function runParity(browser, base, t) {
       t.ok(`[${a[i].name}] валидация идентична`, a[i].miss === b[i].miss,
         `новая: ${a[i].miss}\n        старая: ${b[i].miss}`);
     }
+    // Системный промпт при заводских настройках категорий
+    const ids = ['gaming_sub', 'ai_sub', 'digital', 'game'];
+    const sysA = await sysSnapshot(cur.page, ids);
+    const sysB = await sysSnapshot(old.page, ids);
+    for (const id of [...ids, '__none']) {
+      t.ok(`[SYS ${id}] системный промпт идентичен`, sysA[id] === sysB[id],
+        `длины: новый ${sysA[id]?.length}, старый ${sysB[id]?.length}`);
+    }
+
+    // Сканер: набор правил стал категорийным, но заводское поведение обязано совпасть
+    const scanA = await scanSnapshot(cur.page, SCAN_CASES);
+    const scanB = await scanSnapshot(old.page, SCAN_CASES);
+    t.eq('число проверок сканера совпало', scanA.length, scanB.length);
+    let scanDiff = 0;
+    for (let i = 0; i < scanA.length; i++) if (scanA[i] !== scanB[i]) scanDiff++;
+    t.ok('вердикты Сканера идентичны во всех категориях', scanDiff === 0,
+      scanA.filter((s, i) => s !== scanB[i]).map((s, i) => `новый: ${s}`).join('\n        '));
+
     t.ok('консоль чистая (текущая версия)', cur.consoleErrors.length === 0, cur.consoleErrors.join('\n'));
   } finally {
     await cur.ctx.close(); await old.ctx.close();

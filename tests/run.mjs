@@ -3,6 +3,7 @@ import { chromium } from 'playwright';
 import { startServer, writeBaseline, makeReporter } from './lib.mjs';
 import { runParity } from './parity.mjs';
 import { runEditor } from './editor.mjs';
+import { runStage3 } from './stage3.mjs';
 import { runRegress } from './regress.mjs';
 
 const only = process.argv[2]; // node run.mjs parity|editor|regress — прогнать одну секцию
@@ -17,6 +18,7 @@ try {
   browser = await chromium.launch();
   if (!only || only === 'parity')  await runParity(browser, base, t);
   if (!only || only === 'editor')  await runEditor(browser, base, t);
+  if (!only || only === 'stage3')  await runStage3(browser, base, t);
   if (!only || only === 'regress') await runRegress(browser, base, t);
 } catch (e) {
   console.error('\nСтенд упал:', e);
