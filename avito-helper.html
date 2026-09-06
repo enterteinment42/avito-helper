@@ -887,6 +887,13 @@ function fdOptions(fd) {
   return Array.isArray(o) ? o : [];
 }
 
+// Допустимо ли текущее значение select. Пустой список опций (поле ещё не
+// заполнено в редакторе) ничего не ограничивает — тогда значение считаем годным.
+function selectValueOk(fd, v) {
+  const opts = fdOptions(fd);
+  return !opts.length || opts.includes(String(v));
+}
+
 // CATS пересобирается из встроенных + пользовательских: категория — это данные,
 // новая заводится в Настройках без правок кода. Потребители (селект формы,
 // catDef, Сканер, эталоны) читают CATS как раньше и о слоях не знают.
@@ -936,8 +943,10 @@ function fieldFromData(d) {
 function applyCatPatch(base, p) {
   if (!p || typeof p !== 'object') return base;
   const c = { ...base };
-  if (p.label) c.label = p.label;
-  if (p.pName) c.pName = p.pName;
+  // Сравнение с null, а не на truthy: пустая строка — это осознанная очистка поля
+  // в редакторе, и она обязана применяться, а не молча откатываться к заводскому
+  if (p.label != null) c.label = p.label;
+  if (p.pName != null) c.pName = p.pName;
 
   const fp = p.fields || {};
   let fields = base.fields
@@ -946,7 +955,7 @@ function applyCatPatch(base, p) {
       const patch = fp[fd.key];
       if (!patch) return fd;
       const out = { ...fd };
-      if (patch.label) out.label = patch.label;
+      if (patch.label != null) out.label = patch.label;
       if (patch.ph != null) out.ph = patch.ph;
       if (patch.isPrice) out.isPrice = true;
       // Снять обязательность можно только у поля с простым req: за reqCheck
@@ -974,7 +983,7 @@ function applyCatPatch(base, p) {
   // Патч правил — поверх заводского набора категории, а не вместо него:
   // иначе снятая одна галочка обнулила бы остальные заводские значения
   if (p.scanRules && Object.keys(p.scanRules).length) c.scanRules = { ...(base.scanRules || {}), ...p.scanRules };
-  if (p.visionHint) c.visionHint = p.visionHint;
+  if (p.visionHint != null) c.visionHint = p.visionHint;
   return c;
 }
 
@@ -1558,7 +1567,11 @@ const SYS_HEAD = `Ты — эксперт по созданию объявлен
 // а модель всё равно писала бы «оформляешь» — рассинхрон уровня F19.
 const SYS_BANS = [
   { rule: 'payment',     text: '- Слова оплаты: «платишь», «оплатишь», «оплата», «стоит», «купишь», «покупаешь» — ЗАПРЕЩЕНО. Вместо этого всегда используй «оформляешь», «оформить», «оформляется» (юридический момент)' },
-  { rule: 'price_label', text: '- Слово «цена» как ценник: «цена — 7500», «цена: 7500 руб» — ЗАПРЕЩЕНО. Допустимо только в контексте фиксации: «цена не изменится», «цена зафиксирована». Для указания суммы пиши «оформляешь за X руб» или просто «X руб»' },
+  // Хвост про «оформляешь» уместен только там, где слова оплаты запрещены.
+  // В категории, где «купить» разрешено (физтовар), он бы противоречил её же
+  // правилу «НЕ используй „оформляется“» — модель получала бы два указания разом.
+  { rule: 'price_label', text: cat => '- Слово «цена» как ценник: «цена — 7500», «цена: 7500 руб» — ЗАПРЕЩЕНО. Допустимо только в контексте фиксации: «цена не изменится», «цена зафиксирована». Для указания суммы пиши '
+      + (cat == null || scanRuleOn(cat, 'payment') ? '«оформляешь за X руб» или просто «X руб»' : 'просто «X руб»') },
   { rule: 'gift',        text: '- «В подарок», «подарок», «в качестве подарка» — ЗАПРЕЩЕНО в любом контексте' },
   { rule: 'account',     text: '- «Аккаунт», «учётная запись», «учетная запись», «профиль» — КАТЕГОРИЧЕСКИ ЗАПРЕЩЕНО. Авито банит объявления за продажу аккаунтов — это запрещённая категория товаров. Любое упоминание этих слов может привести к блокировке. Правильная нейтральная формулировка — «оформляется в цифре». НЕ пиши «оформляется в цифре на ваш аккаунт» — только «оформляется в цифре», без уточнений.' },
 ];
@@ -1589,7 +1602,9 @@ const SYS_TAIL = `
 function buildSys(category) {
   // Своё правило категории сюда НЕ дописывается: оно уже уходит в пользовательском
   // сообщении через catInfoBlock (c.extra) — иначе текст задваивался бы.
-  const bans = SYS_BANS.filter(b => category == null || scanRuleOn(category, b.rule)).map(b => b.text);
+  const bans = SYS_BANS
+    .filter(b => category == null || scanRuleOn(category, b.rule))
+    .map(b => typeof b.text === 'function' ? b.text(category) : b.text);
   return SYS_HEAD + (bans.length ? '\n' + bans.join('\n') : '') + SYS_TAIL;
 }
 
@@ -1694,6 +1709,16 @@ function catInfoBlock(f) {
     if (fd.pRender) { const s = fd.pRender(f); if (s) lines.push(s); continue; }
     if (!fd.p) continue; // поле не для промпта (цена игры, тумблеры)
     const v = fieldVal(f, fd);
+    // Тумблер без своего pRender: «Торг: false» в промпте — мусор, который модель
+    // примет за данные. Выключенный тумблер молчит, включённый называет себя.
+    if (fd.type === 'toggle') { if (v) lines.push(`${fd.p}: да`); continue; }
+    // Значение select, которого больше нет в списке (опцию убрали в редакторе),
+    // в промпт не отправляем: форма про него уже сказала «нет в списке», и уходить
+    // в модель оно не должно — ровно то, что обещает предупреждение в форме.
+    if (fd.type === 'select' && !selectValueOk(fd, v)) {
+      if (fd.pEmpty) lines.push(`${fd.p}: ${fd.pEmpty}`);
+      continue;
+    }
     const txt = fd.type === 'chips' ? v.join(', ') : String(v);
     lines.push(`${fd.p}: ${txt || fd.pEmpty || txt}${fd.pSuffix || ''}`);
   }
@@ -1743,7 +1768,11 @@ function validateForm(f = state.form) {
     if (fd.reqCheck) { const s = fd.reqCheck(f); if (s) miss.push(s); continue; }
     if (!fd.req) continue;
     const v = fieldVal(f, fd);
-    const empty = fd.type === 'chips' ? !v.length : !String(v).trim();
+    // Значение select вне списка равносильно незаполненному: в промпт оно не идёт
+    // (см. catInfoBlock), поэтому и генерацию с ним запускать нельзя
+    const empty = fd.type === 'chips' ? !v.length
+      : fd.type === 'select' ? !selectValueOk(fd, v) || !String(v).trim()
+      : !String(v).trim();
     if (empty) miss.push(fd.req);
   }
   return miss;
@@ -3062,7 +3091,7 @@ function formHTML() {
     <div class="field">
       <label>Категория</label>
       <select data-act="cat">
-        ${CATS.map(c => `<option value="${c.id}" ${f.category===c.id?'selected':''}>${c.label}</option>`).join('')}
+        ${CATS.map(c => `<option value="${esc(c.id)}" ${f.category===c.id?'selected':''}>${esc(c.label)}</option>`).join('')}
       </select>
     </div>
     ${catFields}
@@ -3434,7 +3463,7 @@ function catDraftFor(id) {
     const fields = base.fields.map(fd => ({
       key: fd.key, type: fd.type, builtin: true,
       code: CODE_FIELD_TYPES.includes(fd.type), // сроки/каталог игр: логика в коде
-      label: fp[fd.key]?.label || fd.label,
+      label: fp[fd.key]?.label ?? fd.label,
       ph: fp[fd.key]?.ph != null ? fp[fd.key].ph : (fd.ph || ''),
       hidden: !!fp[fd.key]?.hidden,
       req: fp[fd.key]?.req === false ? false : !!(fd.req || fd.reqCheck),
@@ -3454,9 +3483,9 @@ function catDraftFor(id) {
     }
     return {
       id, builtin: true, patched: !!Object.keys(p).length,
-      label: p.label || base.label, pName: p.pName || base.pName || '',
+      label: p.label ?? base.label, pName: p.pName ?? base.pName ?? '',
       extraText: p.extraText || '',
-      visionHint: p.visionHint || base.visionHint || '',
+      visionHint: p.visionHint ?? base.visionHint ?? '',
       scanRequire: (p.scanRequire || []).join('\n'),
       scanForbid:  (p.scanForbid  || []).join('\n'),
       scanRules: Object.fromEntries(SCAN_RULES.map(r => [r.id,
@@ -4826,8 +4855,12 @@ function cvInfogBuildLines() {
       const s = (Array.isArray(v) ? v.join(' / ') : String(v)).trim();
       if (s) others.push(`✔️ ${s.length > 40 ? s.slice(0, 39).trim() + '…' : s}`);
     }
-    // Цена — последней строкой, как у встроенных категорий: оставляем ей место
-    const price = priceFd ? String(fieldVal(f, priceFd)).replace(/\D/g, '') : '';
+    // Цена — последней строкой, как у встроенных категорий: оставляем ей место.
+    // Но если категория сама запрещает цену в тексте (правило game_price, у
+    // физтовара оно включено), на обложку её тоже не ставим — иначе Сканер
+    // ругается на ту же цифру, которую инфографика только что нарисовала.
+    const priceAllowed = priceFd && !scanRuleOn(f.category, 'game_price');
+    const price = priceAllowed ? String(fieldVal(f, priceFd)).replace(/\D/g, '') : '';
     L.push(...others.slice(0, price ? 3 : 4));
     if (price) L.push(`💲 ${price}₽`);
   }
@@ -6130,7 +6163,7 @@ function refsCardHTML() {
         <div class="field" style="min-width:170px">
           <label>Категория</label>
           <select id="ref-cat">
-            ${CATS.map(c => `<option value="${c.id}"${rf.category === c.id ? ' selected' : ''}>${c.label}</option>`).join('')}
+            ${CATS.map(c => `<option value="${esc(c.id)}"${rf.category === c.id ? ' selected' : ''}>${esc(c.label)}</option>`).join('')}
             <option value="other"${rf.category === 'other' ? ' selected' : ''}>Другое</option>
           </select>
         </div>
