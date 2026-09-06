@@ -746,6 +746,10 @@ const state = {
   db:       ls('avito_db', []),
   refs:     ls('avito_refs', []), // эталоны: объявления без инструмента + чужие удачные (журнал самообучения)
   dbForm:   { product: '', region: 'Москва', status: 'active', note: '' },
+  // Черновик эталона живёт в state, а не только в DOM: карточка эталонов лежит внутри
+  // вкладки Истории, а та перерисовывается целиком на КАЖДЫЙ символ в фильтре по товару
+  // (и на добавление/удаление записи) — вставленный длинный текст иначе молча пропадал.
+  refForm:  { source: 'mine', category: 'gaming_sub', title: '', desc: '' },
   dbEditId: null,
   dbFilter: { product: '', status: '' },
   conveyorMode: false,
@@ -1045,6 +1049,10 @@ function jCopied(el) {
       const item = state.batchResults[+el.dataset.jbi];
       v = item && item.variant; extra.region = item && item.region;
       extra.pos = +el.dataset.jbi;
+    } else if (el.dataset.jreph !== undefined) {
+      // Перефраз живёт только в DOM-боксе, в state его нет
+      v = document.getElementById(el.dataset.jreph)?._rephResult || null;
+      extra.fromRephrase = true;
     } else if (el.dataset.jfid !== undefined) {
       v = state.favorites.find(f => f._fid === +el.dataset.jfid);
       extra.fromFav = true; // копия из избранного — не из свежего набора
@@ -1788,19 +1796,25 @@ ${v.description}
         ${tlenHTML(nLen)}
       </div>
       <div class="copy-row" style="margin-bottom:8px">
-        <button class="btn-copy" data-act="copy" data-text="${tAttr}">📋 Название</button>
+        <button class="btn-copy" data-act="copy" data-text="${tAttr}" data-j="title" data-jreph="${boxId}">📋 Название</button>
       </div>
       <hr class="div">
       <div style="font-size:13px;color:var(--text2);white-space:pre-wrap;margin:8px 0">${esc(nv.description || '')}</div>
       <div class="copy-row">
-        <button class="btn-copy" data-act="copy" data-text="${dAttr}">📋 Описание</button>
-        <button class="btn-copy" data-act="copy-both" data-t="${tAttr}" data-d="${dAttr}">📋 Всё</button>
+        <button class="btn-copy" data-act="copy" data-text="${dAttr}" data-j="desc" data-jreph="${boxId}">📋 Описание</button>
+        <button class="btn-copy" data-act="copy-both" data-t="${tAttr}" data-d="${dAttr}" data-j="both" data-jreph="${boxId}">📋 Всё</button>
         <button class="btn-copy" data-act="reph-fav" data-vid="${vid}"${fidProp} style="color:var(--accent-h)">☆ В избранное</button>
         <button class="btn-copy" data-act="rephrase" data-vid="${vid}"${fidProp} style="color:var(--teal-h)">↺ Ещё</button>
       </div>
     </div>`;
 
-    box._rephResult = { ...nv, id: vid, _fid: Date.now() };
+    // Штампы исходного варианта переносим на перефраз: без них копия/избранное из этой
+    // панели не сшивались бы с цепочкой генерации, а сканер-бейдж был бы пустым
+    box._rephResult = {
+      ...nv, id: vid, _fid: Date.now(),
+      _chain: v._chain || null, _product: v._product || null, _category: v._category || null,
+      _scan: checkAds(nv.title || '', nv.description || '', v._category || state.form.category),
+    };
   } catch(e) {
     box.innerHTML = `<div style="padding:8px 12px;color:var(--err);font-size:13px">✗ ${esc(e.message)}</div>`;
   }
@@ -2851,12 +2865,30 @@ async function doStartSession() {
         const it = autoItems[i];
         const form = it.form || state.form;
         const webSearch = form.isPreorder && form.category === 'game';
+        const jT0 = Date.now();
         const text = await callAI([{ role: 'user', content: buildMsg(1, [], form) }], { webSearch });
-        autoVariants[it.id] = parseVariants(text)[0] || null;
+        const v = parseVariants(text)[0] || null;
+        // Это платные генерации, и раньше они не попадали в журнал вообще: путь «очередь →
+        // сессия постинга» выглядел как размещения без единой генерации, а posted уходил
+        // с пустой цепочкой. Штампуем как обычную генерацию.
+        if (v) {
+          const jChain = 'gen-' + Date.now() + '-' + i;
+          v._chain = jChain;
+          v._product = it.product || currentProductName(form);
+          v._category = form.category;
+          v._scan = checkAds(v.title || '', v.description || '', form.category);
+          jlog('generated', jChain, {
+            path: 'session', category: form.category, product: v._product, region: it.region || null,
+            provider: state.settings.provider, model: state.settings.provider === 'claude' ? state.settings.model : state.settings.orModel,
+            webSearch, latencyMs: Date.now() - jT0, variants: jVariants([v]),
+          });
+        }
+        autoVariants[it.id] = v;
         setProg(i + 1);
       }
     } catch(e) {
       toast('Ошибка генерации: ' + e.message);
+      jlog('error', null, { stage: 'generate_session', message: String(e.message || '').slice(0, 300) });
       state.loading = false;
       document.getElementById('session-overlay')?.remove();
       return;
@@ -4116,17 +4148,22 @@ function cvDrawGame(canvas, imgObj, opts) {
   cvDrawInfog(ctx, cw, ch, opts?.infog);
 }
 
-function cvDownload(canvas, name) {
+// meta (необязательно): { variant: N, spec: {...}, keepCounters: true } — для вариантов из
+// «✨ 4 варианта». spec описывает, чем вариант ПЕРЕОПРЕДЕЛИЛ живые настройки (иначе в журнале
+// четыре одинаковых записи, не описывающие ни один из вариантов), а keepCounters не даёт
+// «Скачать все 4» отдать счётчики сессии первому файлу и нули остальным трём.
+function cvDownload(canvas, name, meta) {
   const a = document.createElement('a');
   a.href = canvas.toDataURL('image/jpeg', 0.93);
   a.download = name || 'avito.jpg';
   a.click();
   // Журнал: скачивание = «эта обложка пошла в дело» — точный аналог posted для графики.
-  // Снимок настроек + накопленные счётчики действий за сессию канваса одной строкой.
+  const m = meta || {};
   jlog('cv_download', null, {
     name: name || 'avito.jpg', mode: cv.mode, layout: cv.layout, imageCount: cv.images.length,
     product: currentProductName(state.form), category: state.form.category,
-    settings: jCvSnapshot(), counters: jCvTakeCounters(),
+    variant: m.variant || null, variantSpec: m.spec || null, batch: !!m.batch,
+    settings: jCvSnapshot(), counters: m.keepCounters ? null : jCvTakeCounters(),
   });
 }
 
@@ -4161,7 +4198,7 @@ function cvGenerateVariations() {
     btn.addEventListener('click', () => {
       const tmp = document.createElement('canvas');
       cvDrawGame(tmp, img, vars[i]);
-      cvDownload(tmp, `game-var-${i+1}.jpg`);
+      cvDownload(tmp, `game-var-${i+1}.jpg`, { variant: i + 1, spec: vars[i] });
     });
   });
 }
@@ -4194,7 +4231,7 @@ function cvGenerateCollageVars() {
     btn.addEventListener('click', () => {
       const tmp = document.createElement('canvas');
       cvDrawCollage(tmp, { bg: vars[i].bg, padding: vars[i].padding, infog: vars[i].infog });
-      cvDownload(tmp, `collage-var-${i+1}.jpg`);
+      cvDownload(tmp, `collage-var-${i+1}.jpg`, { variant: i + 1, spec: vars[i] });
     });
   });
   grid._vars = vars;
@@ -5153,6 +5190,7 @@ function dbTabHTML() {
 
 function refsCardHTML() {
   const refs = state.refs || [];
+  const rf = state.refForm;
   const listHTML = refs.length ? `<div style="display:flex;flex-direction:column;gap:7px;margin-top:12px">
     ${[...refs].sort((a, b) => b.id - a.id).map(r => `<div class="preset-item">
       <span style="flex-shrink:0;font-size:11px;color:${r.source === 'mine' ? 'var(--teal-h)' : 'var(--accent-h)'}">${r.source === 'mine' ? '✍ моё' : '👀 чужое'}</span>
@@ -5172,25 +5210,25 @@ function refsCardHTML() {
         <div class="field" style="min-width:170px">
           <label>Источник</label>
           <select id="ref-source">
-            <option value="mine">✍ Моё, написано руками</option>
-            <option value="other">👀 Чужое, понравилось</option>
+            <option value="mine"${rf.source === 'mine' ? ' selected' : ''}>✍ Моё, написано руками</option>
+            <option value="other"${rf.source === 'other' ? ' selected' : ''}>👀 Чужое, понравилось</option>
           </select>
         </div>
         <div class="field" style="min-width:170px">
           <label>Категория</label>
           <select id="ref-cat">
-            ${CATS.map(c => `<option value="${c.id}">${c.label}</option>`).join('')}
-            <option value="other">Другое</option>
+            ${CATS.map(c => `<option value="${c.id}"${rf.category === c.id ? ' selected' : ''}>${c.label}</option>`).join('')}
+            <option value="other"${rf.category === 'other' ? ' selected' : ''}>Другое</option>
           </select>
         </div>
       </div>
       <div class="field">
         <label>Название объявления</label>
-        <input type="text" id="ref-title" placeholder="Как в объявлении на Авито" style="font-family:var(--fm);font-size:13px">
+        <input type="text" id="ref-title" placeholder="Как в объявлении на Авито" style="font-family:var(--fm);font-size:13px" value="${esc(rf.title)}">
       </div>
       <div class="field">
         <label>Описание</label>
-        <textarea id="ref-desc" rows="6" placeholder="Вставь полный текст описания..."></textarea>
+        <textarea id="ref-desc" rows="6" placeholder="Вставь полный текст описания...">${esc(rf.desc)}</textarea>
       </div>
       <button class="btn-gen" data-act="ref-add" style="width:auto;padding:9px 22px">+ Сохранить эталон</button>
     </div>
@@ -5198,7 +5236,14 @@ function refsCardHTML() {
   </div>`;
 }
 
-function bindRefsCard() { /* поля читаются по id в обработчике ref-add — отдельных биндов не нужно */ }
+// Зеркалим ввод в state.refForm — иначе перерисовка вкладки Истории (фильтр по товару
+// дёргает renderDb на каждый символ) стирала бы недописанный/вставленный эталон
+function bindRefsCard() {
+  document.getElementById('ref-source')?.addEventListener('change', e => { state.refForm.source = e.target.value; });
+  document.getElementById('ref-cat')?.addEventListener('change',    e => { state.refForm.category = e.target.value; });
+  document.getElementById('ref-title')?.addEventListener('input',   e => { state.refForm.title = e.target.value; });
+  document.getElementById('ref-desc')?.addEventListener('input',    e => { state.refForm.desc = e.target.value; });
+}
 
 function renderDb() {
   const el = document.getElementById('db-content');
@@ -5214,24 +5259,35 @@ function bindDbTab() {
     const r = new FileReader();
     r.onload = ev => {
       try {
-        const data = JSON.parse(ev.target.result);
-        if (!Array.isArray(data)) throw new Error('Ожидался массив');
+        const raw = JSON.parse(ev.target.result);
+        // v2 — объект {db, refs}; старые бэкапы — голый массив записей Истории
+        const data = Array.isArray(raw) ? raw : (Array.isArray(raw?.db) ? raw.db : null);
+        const refsIn = (!Array.isArray(raw) && Array.isArray(raw?.refs)) ? raw.refs : [];
+        if (!data) throw new Error('Ожидался массив записей или объект {db, refs}');
         if (data.some(r => typeof r?.product !== 'string')) throw new Error('В записях отсутствует поле "product"');
         // F14: раньше импорт молча ЗАМЕНЯЛ всю базу — бэкап со второго устройства стирал
         // локальную историю дублей без единого подтверждения. Теперь явно спрашиваем слияние
         // или замену, а замену дополнительно подтверждаем отдельно (двойная защита от потери).
-        const merge = confirm(`Файл содержит ${data.length} записей. Текущая база: ${state.db.length} записей.\n\nOK — слить с текущей базой (добавить новые, не трогая старые)\nОтмена — полностью заменить базу`);
+        const refsNote = refsIn.length ? ` и ${refsIn.length} эталонов` : '';
+        const merge = confirm(`Файл содержит ${data.length} записей${refsNote}. Текущая база: ${state.db.length} записей.\n\nOK — слить с текущей базой (добавить новые, не трогая старые)\nОтмена — полностью заменить базу`);
+        // Эталоны сливаются ВСЕГДА, даже при выборе «заменить»: замена относится к истории
+        // размещений, а терять ручные эталоны молча — ровно та ловушка, из-за которой
+        // они и не попадали в бэкап (дедуп по источнику+тексту, id могут совпасть у разных устройств)
+        const refKey = r => [r.source || '', r.category || '', (r.title || '').trim(), (r.desc || '').trim()].join('|');
+        const refsHave = new Set((state.refs || []).map(refKey));
+        const refsAdded = refsIn.filter(r => !refsHave.has(refKey(r)));
+        if (refsAdded.length) state.refs = [...(state.refs || []), ...refsAdded];
         if (merge) {
           const key = rec => [rec.product, rec.region, rec.title || '', rec.date || ''].join('|');
           const existing = new Set(state.db.map(key));
           const added = data.filter(rec => !existing.has(key(rec)));
           state.db = [...state.db, ...added];
           save();
-          toast(`Слияние: добавлено ${added.length} из ${data.length} (пропущено дублей: ${data.length - added.length})`);
+          toast(`Слияние: добавлено ${added.length} из ${data.length}${refsAdded.length ? `, эталонов ${refsAdded.length}` : ''} (пропущено дублей: ${data.length - added.length})`);
         } else {
           if (!confirm(`Точно заменить всю базу? Текущие ${state.db.length} записей будут удалены безвозвратно.`)) return;
           state.db = data; save();
-          toast(`База заменена: ${data.length} записей`);
+          toast(`База заменена: ${data.length} записей${refsAdded.length ? `, эталонов добавлено ${refsAdded.length}` : ''}`);
         }
         renderDb();
       } catch(err) { toast('Ошибка импорта: ' + err.message); }
@@ -5290,8 +5346,19 @@ function showFinalDialog(recId) {
       </div>
     </div>`;
     document.body.appendChild(ov);
-    ov.querySelector('#final-skip').addEventListener('click', () => ov.remove());
-    ov.addEventListener('click', e => { if (e.target === ov) ov.remove(); });
+    // Закрытие без сохранения: если текст уже вставлен, промах мимо карточки не должен
+    // молча его стирать — диалог сам не откроется повторно, доносить пришлось бы через Историю
+    const finalDirty = () => {
+      const t = (ov.querySelector('#final-title')?.value || '').trim();
+      const d = (ov.querySelector('#final-desc')?.value || '').trim();
+      return !!d || t !== (r.title || '').trim();
+    };
+    const closeFinal = () => {
+      if (finalDirty() && !confirm('Закрыть без сохранения? Вставленный финальный текст не сохранится.')) return;
+      ov.remove();
+    };
+    ov.querySelector('#final-skip').addEventListener('click', closeFinal);
+    ov.addEventListener('click', e => { if (e.target === ov) closeFinal(); });
     ov.querySelector('#final-save').addEventListener('click', () => {
       const ft = (ov.querySelector('#final-title')?.value || '').trim();
       const fdRaw = (ov.querySelector('#final-desc')?.value || '').trim();
@@ -6259,10 +6326,12 @@ document.addEventListener('click', e => {
       const grid = document.getElementById('cv-collage-vars-grid');
       const vars = grid?._vars;
       if (!vars) break;
+      // Счётчики сессии канваса относятся ко всей пачке — отдаём их последнему файлу,
+      // остальные помечаем keepCounters, иначе первый забирал бы всё, а трём доставались нули
       vars.forEach((v,i) => setTimeout(() => {
         const tmp = document.createElement('canvas');
         cvDrawCollage(tmp, { bg: v.bg, padding: v.padding, infog: v.infog });
-        cvDownload(tmp, `collage-var-${i+1}.jpg`);
+        cvDownload(tmp, `collage-var-${i+1}.jpg`, { variant: i + 1, spec: v, keepCounters: i < vars.length - 1, batch: true });
       }, i * 350));
       break;
     }
@@ -6274,7 +6343,7 @@ document.addEventListener('click', e => {
       vars.forEach((v,i) => setTimeout(() => {
         const tmp = document.createElement('canvas');
         cvDrawGame(tmp, img, v);
-        cvDownload(tmp, `game-var-${i+1}.jpg`);
+        cvDownload(tmp, `game-var-${i+1}.jpg`, { variant: i + 1, spec: v, keepCounters: i < vars.length - 1, batch: true });
       }, i * 350));
       break;
     }
@@ -6398,6 +6467,9 @@ document.addEventListener('click', e => {
       if (v) {
         state.favorites.push({ ...v, _fid: v._fid || Date.now() });
         save();
+        // Минуя toggleFav — значит fav_add надо писать здесь, иначе путь «перефраз → в избранное»
+        // при разборе выглядит неиспользуемым
+        jlog('fav_add', v._chain || null, { title: v.title || '', category: v._category || null, scan: jScanLevel(v), fromRephrase: true });
         refreshFavs();
         const cnt = document.getElementById('fav-cnt');
         if (cnt) cnt.textContent = state.favorites.length;
@@ -6485,6 +6557,11 @@ document.addEventListener('click', e => {
       if (state.favorites.some(f => (f.title || '') + (f.description || '') === key)) { toast('Уже в избранном'); break; }
       state.favorites.push({ ...v, _fid: Date.now() });
       save(); refreshFavs();
+      // Тоже мимо toggleFav — без этой строки пакетный путь выглядел бы мёртвым
+      jlog('fav_add', v._chain || null, {
+        title: v.title || '', category: v._category || null, scan: jScanLevel(v),
+        fromBatch: true, region: state.batchResults[i]?.region || null,
+      });
       toast('Сохранено в избранное');
       break;
     }
@@ -6514,12 +6591,16 @@ document.addEventListener('click', e => {
       showFinalDialog(+el.dataset.id); break;
 
     case 'ref-add': {
-      const title = (document.getElementById('ref-title')?.value || '').trim();
-      const desc  = (document.getElementById('ref-desc')?.value || '').trim();
+      // Значения берём из state.refForm (DOM может быть уже перерисован), но живое поле
+      // приоритетнее — на случай, если событие пришло раньше input-обработчика
+      const rf = state.refForm;
+      const title = ((document.getElementById('ref-title')?.value ?? rf.title) || '').trim();
+      const desc  = ((document.getElementById('ref-desc')?.value  ?? rf.desc)  || '').trim();
       if (!title && !desc) { toast('Вставьте название и/или описание эталона'); break; }
-      const source = document.getElementById('ref-source')?.value || 'mine';
-      const category = document.getElementById('ref-cat')?.value || 'other';
+      const source = document.getElementById('ref-source')?.value || rf.source || 'mine';
+      const category = document.getElementById('ref-cat')?.value || rf.category || 'other';
       state.refs.push({ id: Date.now(), source, category, title, desc, date: new Date().toLocaleDateString('ru') });
+      state.refForm = { source, category, title: '', desc: '' }; // черновик израсходован, источник/категорию помним
       save();
       jlog('reference_added', null, { source, category, title, description: desc });
       toast('Эталон сохранён');
@@ -6538,7 +6619,11 @@ document.addEventListener('click', e => {
     }
 
     case 'db-export': {
-      const blob = new Blob([JSON.stringify(state.db, null, 2)], { type: 'application/json' });
+      // Эталоны вносятся руками и нигде больше не хранятся — без них «бэкап Истории»
+      // терял их при чистке данных сайта или переезде на другое устройство.
+      // Формат-объект новый; импорт по-прежнему понимает и старый файл-массив.
+      const payload = { v: 2, exported: new Date().toISOString(), db: state.db, refs: state.refs || [] };
+      const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
       const a = document.createElement('a');
       a.href = URL.createObjectURL(blob);
       const slug = (state.settings.pageName || 'page').replace(/[^a-zа-яё0-9]/gi, '_').toLowerCase();
