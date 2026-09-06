@@ -430,6 +430,12 @@
     .vision-head { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
     .vision-head b { font-size: 13.5px; color: var(--text); }
     .vision-hint { font-size: 11px; color: var(--muted); }
+    /* Уточняющие чипы: модель не смогла различить версию по этому фото */
+    .vision-ask { display: flex; flex-direction: column; gap: 8px; background: var(--card3); border: 1px solid var(--border2); border-radius: var(--r); padding: 9px 11px; }
+    .vision-ask-head { font-size: 12px; color: var(--text2); font-weight: 600; }
+    .vision-ask-row { display: flex; flex-direction: column; gap: 5px; }
+    .vision-ask-label { font-size: 12px; color: var(--text2); }
+    .vision-ask-opts { display: flex; flex-wrap: wrap; gap: 6px; }
     .vision-row { display: flex; align-items: flex-start; gap: 10px; flex-wrap: wrap; }
     .vision-pick { display: flex; align-items: center; justify-content: center; width: 74px; height: 74px; flex: none; border-radius: var(--rs); border: 2px dashed var(--border2); background: var(--card3); color: var(--muted); font-size: 20px; cursor: pointer; overflow: hidden; transition: all .15s; }
     .vision-pick:hover { border-color: var(--teal); color: var(--teal); }
@@ -1411,7 +1417,7 @@ const J_UI_ACTS = new Set([
   'cv-download','cv-gen-vars','cv-gen-collage-vars','cv-dl-all-game','cv-dl-all-collage',
   'cv-igdb-fetch','cv-igdb-game-fetch','cv-mask-toggle','cv-to-toggle','cv-ig-toggle','cv-ig-fill',
   'db-export','db-add','db-final','ref-add','conv-photo',
-  'vision-recognize','vision-price','vision-apply-price','vision-covers','vision-undo',
+  'vision-recognize','vision-price','vision-apply-price','vision-covers','vision-undo','vision-pick',
 ]);
 
 // Копирование = «этот текст пошёл в дело» — главный сигнал выбора в текстовом контуре.
@@ -2640,12 +2646,21 @@ ${visionCatBlock()}
 - Значения полей — на русском, кроме оригинальных названий игр, сервисов и моделей техники.
 - В "fields" клади ТОЛЬКО ключи выбранной категории, остальные не упоминай вовсе.
 
+БЛОК "uncertain" — ВАРИАНТЫ НА ВЫБОР ЧЕЛОВЕКУ. Правило жёсткое, потому что лишний вопрос дороже уверенного ответа:
+- Давай варианты ТОЛЬКО тогда, когда по этому фото РАЗЛИЧИТЬ ФИЗИЧЕСКИ НЕВОЗМОЖНО: отличающий признак не попал в кадр, закрыт, засвечен, или перечисленные версии с этого ракурса выглядят одинаково.
+- Если признак ВИДЕН — вариантов не давай вообще, а в fields пиши точное значение. Уверенное распознавание ценнее перестраховки.
+- Не давай вариантов «на всякий случай», из вежливости или потому что бывают редкие ревизии. Сомнение в принципе — не повод.
+- Максимум 2 поля и максимум 4 варианта в каждом. Первым ставь наиболее вероятный — он же идёт в fields.
+- В "why" одной строкой скажи, ЧЕГО не хватает на фото, чтобы выбрать самому («панель в тени», «не видно разъёмов», «нет надписи на корпусе») — не «возможны варианты».
+- Нет ни одной такой неоднозначности — верни "uncertain": [].
+
 ФОРМАТ ОТВЕТА — ТОЛЬКО JSON, без единого слова до или после:
 {
   "recognized": "коротко, что на фото",
   "confidence": "high|medium|low",
   "category": "<id из списка выше>",
   "fields": { "<ключ поля этой категории>": "<значение>" },
+  "uncertain": [{ "field": "<ключ поля>", "options": ["<вариант 1>", "<вариант 2>"], "why": "чего не видно на фото" }],
   "notes": "одна строка доп. указаний генератору: состояние, комплектация, чем зацепить",
   "priceQuery": "поисковый запрос для рыночной цены, например: PlayStation 5 Slim бу цена авито"
 }`;
@@ -2716,8 +2731,55 @@ async function visionPick(file) {
 function visionClear() {
   if (visionBusy()) { toast('Дождитесь окончания запроса'); return; }
   state.vision = { dataUrl: null, media: null, loading: false, error: '', result: null, prevForm: null,
-                   priceLoading: false, price: null, applied: false, warn: '', appliedForm: '' };
+                   priceLoading: false, price: null, applied: false, warn: '', appliedForm: '',
+                   uncertain: [], picks: {} };
   reForm();
+}
+
+// Разбор блока «где модель не может выбрать сама». Принцип взят из скоринга
+// обложек в магазине: метка ставится по ФАКТУ, а не по ощущению модели, поэтому
+// здесь всё, что не является настоящей неоднозначностью, отсеивается:
+// неизвестное поле, единственный вариант, вариант не из списка опций.
+// Иначе получаем то же, что дало правило «™ не в конце строки» — 33 ложных из 37.
+function visionParseUncertain(r, catId) {
+  const src = Array.isArray(r?.uncertain) ? r.uncertain : [];
+  const fields = visionFields(catDef(catId));
+  const out = [];
+  for (const item of src) {
+    const fd = fields.find(x => x.key === item?.field);
+    if (!fd) continue;
+    let opts = (Array.isArray(item.options) ? item.options : []).map(String).map(s => s.trim()).filter(Boolean);
+    // Для поля со списком принимаем только значения из него — иначе чип подставил
+    // бы в форму то, чего select показать не может
+    const allowed = fdOptions(fd);
+    if (allowed.length) opts = opts.filter(o => allowed.includes(o));
+    opts = [...new Set(opts)].slice(0, 4);
+    if (opts.length < 2) continue; // один вариант — это не выбор, а просто значение
+    out.push({ field: fd.key, label: fd.label, options: opts, why: String(item.why || '').slice(0, 120) });
+    if (out.length === 2) break; // потолок из промпта: больше — это уже шум
+  }
+  return out;
+}
+
+// Выбор человека применяется к форме и запоминается: чип остаётся отмеченным,
+// чтобы было видно, что вопрос закрыт (в магазине это «липкое подтверждение»).
+function visionPick(key, val) {
+  const v = state.vision;
+  const item = (v.uncertain || []).find(u => u.field === key);
+  if (!item || !item.options.includes(val)) return;
+  const fd = catDef(state.form.category).fields.find(x => x.key === key);
+  if (!fd) return;
+  state.form[key] = fd.type === 'chips' ? [val] : val;
+  v.picks = { ...(v.picks || {}), [key]: val };
+  v.appliedForm = JSON.stringify(state.form); // выбор — часть применённого, а не правка человека
+  save();
+  jlog('vision_pick', null, {
+    field: key, label: item.label, picked: val, options: item.options,
+    suggested: item.options[0], changed: val !== item.options[0],
+    category: state.form.category, product: currentProductName(state.form),
+  });
+  reForm();
+  toast(`${item.label}: ${val}`);
 }
 
 // Раскладываем ответ модели по полям формы. Всё, что модель могла выдумать за
@@ -2797,7 +2859,17 @@ async function doVisionRecognize() {
     if (!v.prevForm || curForm !== v.appliedForm) v.prevForm = JSON.parse(curForm);
     v.warn = visionApplyToForm(r);
     v.applied = true;
+    // Неоднозначности разбираем ПОСЛЕ применения полей: категория уже выбрана,
+    // значит известно, какие поля вообще существуют
+    v.uncertain = visionParseUncertain(r, state.form.category);
+    v.picks = {};
     v.appliedForm = JSON.stringify(state.form); // с чем сравнивать в следующий раз
+    if (v.uncertain.length) {
+      jlog('vision_uncertain', null, {
+        category: state.form.category, product: currentProductName(state.form),
+        items: v.uncertain.map(u => ({ field: u.field, options: u.options, why: u.why })),
+      });
+    }
     jlog('vision', null, {
       phase: 'recognize', ok: true, category: state.form.category,
       recognized: String(r.recognized || '').slice(0, 200), confidence: r.confidence || '',
@@ -2871,7 +2943,8 @@ function visionUndoForm() {
   v.prevForm = null;
   // Результат распознавания оставляем (по нему ещё ищется цена), но помечаем,
   // что к форме он больше НЕ применён — иначе карточка врала бы «поля заполнены».
-  v.applied = false; v.warn = ''; v.appliedForm = '';
+  // Выбор из чипов относился к применённой форме — вместе с откатом он теряет смысл
+  v.applied = false; v.warn = ''; v.appliedForm = ''; v.picks = {};
   save(); reForm();
   toast('Форма возвращена к состоянию до распознавания');
 }
@@ -2944,6 +3017,17 @@ function visionCardHTML() {
         : !v.applied ? 'форма возвращена к прежнему состоянию — поля из фото не применены'
         : `→ категория «${esc(catLabel)}», поля формы заполнены${r.notes ? ` · доп. указания: ${esc(String(r.notes).slice(0, 120))}` : ''}`
       }</div>
+      ${(v.uncertain || []).length && v.applied ? `
+      <div class="vision-ask">
+        <div class="vision-ask-head">По фото не отличить — выберите сами:</div>
+        ${v.uncertain.map(u => `
+          <div class="vision-ask-row">
+            <div class="vision-ask-label">${esc(u.label)}${u.why ? ` <span class="vision-hint">— ${esc(u.why)}</span>` : ''}</div>
+            <div class="vision-ask-opts">
+              ${u.options.map(o => `<button class="chip ${(v.picks || {})[u.field] === o ? 'on' : ''}" data-act="vision-pick" data-k="${esc(u.field)}" data-val="${esc(o)}">${esc(o)}</button>`).join('')}
+            </div>
+          </div>`).join('')}
+      </div>` : ''}
       <div class="vision-btns">
         <button class="vision-btn" data-act="vision-price" ${busy ? 'disabled' : ''}>
           ${v.priceLoading ? '⏳ Ищу цены в сети…' : '💰 Узнать рыночную цену'}
@@ -7065,6 +7149,7 @@ document.addEventListener('click', e => {
     case 'vision-covers':      visionToCovers(); break;
     case 'vision-undo':        visionUndoForm(); break;
     case 'vision-clear':       visionClear(); break;
+    case 'vision-pick':        visionPick(el.dataset.k, el.dataset.val); break;
 
     case 'title-pick': {
       const id = +el.dataset.id;
