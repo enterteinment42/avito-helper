@@ -27,6 +27,16 @@ export const CASES = [
   { name: 'неизвестная категория', form: { category: 'нет-такой' } },
 ];
 
+// Осознанные отличия от baseline. Всё, чего здесь нет, обязано совпадать
+// байт-в-байт: список правится только вместе с решением изменить поведение.
+const EXPECTED_SYS_LINES = [
+  // Запрет штампа «Продаю…» — по прямому решению Дениса (2026-09-07)
+  '- «Продаю», «продам», «продаётся» — ЗАПРЕЩЕНО и в названии, и в описании. Так начинает половина Авито, объявление сразу теряется. Начинай с самого товара, выгоды или живой детали',
+];
+const EXPECTED_SCAN_LABELS = [
+  '«Продаю»/«продам» — штамп: начинай сразу с товара и его пользы',
+];
+
 // Тексты для сравнения Сканера: каждый бьёт по своему правилу.
 const SCAN_CASES = [
   ['Doom для PS5', 'Игра оформляется в цифре на PS5. Отличный шутер.'],
@@ -50,17 +60,18 @@ function sysSnapshot(page, cats) {
   }, cats);
 }
 
-function scanSnapshot(page, cases) {
-  return page.evaluate(cs => {
+function scanSnapshot(page, cases, drop = []) {
+  return page.evaluate(([cs, skip]) => {
     const out = [];
     for (const id of ['gaming_sub', 'ai_sub', 'digital', 'game']) {
       for (const [title, desc] of cs) {
         const r = checkAds(title, desc, id);
-        out.push(`${id} | ${title} :: E[${r.errors.join('; ')}] W[${r.warnings.join('; ')}] OK[${r.ok.join('; ')}]`);
+        const keep = arr => arr.filter(x => !skip.includes(x));
+        out.push(`${id} | ${title} :: E[${keep(r.errors).join('; ')}] W[${keep(r.warnings).join('; ')}] OK[${keep(r.ok).join('; ')}]`);
       }
     }
     return out;
-  }, cases);
+  }, [cases, drop]);
 }
 
 // Снимаем промпт и валидацию настоящими функциями приложения.
@@ -107,12 +118,17 @@ export async function runParity(browser, base, t) {
     const sysA = await sysSnapshot(cur.page, ids);
     const sysB = await sysSnapshot(old.page, ids);
     for (const id of [...ids, '__none']) {
-      t.ok(`[SYS ${id}] системный промпт идентичен`, sysA[id] === sysB[id],
-        `длины: новый ${sysA[id]?.length}, старый ${sysB[id]?.length}`);
+      // Из нового промпта вычитаем строки, которые добавлены осознанно, —
+      // всё остальное обязано совпасть дословно
+      const stripped = sysA[id].split('\n').filter(l => !EXPECTED_SYS_LINES.includes(l)).join('\n');
+      t.ok(`[SYS ${id}] системный промпт идентичен (кроме заявленных строк)`, stripped === sysB[id],
+        `длины: новый ${stripped.length}, старый ${sysB[id]?.length}`);
+      t.ok(`[SYS ${id}] заявленная строка действительно добавлена`,
+        EXPECTED_SYS_LINES.every(l => sysA[id].includes(l)));
     }
 
     // Сканер: набор правил стал категорийным, но заводское поведение обязано совпасть
-    const scanA = await scanSnapshot(cur.page, SCAN_CASES);
+    const scanA = await scanSnapshot(cur.page, SCAN_CASES, EXPECTED_SCAN_LABELS);
     const scanB = await scanSnapshot(old.page, SCAN_CASES);
     t.eq('число проверок сканера совпало', scanA.length, scanB.length);
     let scanDiff = 0;

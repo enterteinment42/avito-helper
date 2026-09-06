@@ -119,6 +119,34 @@ export async function runReview(browser, base, t) {
     t.ok('обычное значение select в промпте', /Тип: PS Plus Extra/.test(okVal.info), okVal.info);
     t.eq('и валидация молчит', okVal.miss, '');
 
+    // 6. Запрет штампа «Продаю…» (решение Дениса после живой проверки 2026-09-07)
+    const selling = await page.evaluate(() => {
+      state.catsCfg = { builtin: {}, custom: [] };
+      rebuildCats();
+      const w = (title, desc, cat) => checkAds(title, desc, cat).warnings.join(' | ');
+      return {
+        sell:  w('Продаю PS5', 'Отличная консоль', 'phys'),
+        sell2: w('PS5 недорого', 'Продам сегодня', 'game'),
+        sell3: w('PS5', 'Продаётся консоль', 'gaming_sub'),
+        // Соседние слова того же корня — не штамп, ругаться не должны
+        clean: w('PS5 белая', 'В продаже есть и другие игры, продавец на связи. Распродаю библиотеку.', 'phys'),
+        sys:   buildSys('phys'),
+        sysGame: buildSys('game'),
+      };
+    });
+    t.ok('«Продаю» в названии — предупреждение', /штамп/.test(selling.sell), selling.sell);
+    t.ok('«Продам» в описании тоже', /штамп/.test(selling.sell2), selling.sell2);
+    t.ok('«Продаётся» тоже', /штамп/.test(selling.sell3), selling.sell3);
+    t.ok('«в продаже», «продавец», «распродаю» — не штамп', !/штамп/.test(selling.clean), selling.clean);
+    t.ok('запрет попал в SYS физтовара', /«Продаю», «продам», «прода/.test(selling.sys));
+    t.ok('и в SYS игры', /«Продаю», «продам», «прода/.test(selling.sysGame));
+
+    // 7. Распознавание: версию, различимую по корпусу, называть можно
+    const vs = await page.evaluate(() => visionSys());
+    t.ok('промпт разрешает называть различимую ревизию', /не ленись разглядывать/.test(vs));
+    t.ok('и по-прежнему запрещает выдумывать невидимое', /НЕ додумывай объём памяти/.test(vs));
+    t.ok('признак PS5 Pro доехал до промпта', /три чёрные полосы/.test(vs));
+
     t.ok('консоль чистая', consoleErrors.length === 0, consoleErrors.join('\n'));
   } finally {
     await ctx.close();
