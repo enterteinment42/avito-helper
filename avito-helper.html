@@ -398,6 +398,27 @@
     .preset-item { display: flex; align-items: center; gap: 8px; padding: 7px 10px; border-radius: var(--r); background: var(--card2); border: 1px solid var(--border); }
     .preset-item-name { flex: 1; font-size: 13px; color: var(--text); }
     .preset-item-meta { font-size: 11px; color: var(--muted); }
+    /* ── Vision: распознавание товара по фото (направление 2а, план сближения с Айдентикой) ── */
+    .vision-card { background: var(--card2); border: 1px solid var(--border2); border-radius: var(--r); padding: 11px 12px; display: flex; flex-direction: column; gap: 9px; }
+    .vision-head { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+    .vision-head b { font-size: 13.5px; color: var(--text); }
+    .vision-hint { font-size: 11px; color: var(--muted); }
+    .vision-row { display: flex; align-items: flex-start; gap: 10px; flex-wrap: wrap; }
+    .vision-pick { display: flex; align-items: center; justify-content: center; width: 74px; height: 74px; flex: none; border-radius: var(--rs); border: 2px dashed var(--border2); background: var(--card3); color: var(--muted); font-size: 20px; cursor: pointer; overflow: hidden; transition: all .15s; }
+    .vision-pick:hover { border-color: var(--teal); color: var(--teal); }
+    .vision-pick img { width: 100%; height: 100%; object-fit: cover; display: block; }
+    .vision-btns { display: flex; flex-wrap: wrap; gap: 6px; align-items: flex-start; }
+    .vision-btn { padding: 6px 12px; font-size: 12px; border-radius: var(--rs); background: var(--card3); border: 1px solid var(--border2); color: var(--text2); cursor: pointer; font-family: var(--ft); white-space: nowrap; transition: all .15s; }
+    .vision-btn:hover:not(:disabled) { border-color: var(--teal); color: var(--teal-h); }
+    .vision-btn:disabled { opacity: .45; cursor: not-allowed; }
+    .vision-btn-main { background: var(--teal-d); border-color: var(--teal); color: var(--teal-h); }
+    .vision-res { background: var(--card3); border: 1px solid var(--border); border-radius: var(--rs); padding: 9px 11px; display: flex; flex-direction: column; gap: 7px; }
+    .vision-res-top { font-size: 13px; color: var(--text); display: flex; align-items: center; gap: 7px; flex-wrap: wrap; }
+    .vision-conf { font-size: 10.5px; font-family: var(--fm); border-radius: 10px; padding: 1px 7px; border: 1px solid; }
+    .vision-res-sub { font-size: 11.5px; color: var(--muted); }
+    .vision-price-box { border-top: 1px dashed var(--border2); padding-top: 7px; font-size: 12.5px; color: var(--text2); display: flex; flex-direction: column; gap: 5px; }
+    .vision-err { font-size: 12px; color: var(--err); background: rgba(239,68,68,.08); border: 1px solid rgba(239,68,68,.25); border-radius: var(--rs); padding: 7px 10px; }
+
     .batch-toggle-row { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; }
     .batch-toggle-label { font-size: 13px; color: var(--text2); cursor: pointer; user-select: none; }
     .batch-regions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
@@ -739,6 +760,16 @@ const state = {
   presets:   ls('avito_presets', []),
   postSession: { active: false, idx: 0, items: [] },
   queueForm: { product: '', region: 'Москва', source: 'auto', favId: null },
+  // Направление 2а (сближение с Айдентикой): распознавание товара по фото.
+  // Сознательно НЕ персистится — фото весит сотни КБ и делило бы квоту localStorage
+  // с реальными данными продавца (то же правило, что у журнала самообучения).
+  vision: {
+    dataUrl: null, media: null,        // подготовленное (ужатое) фото и base64-payload для API
+    loading: false, error: '',
+    result: null,                      // { recognized, confidence, category, fields, notes, priceQuery }
+    prevForm: null,                    // снимок формы ДО заполнения — для «↩ вернуть форму»
+    priceLoading: false, price: null,  // { low, typical, high, comment }
+  },
 };
 
 // ══════════════════════════════════════════
@@ -1001,6 +1032,7 @@ const J_UI_ACTS = new Set([
   'cv-download','cv-gen-vars','cv-gen-collage-vars','cv-dl-all-game','cv-dl-all-collage',
   'cv-igdb-fetch','cv-igdb-game-fetch','cv-mask-toggle','cv-to-toggle','cv-ig-toggle','cv-ig-fill',
   'db-export','db-add','db-final','ref-add','conv-photo',
+  'vision-recognize','vision-price','vision-apply-price','vision-covers','vision-undo',
 ]);
 
 // Копирование = «этот текст пошёл в дело» — главный сигнал выбора в текстовом контуре.
@@ -1198,9 +1230,12 @@ async function callAI(messages, opts = {}) {
   // чаще давала не крючок, а случайный набор слов (аудит Fable 5). 0.8 всё ещё
   // даёт разнообразие, нужное для антидубля между вариантами/регионами.
   const temperature = opts.temperature ?? 0.8;
+  // opts.system — задача не про генерацию объявления (напр. распознавание товара по фото):
+  // общий SYS с правилами Авито там только мешает, и пользовательский customSys к ней не относится.
+  const system = opts.system || (state.settings.customSys ? SYS + '\n\n' + state.settings.customSys : SYS);
 
   if (provider === 'claude') {
-    const body = { model, max_tokens: opts.max_tokens || 4000, temperature, system: state.settings.customSys ? SYS + '\n\n' + state.settings.customSys : SYS, messages };
+    const body = { model, max_tokens: opts.max_tokens || 4000, temperature, system, messages };
     if (opts.webSearch) body.tools = [{ type: 'web_search_20250305', name: 'web_search' }];
     const r = await fetch(PROXY_CLAUDE, {
       method: 'POST',
@@ -1224,7 +1259,7 @@ async function callAI(messages, opts = {}) {
       headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + getProxyToken() },
       body: JSON.stringify({
         model: orModel, max_tokens: opts.max_tokens || 4000, temperature,
-        messages: [{ role: 'system', content: state.settings.customSys ? SYS + '\n\n' + state.settings.customSys : SYS }, ...messages],
+        messages: [{ role: 'system', content: system }, ...messages],
       }),
     });
     if (!r.ok) {
@@ -2161,6 +2196,295 @@ function refreshBatchResults() {
 }
 
 // ══════════════════════════════════════════
+// VISION: РАСПОЗНАВАНИЕ ТОВАРА ПО ФОТО
+// Направление 2а плана сближения с Айдентикой. Идёт через уже работающий
+// /api/claude (прокси пересылает тело как есть — vision-блоки проходят без
+// правок на VPS, в отличие от направления 2б, которому нужен /api/openrouter).
+// Цена — отдельной кнопкой с веб-поиском: платный поиск не жжём на каждом
+// фото и не подставляем цифру молча.
+// ══════════════════════════════════════════
+
+const VISION_MAX_PX = 1568; // рекомендация Anthropic: больший размер модель всё равно ужмёт сама
+
+const VISION_SYS = `Ты — помощник продавца на Авито. По фотографии определяешь, ЧТО это за товар, и заполняешь карточку товара для генератора объявлений.
+
+КАТЕГОРИЯ — строго одна из четырёх, других нет:
+- "game" — ЦИФРОВАЯ игра (обложка игры, витрина стора, ключ). Физический диск в коробке сюда НЕ относится.
+- "gaming_sub" — игровая подписка: PS Plus Essential / PS Plus Extra / PS Plus Deluxe / EA Play / Game Pass Ultimate.
+- "ai_sub" — AI-подписка: Claude Pro, Claude Max, ChatGPT Plus, ChatGPT Pro, Google AI Pro, Cursor, Antigravity.
+- "digital" — ВСЁ ОСТАЛЬНОЕ, включая физические товары: консоли, геймпады, гарнитуры, диски в коробке, техника, вещи.
+
+ПРАВИЛА:
+- Пиши только то, что реально видно на фото. НЕ додумывай объём памяти, ревизию, комплектацию, год — если этого не видно на самом товаре или упаковке.
+- Для физического товара в поле digitalDesc опиши состояние и комплектацию ровно по фото: коробка есть/нет, провода, следы использования, царапины, потёртости.
+- Если разобрать невозможно (темно, размыто, товара не видно) — поставь confidence "low" и объясни в recognized, что именно мешает.
+- Цену НЕ придумывай никогда — её узнают отдельно веб-поиском.
+- Платформы бери строго из списков: для игры — PS4, PS5, Xbox One, Xbox Series; для подписки — PS4, PS5, Xbox.
+- Значения полей — на русском, кроме оригинальных названий игр, сервисов и моделей техники.
+- Заполняй только те поля, которые относятся к выбранной категории; остальные оставь пустыми.
+
+ФОРМАТ ОТВЕТА — ТОЛЬКО JSON, без единого слова до или после:
+{
+  "recognized": "коротко, что на фото",
+  "confidence": "high|medium|low",
+  "category": "game|gaming_sub|ai_sub|digital",
+  "fields": {
+    "gameName": "", "gamePlatforms": [], "gameGenre": "",
+    "subType": "", "platforms": [],
+    "aiService": "", "aiFeatures": "",
+    "digitalName": "", "digitalDesc": ""
+  },
+  "notes": "одна строка доп. указаний генератору: состояние, комплектация, чем зацепить",
+  "priceQuery": "поисковый запрос для рыночной цены, например: PlayStation 5 Slim бу цена авито"
+}`;
+
+// Ужимаем фото до отправки: телефонный снимок на 4-12 МБ упёрся бы в лимит тела
+// прокси (10 МБ, а base64 — это ещё +33%), при том что модель всё равно работает
+// с уменьшенной копией. Заодно нормализуем формат в JPEG (HEIC/PNG/что угодно).
+function visionPrepFile(file) {
+  return new Promise((resolve, reject) => {
+    if (!file || !file.type || !file.type.startsWith('image/')) { reject(new Error('Это не изображение')); return; }
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => {
+      try {
+        const k = Math.min(1, VISION_MAX_PX / Math.max(img.naturalWidth || 1, img.naturalHeight || 1));
+        const w = Math.max(1, Math.round((img.naturalWidth  || 1) * k));
+        const h = Math.max(1, Math.round((img.naturalHeight || 1) * k));
+        const c = document.createElement('canvas');
+        c.width = w; c.height = h;
+        c.getContext('2d').drawImage(img, 0, 0, w, h);
+        const dataUrl = c.toDataURL('image/jpeg', 0.85);
+        URL.revokeObjectURL(url);
+        resolve({ dataUrl, media_type: 'image/jpeg', data: dataUrl.slice(dataUrl.indexOf(',') + 1), w, h });
+      } catch (e) { URL.revokeObjectURL(url); reject(e); }
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('Не удалось прочитать фото')); };
+    img.src = url;
+  });
+}
+
+async function visionPick(file) {
+  const v = state.vision;
+  try {
+    const prep = await visionPrepFile(file);
+    v.dataUrl = prep.dataUrl;
+    v.media = { media_type: prep.media_type, data: prep.data };
+    v.error = ''; v.result = null; v.price = null; v.prevForm = null;
+    reForm();
+  } catch (e) {
+    v.error = e.message || 'Не удалось прочитать фото';
+    reForm();
+  }
+}
+
+function visionClear() {
+  state.vision = { dataUrl: null, media: null, loading: false, error: '', result: null, prevForm: null, priceLoading: false, price: null };
+  reForm();
+}
+
+// Раскладываем ответ модели по полям формы. Всё, что модель могла выдумать за
+// пределами известных списков, отсекаем здесь — форма не должна получить
+// платформу «PS6» или тип подписки, которого нет в каталоге.
+function visionApplyToForm(r) {
+  const f = state.form;
+  const fl = r.fields || {};
+  const pick = (arr, allowed) => (Array.isArray(arr) ? arr : []).map(String).filter(x => allowed.includes(x));
+  const cat = CATS.some(c => c.id === r.category) ? r.category : 'digital';
+  f.category = cat;
+
+  if (cat === 'game') {
+    if (fl.gameName)  f.gameName  = String(fl.gameName);
+    if (fl.gameGenre) f.gameGenre = String(fl.gameGenre);
+    const plats = pick(fl.gamePlatforms, GAME_PLATS);
+    if (plats.length) f.gamePlatforms = plats;
+  } else if (cat === 'gaming_sub') {
+    if (SUB_TYPES.includes(fl.subType)) f.subType = fl.subType;
+    const plats = pick(fl.platforms, SUB_PLATS);
+    if (plats.length) f.platforms = plats;
+  } else if (cat === 'ai_sub') {
+    if (fl.aiService) f.aiService = AI_SERVICES.includes(fl.aiService) ? fl.aiService : 'Другой';
+    if (fl.aiFeatures) f.aiFeatures = String(fl.aiFeatures);
+  } else {
+    if (fl.digitalName) f.digitalName = String(fl.digitalName);
+    if (fl.digitalDesc) f.digitalDesc = String(fl.digitalDesc);
+  }
+  if (r.notes) f.notes = String(r.notes).slice(0, 300);
+  save();
+}
+
+async function doVisionRecognize() {
+  const v = state.vision;
+  if (v.loading || !v.media) return;
+  v.loading = true; v.error = ''; v.price = null;
+  reForm();
+  const jT0 = Date.now();
+  try {
+    const content = [
+      { type: 'image', source: { type: 'base64', media_type: v.media.media_type, data: v.media.data } },
+      { type: 'text',  text: 'Определи товар на фото и заполни карточку по правилам. Ответ — только JSON.' },
+    ];
+    // provider жёстко claude: у OpenRouter другой формат картинок, и сам эндпоинт
+    // на VPS отсутствует (Bug #9) — молча уводить распознавание в 404 нельзя.
+    const text = await callAI([{ role: 'user', content }], {
+      provider: 'claude', system: VISION_SYS, max_tokens: 1200, temperature: 0.2,
+    });
+    const r = JSON.parse(extractJSON(text));
+    if (!r || typeof r !== 'object') throw new Error('Модель вернула не JSON');
+    v.result = r;
+    v.prevForm = JSON.parse(JSON.stringify(state.form)); // снимок ДО заполнения — для отката
+    visionApplyToForm(r);
+    jlog('vision', null, {
+      phase: 'recognize', ok: true, category: state.form.category,
+      recognized: String(r.recognized || '').slice(0, 200), confidence: r.confidence || '',
+      product: currentProductName(state.form), model: state.settings.model,
+      latencyMs: Date.now() - jT0,
+    });
+    toast('Распознано — поля формы заполнены');
+  } catch (e) {
+    v.error = e.message || String(e);
+    console.error(e);
+    jlog('error', null, { stage: 'vision_recognize', message: String(e.message || '').slice(0, 300), latencyMs: Date.now() - jT0 });
+  } finally {
+    v.loading = false;
+    reForm();
+  }
+}
+
+async function doVisionPrice() {
+  const v = state.vision;
+  if (v.priceLoading || !v.result) return;
+  v.priceLoading = true; v.error = '';
+  reForm();
+  const jT0 = Date.now();
+  try {
+    const q = v.result.priceQuery || v.result.recognized || currentProductName(state.form);
+    const msg = `Найди в интернете актуальную цену в России на этот товар: ${q}.
+Ориентируйся на Авито и маркетплейсы, на текущий месяц. Учитывай состояние и комплектацию: ${v.result.notes || 'не указано'}.
+Ответ — ТОЛЬКО JSON, без пояснений:
+{"low": число, "typical": число, "high": число, "comment": "одна строка: от чего зависит разброс"}`;
+    const text = await callAI([{ role: 'user', content: msg }], {
+      provider: 'claude', system: VISION_SYS, webSearch: true, max_tokens: 2500, temperature: 0.2,
+    });
+    const p = JSON.parse(extractJSON(text));
+    const num = x => { const n = Math.round(Number(x)); return Number.isFinite(n) && n > 0 ? n : null; };
+    v.price = { low: num(p.low), typical: num(p.typical), high: num(p.high), comment: String(p.comment || '') };
+    if (!v.price.typical && !v.price.low) throw new Error('Не удалось разобрать цены в ответе');
+    jlog('vision', null, {
+      phase: 'price', ok: true, category: state.form.category, query: String(q).slice(0, 200),
+      low: v.price.low, typical: v.price.typical, high: v.price.high, latencyMs: Date.now() - jT0,
+    });
+  } catch (e) {
+    v.price = null;
+    v.error = e.message || String(e);
+    console.error(e);
+    jlog('error', null, { stage: 'vision_price', message: String(e.message || '').slice(0, 300), latencyMs: Date.now() - jT0 });
+  } finally {
+    v.priceLoading = false;
+    reForm();
+  }
+}
+
+// Подставить цену в поле формы. У игровой подписки полей цены несколько (по сроку),
+// однозначного адресата нет — там кнопка не показывается вовсе.
+function visionApplyPrice(val) {
+  const n = Math.round(Number(val));
+  if (!Number.isFinite(n) || n <= 0) return;
+  const cat = state.form.category;
+  if      (cat === 'game')    state.form.gamePrice    = String(n);
+  else if (cat === 'digital') state.form.digitalPrice = String(n);
+  else if (cat === 'ai_sub')  state.form.aiPrice      = String(n);
+  else return;
+  save(); reForm();
+  toast(`Цена ${n} ₽ подставлена в форму`);
+}
+
+function visionUndoForm() {
+  const v = state.vision;
+  if (!v.prevForm) return;
+  state.form = { ...DEF_FORM, ...v.prevForm };
+  v.prevForm = null;
+  save(); reForm();
+  toast('Форма возвращена к состоянию до распознавания');
+}
+
+// Фото товара чаще всего и есть будущая обложка — переносим в конструктор явно,
+// по кнопке: автоматический перенос затирал бы уже загруженную картинку в режиме
+// «Игра» и молча занимал бы слот в коллаже.
+function visionToCovers() {
+  const v = state.vision;
+  if (!v.dataUrl) return;
+  if (cv.mode === 'game' && cv.images.length && !confirm('В режиме «Игра» картинка одна — заменить текущую фотографией товара?')) return;
+  if (cv.mode === 'collage' && cv.images.length >= 10) { toast('Уже 10 картинок — удалите лишние в конструкторе'); return; }
+  const el = new Image();
+  el.onload = () => {
+    if (cv.mode === 'game') { cvRevokeGameBlobs(); cv.images = []; }
+    cv.images.push({ id: ++_cvId, url: v.dataUrl, el, transform: { scale: 1, ox: 0, oy: 0 } });
+    jlog('cv_images', null, { source: 'vision', mode: cv.mode, added: 1 });
+    state.tab = 'covers';
+    render();
+  };
+  el.onerror = () => toast('Не удалось перенести фото в обложки');
+  el.src = v.dataUrl;
+}
+
+function visionCardHTML() {
+  const v = state.vision;
+  const CONF = {
+    high:   { label: 'уверенно',   color: 'var(--ok)'   },
+    medium: { label: 'вероятно',   color: 'var(--warn)' },
+    low:    { label: 'не уверен',  color: 'var(--err)'  },
+  };
+  const r = v.result;
+  const conf = r ? (CONF[r.confidence] || CONF.medium) : null;
+  const catLabel = r ? (CATS.find(c => c.id === state.form.category)?.label || '') : '';
+  const p = v.price;
+  const canApplyPrice = ['game', 'digital', 'ai_sub'].includes(state.form.category);
+
+  return `<div class="vision-card">
+    <div class="vision-head">
+      <b>📷 Распознать по фото</b>
+      <span class="vision-hint">сфоткал товар — Claude заполнит поля формы</span>
+    </div>
+    <div class="vision-row">
+      <label class="vision-pick" for="vision-file" title="Выбрать фото товара">
+        ${v.dataUrl ? `<img src="${v.dataUrl}" alt="фото товара">` : '📷'}
+      </label>
+      <input type="file" id="vision-file" accept="image/*" style="display:none">
+      <div class="vision-btns">
+        <button class="vision-btn vision-btn-main" data-act="vision-recognize" ${!v.media || v.loading ? 'disabled' : ''}>
+          ${v.loading ? '⏳ Смотрю на фото…' : '🔍 Распознать'}
+        </button>
+        ${v.dataUrl ? `<button class="vision-btn" data-act="vision-covers" ${v.loading ? 'disabled' : ''}>🖼 → в обложки</button>` : ''}
+        ${v.dataUrl ? `<button class="vision-btn" data-act="vision-clear" ${v.loading ? 'disabled' : ''}>✕ Убрать фото</button>` : ''}
+      </div>
+    </div>
+    ${v.error ? `<div class="vision-err">⚠ ${esc(v.error)}</div>` : ''}
+    ${r ? `
+    <div class="vision-res">
+      <div class="vision-res-top">
+        <span class="vision-conf" style="color:${conf.color};border-color:${conf.color}">${conf.label}</span>
+        <span>${esc(r.recognized || '—')}</span>
+      </div>
+      <div class="vision-res-sub">→ категория «${esc(catLabel)}», поля формы заполнены${r.notes ? ` · доп. указания: ${esc(String(r.notes).slice(0, 120))}` : ''}</div>
+      <div class="vision-btns">
+        <button class="vision-btn" data-act="vision-price" ${v.priceLoading ? 'disabled' : ''}>
+          ${v.priceLoading ? '⏳ Ищу цены в сети…' : '💰 Узнать рыночную цену'}
+        </button>
+        ${v.prevForm ? `<button class="vision-btn" data-act="vision-undo">↩ Вернуть форму</button>` : ''}
+      </div>
+      ${p ? `
+      <div class="vision-price-box">
+        <div>Рынок: <b style="color:var(--text)">${p.low ? p.low + '–' : ''}${p.high || p.typical || ''} ₽</b>${p.typical ? `, типично <b style="color:var(--teal-h)">${p.typical} ₽</b>` : ''}</div>
+        ${p.comment ? `<div style="color:var(--muted);font-size:11.5px">${esc(p.comment)}</div>` : ''}
+        ${canApplyPrice && p.typical ? `<button class="vision-btn" data-act="vision-apply-price" data-val="${p.typical}" style="width:fit-content">↓ Подставить ${p.typical} ₽ в форму</button>`
+          : `<div style="color:var(--muted);font-size:11.5px">${canApplyPrice ? '' : 'У подписки несколько сроков — впишите цены вручную в «Сроки и цены»'}</div>`}
+      </div>` : ''}
+    </div>` : ''}
+  </div>`;
+}
+
+// ══════════════════════════════════════════
 // FORM HTML
 // ══════════════════════════════════════════
 
@@ -2307,6 +2631,7 @@ function formHTML() {
       <span style="font-size:12px;color:var(--muted);">Пресетов нет —</span>
       <button class="btn-preset-save" data-act="preset-save">💾 Сохранить текущую форму как пресет</button>
     </div>`}
+    ${visionCardHTML()}
     <div class="field">
       <label>Категория</label>
       <select data-act="cat">
@@ -5621,6 +5946,14 @@ document.addEventListener('click', e => {
     case 'gen': doGenerate(); break;
     case 'gen-titles': doGenTitlesOnly(); break;
 
+    // Vision (направление 2а)
+    case 'vision-recognize':   doVisionRecognize(); break;
+    case 'vision-price':       doVisionPrice(); break;
+    case 'vision-apply-price': visionApplyPrice(el.dataset.val); break;
+    case 'vision-covers':      visionToCovers(); break;
+    case 'vision-undo':        visionUndoForm(); break;
+    case 'vision-clear':       visionClear(); break;
+
     case 'title-pick': {
       const id = +el.dataset.id;
       if (state.titleStep) {
@@ -6219,6 +6552,16 @@ document.addEventListener('click', e => {
 
 document.addEventListener('change', e => {
   const el = e.target;
+
+  // Vision: выбор фото товара (направление 2а). Сбрасываем value, чтобы повторный
+  // выбор того же файла снова дал событие change.
+  if (el.id === 'vision-file') {
+    const f = el.files && el.files[0];
+    el.value = '';
+    if (f) visionPick(f);
+    return;
+  }
+
   const act = el.dataset.act;
   if (!act) return;
 
