@@ -406,6 +406,7 @@
     .vision-row { display: flex; align-items: flex-start; gap: 10px; flex-wrap: wrap; }
     .vision-pick { display: flex; align-items: center; justify-content: center; width: 74px; height: 74px; flex: none; border-radius: var(--rs); border: 2px dashed var(--border2); background: var(--card3); color: var(--muted); font-size: 20px; cursor: pointer; overflow: hidden; transition: all .15s; }
     .vision-pick:hover { border-color: var(--teal); color: var(--teal); }
+    .vision-pick.busy { opacity: .45; cursor: not-allowed; pointer-events: none; }
     .vision-pick img { width: 100%; height: 100%; object-fit: cover; display: block; }
     .vision-btns { display: flex; flex-wrap: wrap; gap: 6px; align-items: flex-start; }
     .vision-btn { padding: 6px 12px; font-size: 12px; border-radius: var(--rs); background: var(--card3); border: 1px solid var(--border2); color: var(--text2); cursor: pointer; font-family: var(--ft); white-space: nowrap; transition: all .15s; }
@@ -771,7 +772,9 @@ const state = {
     dataUrl: null, media: null,        // подготовленное (ужатое) фото и base64-payload для API
     loading: false, error: '',
     result: null,                      // { recognized, confidence, category, fields, notes, priceQuery }
-    prevForm: null,                    // снимок формы ДО заполнения — для «↩ вернуть форму»
+    applied: false, warn: '',          // применены ли поля к форме сейчас + предупреждение о пустом разборе
+    appliedForm: '',                   // форма сразу после применения — по ней видно, правил ли её потом Денис
+    prevForm: null,                    // снимок формы ДО первого заполнения — для «↩ вернуть форму»
     priceLoading: false, price: null,  // { low, typical, high, comment }
   },
 };
@@ -2252,6 +2255,21 @@ const VISION_SYS = `Ты — помощник продавца на Авито. 
   "priceQuery": "поисковый запрос для рыночной цены, например: PlayStation 5 Slim бу цена авито"
 }`;
 
+// Отдельный промпт для шага цены. Раньше сюда уходил VISION_SYS — а он требует
+// схему распознавания и прямым текстом запрещает называть цену, то есть модель
+// имела полное право вернуть не тот JSON, и оплаченный веб-поиск сгорал впустую.
+const VISION_PRICE_SYS = `Ты — помощник продавца на Авито. Твоя задача — узнать реальную рыночную цену товара в России по данным из интернета.
+
+ПРАВИЛА:
+- Опирайся на найденные объявления и витрины, а не на память. Приоритет — Авито, затем маркетплейсы.
+- Цены — в рублях, за товар целиком, на текущий момент.
+- Учитывай состояние и комплектацию, если они указаны в запросе: за б/у без коробки цена ниже.
+- low — нижняя граница разумных предложений, high — верхняя, typical — цена, по которой товар реально уходит.
+- Если данных мало и разброс огромный — всё равно дай числа, а осторожность объясни в comment.
+
+ФОРМАТ ОТВЕТА — ТОЛЬКО JSON, без единого слова до или после:
+{"low": число, "typical": число, "high": число, "comment": "одна строка: от чего зависит разброс"}`;
+
 // Ужимаем фото до отправки: телефонный снимок на 4-12 МБ упёрся бы в лимит тела
 // прокси (10 МБ, а base64 — это ещё +33%), при том что модель всё равно работает
 // с уменьшенной копией. Заодно нормализуем формат в JPEG (HEIC/PNG/что угодно).
@@ -2278,13 +2296,20 @@ function visionPrepFile(file) {
   });
 }
 
+// Занят = идёт распознавание или поиск цены. Пока занят, фото менять и убирать
+// нельзя: запрос в полёте держит ссылку на state.vision и по возвращении записал
+// бы результат по СТАРОМУ фото в карточку, где уже показано новое.
+function visionBusy() { return state.vision.loading || state.vision.priceLoading; }
+
 async function visionPick(file) {
   const v = state.vision;
+  if (visionBusy()) { toast('Дождитесь окончания — запрос по текущему фото ещё идёт'); return; }
   try {
     const prep = await visionPrepFile(file);
     v.dataUrl = prep.dataUrl;
     v.media = { media_type: prep.media_type, data: prep.data };
     v.error = ''; v.result = null; v.price = null; v.prevForm = null;
+    v.applied = false; v.warn = ''; v.appliedForm = '';
     reForm();
   } catch (e) {
     v.error = e.message || 'Не удалось прочитать фото';
@@ -2293,7 +2318,9 @@ async function visionPick(file) {
 }
 
 function visionClear() {
-  state.vision = { dataUrl: null, media: null, loading: false, error: '', result: null, prevForm: null, priceLoading: false, price: null };
+  if (visionBusy()) { toast('Дождитесь окончания запроса'); return; }
+  state.vision = { dataUrl: null, media: null, loading: false, error: '', result: null, prevForm: null,
+                   priceLoading: false, price: null, applied: false, warn: '', appliedForm: '' };
   reForm();
 }
 
@@ -2304,27 +2331,40 @@ function visionApplyToForm(r) {
   const f = state.form;
   const fl = r.fields || {};
   const pick = (arr, allowed) => (Array.isArray(arr) ? arr : []).map(String).filter(x => allowed.includes(x));
-  const cat = CATS.some(c => c.id === r.category) ? r.category : 'digital';
+  const known = CATS.some(c => c.id === r.category);
+  const cat = known ? r.category : 'digital';
   f.category = cat;
+  let filled = 0; // сколько полей ЭТОЙ категории реально заполнено ответом модели
 
   if (cat === 'game') {
-    if (fl.gameName)  f.gameName  = String(fl.gameName);
-    if (fl.gameGenre) f.gameGenre = String(fl.gameGenre);
+    if (fl.gameName)  { f.gameName  = String(fl.gameName);  filled++; }
+    if (fl.gameGenre) { f.gameGenre = String(fl.gameGenre); filled++; }
     const plats = pick(fl.gamePlatforms, GAME_PLATS);
-    if (plats.length) f.gamePlatforms = plats;
+    if (plats.length) { f.gamePlatforms = plats; filled++; }
   } else if (cat === 'gaming_sub') {
-    if (SUB_TYPES.includes(fl.subType)) f.subType = fl.subType;
+    if (SUB_TYPES.includes(fl.subType)) { f.subType = fl.subType; filled++; }
     const plats = pick(fl.platforms, SUB_PLATS);
-    if (plats.length) f.platforms = plats;
+    if (plats.length) { f.platforms = plats; filled++; }
   } else if (cat === 'ai_sub') {
-    if (fl.aiService) f.aiService = AI_SERVICES.includes(fl.aiService) ? fl.aiService : 'Другой';
-    if (fl.aiFeatures) f.aiFeatures = String(fl.aiFeatures);
+    if (fl.aiService) { f.aiService = AI_SERVICES.includes(fl.aiService) ? fl.aiService : 'Другой'; filled++; }
+    if (fl.aiFeatures) { f.aiFeatures = String(fl.aiFeatures); filled++; }
   } else {
-    if (fl.digitalName) f.digitalName = String(fl.digitalName);
-    if (fl.digitalDesc) f.digitalDesc = String(fl.digitalDesc);
+    if (fl.digitalName) { f.digitalName = String(fl.digitalName); filled++; }
+    if (fl.digitalDesc) { f.digitalDesc = String(fl.digitalDesc); filled++; }
   }
   if (r.notes) f.notes = String(r.notes).slice(0, 300);
   save();
+
+  // Модель могла ответить категорией не из списка (напр. "Игра" вместо "game") —
+  // тогда мы падаем в «Цифровой товар», а её поля игры отбрасываются. Молчать
+  // об этом нельзя: карточка отрапортует «поля заполнены», и генерация уйдёт по
+  // пустой форме, сжигая токены.
+  if (!filled) {
+    return known
+      ? 'Модель не вернула ни одного поля — заполните форму вручную'
+      : `Категория «${String(r.category || '—').slice(0, 40)}» не из списка — форма переключена на «Цифровой товар», поля не заполнены`;
+  }
+  return '';
 }
 
 async function doVisionRecognize() {
@@ -2346,15 +2386,23 @@ async function doVisionRecognize() {
     const r = JSON.parse(extractJSON(text));
     if (!r || typeof r !== 'object') throw new Error('Модель вернула не JSON');
     v.result = r;
-    v.prevForm = JSON.parse(JSON.stringify(state.form)); // снимок ДО заполнения — для отката
-    visionApplyToForm(r);
+    // Снимок для отката: цель — вернуть то, что писал ЧЕЛОВЕК, а не выхлоп
+    // предыдущего распознавания. Поэтому обновляем его, только если форма с
+    // прошлого раза изменилась (Денис что-то поправил) или снимка ещё нет.
+    // Иначе два распознавания подряд подменили бы «прежнюю форму» результатом
+    // первого, и откат перестал бы доставать ручной ввод.
+    const curForm = JSON.stringify(state.form);
+    if (!v.prevForm || curForm !== v.appliedForm) v.prevForm = JSON.parse(curForm);
+    v.warn = visionApplyToForm(r);
+    v.applied = true;
+    v.appliedForm = JSON.stringify(state.form); // с чем сравнивать в следующий раз
     jlog('vision', null, {
       phase: 'recognize', ok: true, category: state.form.category,
       recognized: String(r.recognized || '').slice(0, 200), confidence: r.confidence || '',
       product: currentProductName(state.form), model: state.settings.model,
-      latencyMs: Date.now() - jT0,
+      latencyMs: Date.now() - jT0, warn: v.warn || '',
     });
-    toast('Распознано — поля формы заполнены');
+    toast(v.warn ? '⚠ ' + v.warn : 'Распознано — поля формы заполнены');
   } catch (e) {
     v.error = e.message || String(e);
     console.error(e);
@@ -2378,7 +2426,7 @@ async function doVisionPrice() {
 Ответ — ТОЛЬКО JSON, без пояснений:
 {"low": число, "typical": число, "high": число, "comment": "одна строка: от чего зависит разброс"}`;
     const text = await callAI([{ role: 'user', content: msg }], {
-      provider: 'claude', system: VISION_SYS, webSearch: true, max_tokens: 2500, temperature: 0.2,
+      provider: 'claude', system: VISION_PRICE_SYS, webSearch: true, max_tokens: 2500, temperature: 0.2,
     });
     const p = JSON.parse(extractJSON(text));
     const num = x => { const n = Math.round(Number(x)); return Number.isFinite(n) && n > 0 ? n : null; };
@@ -2418,6 +2466,9 @@ function visionUndoForm() {
   if (!v.prevForm) return;
   state.form = { ...DEF_FORM, ...v.prevForm };
   v.prevForm = null;
+  // Результат распознавания оставляем (по нему ещё ищется цена), но помечаем,
+  // что к форме он больше НЕ применён — иначе карточка врала бы «поля заполнены».
+  v.applied = false; v.warn = ''; v.appliedForm = '';
   save(); reForm();
   toast('Форма возвращена к состоянию до распознавания');
 }
@@ -2454,6 +2505,11 @@ function visionCardHTML() {
   const catLabel = r ? (CATS.find(c => c.id === state.form.category)?.label || '') : '';
   const p = v.price;
   const canApplyPrice = ['game', 'digital', 'ai_sub'].includes(state.form.category);
+  const busy = visionBusy();
+  // Диапазон: у модели могла не найтись часть границ — «1200– ₽» показывать нельзя
+  const bounds = [p?.low, p?.high].filter(Boolean);
+  const rangeTxt = bounds.length === 2 ? `${bounds[0]}–${bounds[1]}` : String(bounds[0] || p?.typical || '');
+  const showTypical = p?.typical && String(p.typical) !== rangeTxt;
 
   return `<div class="vision-card">
     <div class="vision-head">
@@ -2461,16 +2517,16 @@ function visionCardHTML() {
       <span class="vision-hint">сфоткал товар — Claude заполнит поля формы</span>
     </div>
     <div class="vision-row">
-      <label class="vision-pick" for="vision-file" title="Выбрать фото товара">
+      <label class="vision-pick ${busy ? 'busy' : ''}" ${busy ? '' : 'for="vision-file"'} title="${busy ? 'Идёт запрос — фото пока не сменить' : 'Выбрать фото товара'}">
         ${v.dataUrl ? `<img src="${v.dataUrl}" alt="фото товара">` : '📷'}
       </label>
-      <input type="file" id="vision-file" accept="image/*" style="display:none">
+      <input type="file" id="vision-file" accept="image/*" style="display:none" ${busy ? 'disabled' : ''}>
       <div class="vision-btns">
-        <button class="vision-btn vision-btn-main" data-act="vision-recognize" ${!v.media || v.loading ? 'disabled' : ''}>
+        <button class="vision-btn vision-btn-main" data-act="vision-recognize" ${!v.media || busy ? 'disabled' : ''}>
           ${v.loading ? '⏳ Смотрю на фото…' : '🔍 Распознать'}
         </button>
-        ${v.dataUrl ? `<button class="vision-btn" data-act="vision-covers" ${v.loading ? 'disabled' : ''}>🖼 → в обложки</button>` : ''}
-        ${v.dataUrl ? `<button class="vision-btn" data-act="vision-clear" ${v.loading ? 'disabled' : ''}>✕ Убрать фото</button>` : ''}
+        ${v.dataUrl ? `<button class="vision-btn" data-act="vision-covers" ${busy ? 'disabled' : ''}>🖼 → в обложки</button>` : ''}
+        ${v.dataUrl ? `<button class="vision-btn" data-act="vision-clear" ${busy ? 'disabled' : ''}>✕ Убрать фото</button>` : ''}
       </div>
     </div>
     ${v.error ? `<div class="vision-err">⚠ ${esc(v.error)}</div>` : ''}
@@ -2480,16 +2536,20 @@ function visionCardHTML() {
         <span class="vision-conf" style="color:${conf.color};border-color:${conf.color}">${conf.label}</span>
         <span>${esc(r.recognized || '—')}</span>
       </div>
-      <div class="vision-res-sub">→ категория «${esc(catLabel)}», поля формы заполнены${r.notes ? ` · доп. указания: ${esc(String(r.notes).slice(0, 120))}` : ''}</div>
+      <div class="vision-res-sub" ${v.warn ? 'style="color:var(--warn)"' : ''}>${
+        v.warn ? '⚠ ' + esc(v.warn)
+        : !v.applied ? 'форма возвращена к прежнему состоянию — поля из фото не применены'
+        : `→ категория «${esc(catLabel)}», поля формы заполнены${r.notes ? ` · доп. указания: ${esc(String(r.notes).slice(0, 120))}` : ''}`
+      }</div>
       <div class="vision-btns">
-        <button class="vision-btn" data-act="vision-price" ${v.priceLoading ? 'disabled' : ''}>
+        <button class="vision-btn" data-act="vision-price" ${busy ? 'disabled' : ''}>
           ${v.priceLoading ? '⏳ Ищу цены в сети…' : '💰 Узнать рыночную цену'}
         </button>
         ${v.prevForm ? `<button class="vision-btn" data-act="vision-undo">↩ Вернуть форму</button>` : ''}
       </div>
       ${p ? `
       <div class="vision-price-box">
-        <div>Рынок: <b style="color:var(--text)">${p.low ? p.low + '–' : ''}${p.high || p.typical || ''} ₽</b>${p.typical ? `, типично <b style="color:var(--teal-h)">${p.typical} ₽</b>` : ''}</div>
+        <div>Рынок: <b style="color:var(--text)">${rangeTxt} ₽</b>${showTypical ? `, типично <b style="color:var(--teal-h)">${p.typical} ₽</b>` : ''}</div>
         ${p.comment ? `<div style="color:var(--muted);font-size:11.5px">${esc(p.comment)}</div>` : ''}
         ${canApplyPrice && p.typical ? `<button class="vision-btn" data-act="vision-apply-price" data-val="${p.typical}" style="width:fit-content">↓ Подставить ${p.typical} ₽ в форму</button>`
           : `<div style="color:var(--muted);font-size:11.5px">${canApplyPrice ? '' : 'У подписки несколько сроков — впишите цены вручную в «Сроки и цены»'}</div>`}
@@ -5276,17 +5336,23 @@ function bindDbTab() {
         const refKey = r => [r.source || '', r.category || '', (r.title || '').trim(), (r.desc || '').trim()].join('|');
         const refsHave = new Set((state.refs || []).map(refKey));
         const refsAdded = refsIn.filter(r => !refsHave.has(refKey(r)));
-        if (refsAdded.length) state.refs = [...(state.refs || []), ...refsAdded];
+        // ВАЖНО: сами эталоны дописываются только ПОСЛЕ всех подтверждений (ниже).
+        // Раньше слияние стояло здесь, до второго confirm — и при отказе от замены
+        // базы функция выходила без save()/renderDb(): эталоны из файла уже лежали
+        // в памяти, в интерфейсе их не было, а на диск они уезжали молча при первом
+        // же постороннем save(). Отменил импорт — значит ничего не добавилось.
+        const mergeRefs = () => { if (refsAdded.length) state.refs = [...(state.refs || []), ...refsAdded]; };
         if (merge) {
           const key = rec => [rec.product, rec.region, rec.title || '', rec.date || ''].join('|');
           const existing = new Set(state.db.map(key));
           const added = data.filter(rec => !existing.has(key(rec)));
           state.db = [...state.db, ...added];
+          mergeRefs();
           save();
           toast(`Слияние: добавлено ${added.length} из ${data.length}${refsAdded.length ? `, эталонов ${refsAdded.length}` : ''} (пропущено дублей: ${data.length - added.length})`);
         } else {
           if (!confirm(`Точно заменить всю базу? Текущие ${state.db.length} записей будут удалены безвозвратно.`)) return;
-          state.db = data; save();
+          state.db = data; mergeRefs(); save();
           toast(`База заменена: ${data.length} записей${refsAdded.length ? `, эталонов добавлено ${refsAdded.length}` : ''}`);
         }
         renderDb();
