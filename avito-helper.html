@@ -691,12 +691,116 @@ const STYLES = [
   { id: 'custom',      label: '✏️ Свой'      },
 ];
 
+// ══════════════════════════════════════════
+// ДВИЖОК КАТЕГОРИЙ (направление 1, этап 1)
+// Категория — дескриптор-данные, а не ветка if/else: из него собираются поля
+// формы, блок промпта и проверка заполненности. Значения полей при этом живут
+// ПЛОСКИМИ ключами в state.form (gameName, subType, …) — на эти имена завязаны
+// ~40 мест (currentProductName, инфографика, подгрузка обложек с IGDB,
+// распознавание по фото, пресеты, снимок формы для ↻), поэтому дескриптор на
+// ключ ССЫЛАЕТСЯ, а не утаскивает значение внутрь себя.
+//
+// Поле: { key, type, label, ... }
+//   type       — text | num | area | select | chips | toggle | durations | subGames
+//   p          — подпись в промпте. Поля без p в промпт НЕ идут: цена игры,
+//                например, по правилам площадки в тексте объявления запрещена
+//   pRender(f) — своя строка промпта вместо «p: значение» (сроки, каталог игр)
+//   pEmpty     — чем заменить пустое значение в промпте
+//   req        — что дописать в «не хватает…», если поле пустое
+//   reqCheck(f)— своя проверка вместо req (возвращает текст нехватки или '')
+// ══════════════════════════════════════════
+
 const CATS = [
-  { id: 'gaming_sub', label: '🎮 Игровая подписка' },
-  { id: 'ai_sub',     label: '🧠 AI-подписка'      },
-  { id: 'digital',    label: '📦 Цифровой товар'   },
-  { id: 'game',       label: '🕹️ Игра'             },
+  {
+    id: 'gaming_sub', label: '🎮 Игровая подписка', pName: 'Игровая подписка', builtin: true,
+    fields: [
+      { key: 'subType', type: 'select', label: 'Тип подписки', options: () => SUB_TYPES, p: 'Тип' },
+      { key: 'platforms', type: 'chips', label: 'Платформы', options: () => SUB_PLATS,
+        p: 'Платформы', req: 'платформы' },
+      { key: 'durations', type: 'durations', label: 'Сроки и цены',
+        pRender: f => {
+          const durs = f.durations.filter(d => d.period && d.price)
+            .map(d => `  ${d.period}: ${d.price} руб`).join('\n');
+          return `Сроки и цены:\n${durs || '  (не указаны)'}`;
+        },
+        reqCheck: f => f.durations.some(d => String(d.price).trim())
+          ? '' : 'хотя бы одну цену в «Сроки и цены»' },
+      { key: 'games', type: 'subGames', label: 'Список игр',
+        pRender: f => {
+          const { core, masking } = buildGamesLists(f.subType);
+          const extraGames = f.games?.trim();
+          // Ручной ввод продавца считаем ядром — крючок можно брать и оттуда
+          const hookPool = [core, extraGames].filter(Boolean).join(', ');
+          return (hookPool || masking)
+            ? `Ключевые игры (крючок в названии — ТОЛЬКО отсюда, бери 1-2 из начала списка): ${hookPool || '(не указаны)'}
+Доп. игры для разнообразия ОПИСАНИЯ (в названии/крючке НЕ использовать): ${masking || '(нет)'}`
+            : `Список игр: (не указан)`;
+        },
+        reqCheck: f => {
+          const cat = getCatalogEntry(f.subType);
+          const hasCat = cat.core.length || cat.masking.length;
+          return (!hasCat && !(f.games || '').trim())
+            ? 'список игр (или заполните каталог в Настройках)' : '';
+        } },
+    ],
+  },
+  {
+    id: 'ai_sub', label: '🧠 AI-подписка', pName: 'AI-подписка', builtin: true,
+    fields: [
+      { key: 'aiService', type: 'select', label: 'Сервис', options: () => AI_SERVICES, p: 'Сервис' },
+      { key: 'aiDuration', type: 'select', label: 'Срок', options: () => DURATIONS, p: 'Срок' },
+      { key: 'aiPrice', type: 'num', label: 'Цена, ₽', ph: '2000', p: 'Цена', pSuffix: ' руб', req: 'цену' },
+      { key: 'aiFeatures', type: 'area', label: 'Ключевые фичи', rows: 3,
+        ph: 'Claude Code, Projects, Artifacts…', p: 'Фичи', pEmpty: '(не указаны)',
+        req: 'ключевые фичи' },
+    ],
+  },
+  {
+    id: 'digital', label: '📦 Цифровой товар', pName: 'Цифровой товар', builtin: true,
+    fields: [
+      { key: 'digitalName', type: 'text', label: 'Название товара', ph: 'Microsoft Office 2024',
+        p: 'Название', req: 'название товара' },
+      { key: 'digitalDesc', type: 'area', label: 'Описание', rows: 3,
+        ph: 'Что входит, для кого, ключевые возможности…', p: 'Описание', req: 'описание' },
+      { key: 'digitalPrice', type: 'num', label: 'Цена, ₽', p: 'Цена', pSuffix: ' руб', req: 'цену' },
+    ],
+  },
+  {
+    id: 'game', label: '🕹️ Игра', pName: 'Игра', builtin: true,
+    fields: [
+      { key: 'gameName', type: 'text', label: 'Название игры', ph: 'Cyberpunk 2077',
+        p: 'Название', req: 'название игры' },
+      { key: 'gamePlatforms', type: 'chips', label: 'Платформы', options: () => GAME_PLATS,
+        p: 'Платформы', req: 'платформы' },
+      // Цена игры намеренно БЕЗ p: в тексте объявления она запрещена (клиент видит её
+      // в поле Авито), поле нужно только для инфографики и подстановки рыночной цены.
+      { key: 'gamePrice', type: 'num', label: 'Цена, ₽' },
+      { key: 'gameGenre', type: 'text', label: 'Жанр', ph: 'Экшн, RPG…', p: 'Жанр' },
+      { key: 'isPreorder', type: 'toggle', label: '🔖 Предзаказ',
+        hint: 'AI поищет актуальные бонусы в сети' },
+    ],
+    extra: f => f.isPreorder ? `
+ЭТО ПРЕДЗАКАЗ. Найди через веб-поиск актуальные бонусы предзаказа для "${f.gameName}" и используй их в описании.
+Обязательно включи в описание:
+- Объяснение предзаказа БЕЗ путаницы: покупатель оформляет игру сейчас и СРАЗУ получает её в цифре — просто играть можно будет начиная с дня релиза. Не «платишь сейчас и ждёшь» — а «игра уже твоя, просто старт в день выхода»
+- Конкретные бонусы предзаказа (найди через поиск — скины, миссии, контент и т.п.)
+- Акцент: цена зафиксирована — даже если игра подорожает. Писать БЕЗ суммы: просто «Цена зафиксирована» или «стоимость не изменится» — никаких чисел и ₽
+В названии слово «предзаказ» — МОЖНО, но не обязательно. Иногда сильнее зайти с другого угла: топ-бонус, дата выхода, название игры без «предзаказа»` : '',
+  },
 ];
+
+// Категория по id. Неизвестная (например, удалённая пользовательская, оставшаяся
+// в сохранённой форме) не должна ронять рендер — отдаём первую.
+function catDef(id) { return CATS.find(c => c.id === id) || CATS[0]; }
+
+// Значение поля с безопасным дефолтом по типу: у пользовательской категории
+// ключа может ещё не быть в сохранённой форме.
+function fieldVal(f, fd) {
+  const v = f[fd.key];
+  if (fd.type === 'chips') return Array.isArray(v) ? v : [];
+  if (fd.type === 'toggle') return !!v;
+  return v == null ? '' : v;
+}
 
 const REGIONS = [
   'Москва','Санкт-Петербург','Новосибирск','Екатеринбург','Казань',
@@ -1338,52 +1442,16 @@ function parseVariants(text) {
 // Данные о товаре без стиля/количества/few-shot — общий блок,
 // переиспользуется и полной генерацией, и шагом «сначала заголовки».
 function catInfoBlock(f) {
-  if (f.category === 'gaming_sub') {
-    const durs = f.durations.filter(d => d.period && d.price)
-      .map(d => `  ${d.period}: ${d.price} руб`).join('\n');
-    const { core, masking } = buildGamesLists(f.subType);
-    const extraGames = f.games?.trim();
-    // Ручной ввод продавца считаем ядром — крючок можно брать и оттуда
-    const hookPool = [core, extraGames].filter(Boolean).join(', ');
-    const gamesBlock = (hookPool || masking)
-      ? `Ключевые игры (крючок в названии — ТОЛЬКО отсюда, бери 1-2 из начала списка): ${hookPool || '(не указаны)'}
-Доп. игры для разнообразия ОПИСАНИЯ (в названии/крючке НЕ использовать): ${masking || '(нет)'}`
-      : `Список игр: (не указан)`;
-    return `Категория: Игровая подписка
-Тип: ${f.subType}
-Платформы: ${f.platforms.join(', ')}
-Сроки и цены:\n${durs || '  (не указаны)'}
-${gamesBlock}`;
+  const c = catDef(f.category);
+  const lines = [`Категория: ${c.pName || c.label}`];
+  for (const fd of c.fields) {
+    if (fd.pRender) { const s = fd.pRender(f); if (s) lines.push(s); continue; }
+    if (!fd.p) continue; // поле не для промпта (цена игры, тумблеры)
+    const v = fieldVal(f, fd);
+    const txt = fd.type === 'chips' ? v.join(', ') : String(v);
+    lines.push(`${fd.p}: ${txt || fd.pEmpty || txt}${fd.pSuffix || ''}`);
   }
-
-  if (f.category === 'ai_sub') {
-    return `Категория: AI-подписка
-Сервис: ${f.aiService}
-Срок: ${f.aiDuration}
-Цена: ${f.aiPrice} руб
-Фичи: ${f.aiFeatures || '(не указаны)'}`;
-  }
-
-  if (f.category === 'digital') {
-    return `Категория: Цифровой товар
-Название: ${f.digitalName}
-Описание: ${f.digitalDesc}
-Цена: ${f.digitalPrice} руб`;
-  }
-
-  if (f.category === 'game') {
-    const preorderBlock = f.isPreorder ? `
-ЭТО ПРЕДЗАКАЗ. Найди через веб-поиск актуальные бонусы предзаказа для "${f.gameName}" и используй их в описании.
-Обязательно включи в описание:
-- Объяснение предзаказа БЕЗ путаницы: покупатель оформляет игру сейчас и СРАЗУ получает её в цифре — просто играть можно будет начиная с дня релиза. Не «платишь сейчас и ждёшь» — а «игра уже твоя, просто старт в день выхода»
-- Конкретные бонусы предзаказа (найди через поиск — скины, миссии, контент и т.п.)
-- Акцент: цена зафиксирована — даже если игра подорожает. Писать БЕЗ суммы: просто «Цена зафиксирована» или «стоимость не изменится» — никаких чисел и ₽
-В названии слово «предзаказ» — МОЖНО, но не обязательно. Иногда сильнее зайти с другого угла: топ-бонус, дата выхода, название игры без «предзаказа»` : '';
-    return `Категория: Игра
-Название: ${f.gameName}
-Платформы: ${f.gamePlatforms.join(', ')}
-Жанр: ${f.gameGenre}${preorderBlock}`;
-  }
+  return lines.join('\n') + (c.extra ? c.extra(f) : '');
 }
 
 function styleLabel(f) {
@@ -1422,22 +1490,12 @@ function buildMsg(overrideCount, excludeTitles = [], formOverride = null) {
 // Проверяет заполненность обязательных полей формы. Возвращает список того, чего не хватает.
 function validateForm(f = state.form) {
   const miss = [];
-  if (f.category === 'gaming_sub') {
-    if (!f.platforms.length) miss.push('платформы');
-    const cat = getCatalogEntry(f.subType);
-    const hasCat = cat.core.length || cat.masking.length;
-    if (!hasCat && !(f.games || '').trim()) miss.push('список игр (или заполните каталог в Настройках)');
-    if (!f.durations.some(d => String(d.price).trim())) miss.push('хотя бы одну цену в «Сроки и цены»');
-  } else if (f.category === 'ai_sub') {
-    if (!String(f.aiPrice).trim()) miss.push('цену');
-    if (!(f.aiFeatures || '').trim()) miss.push('ключевые фичи');
-  } else if (f.category === 'digital') {
-    if (!(f.digitalName || '').trim()) miss.push('название товара');
-    if (!(f.digitalDesc || '').trim()) miss.push('описание');
-    if (!String(f.digitalPrice).trim()) miss.push('цену');
-  } else if (f.category === 'game') {
-    if (!(f.gameName || '').trim()) miss.push('название игры');
-    if (!f.gamePlatforms.length) miss.push('платформы');
+  for (const fd of catDef(f.category).fields) {
+    if (fd.reqCheck) { const s = fd.reqCheck(f); if (s) miss.push(s); continue; }
+    if (!fd.req) continue;
+    const v = fieldVal(f, fd);
+    const empty = fd.type === 'chips' ? !v.length : !String(v).trim();
+    if (empty) miss.push(fd.req);
   }
   return miss;
 }
@@ -2602,9 +2660,11 @@ function visionCardHTML() {
 function formHTML() {
   const f = state.form;
 
-  function chips(list, selected, act) {
+  // data-k — ключ поля в state.form: один обработчик обслуживает любые чипы,
+  // в том числе поля категорий, которых ещё нет в коде.
+  function chips(list, selected, key) {
     return list.map(p =>
-      `<button class="chip ${selected.includes(p) ? 'on' : ''}" data-act="${act}" data-val="${p}">${p}</button>`
+      `<button class="chip ${selected.includes(p) ? 'on' : ''}" data-act="fchip" data-k="${key}" data-val="${esc(p)}">${esc(p)}</button>`
     ).join('');
   }
 
@@ -2620,114 +2680,82 @@ function formHTML() {
       </div>`).join('');
   }
 
-  let catFields = '';
+  // Список игр у подписки — единственное поле с живой подсказкой: вид зависит
+  // от того, заполнен ли каталог этого типа подписки в Настройках.
+  function subGamesHTML() {
+    const cat = getCatalogEntry(f.subType);
+    if (cat.core.length || cat.masking.length) return `
+      <div class="field">
+        <label>Каталог активен:
+          <span style="color:var(--ok)">${cat.core.length} ядровых</span> +
+          <span style="color:var(--teal-h)">${cat.masking.length} маскирующих</span>
+          <span style="color:var(--muted);font-size:11px;margin-left:4px">— список рандомизируется при каждой генерации</span>
+        </label>
+        <input type="text" data-act="field" data-k="games"
+          placeholder="Доп. игры через запятую (необязательно)"
+          value="${esc(f.games)}" style="font-size:13px">
+      </div>`;
+    return `
+      <div class="field">
+        <label>Список игр
+          <span style="color:var(--warn);font-size:11px;margin-left:6px">каталог не заполнен — укажите игры вручную или заполните каталог в Настройках</span>
+        </label>
+        <textarea data-act="field" data-k="games" rows="4"
+          placeholder="GTA 5, Spider-Man 2, God of War…">${esc(f.games)}</textarea>
+      </div>`;
+  }
 
-  if (f.category === 'gaming_sub') catFields = `
-    <div class="field">
-      <label>Тип подписки</label>
-      <select data-act="field" data-k="subType">
-        ${SUB_TYPES.map(t => `<option ${f.subType===t?'selected':''}>${esc(t)}</option>`).join('')}
-      </select>
-    </div>
-    <div class="field">
-      <label>Платформы</label>
-      <div class="check-group">${chips(SUB_PLATS, f.platforms, 'plat')}</div>
-    </div>
-    <div class="field">
-      <label>Сроки и цены</label>
-      <div class="dur-rows" id="dur-rows">${durRows()}</div>
-      <button class="btn-add" data-act="dur-add">+ добавить срок</button>
-    </div>
-    ${(function() {
-      const cat = getCatalogEntry(f.subType);
-      const hasCat = cat.core.length || cat.masking.length;
-      if (hasCat) return `
+  // Поля категории собираются из дескриптора, а не пишутся руками под каждую:
+  // новая категория подхватывается формой автоматически.
+  function fieldHTML(fd) {
+    const v = fieldVal(f, fd);
+    const ph = fd.ph ? ` placeholder="${esc(fd.ph)}"` : '';
+    const lbl = esc(fd.label);
+    switch (fd.type) {
+      case 'text': return `
         <div class="field">
-          <label>Каталог активен:
-            <span style="color:var(--ok)">${cat.core.length} ядровых</span> +
-            <span style="color:var(--teal-h)">${cat.masking.length} маскирующих</span>
-            <span style="color:var(--muted);font-size:11px;margin-left:4px">— список рандомизируется при каждой генерации</span>
-          </label>
-          <input type="text" data-act="field" data-k="games"
-            placeholder="Доп. игры через запятую (необязательно)"
-            value="${esc(f.games)}" style="font-size:13px">
+          <label>${lbl}</label>
+          <input type="text" value="${esc(v)}" data-act="field" data-k="${fd.key}"${ph}>
         </div>`;
-      return `
+      case 'num': return `
         <div class="field">
-          <label>Список игр
-            <span style="color:var(--warn);font-size:11px;margin-left:6px">каталог не заполнен — укажите игры вручную или заполните каталог в Настройках</span>
-          </label>
-          <textarea data-act="field" data-k="games" rows="4"
-            placeholder="GTA 5, Spider-Man 2, God of War…">${esc(f.games)}</textarea>
+          <label>${lbl}</label>
+          <input type="number" min="0" value="${esc(v)}" data-act="field" data-k="${fd.key}"${ph}>
         </div>`;
-    })()}
-    `;
+      case 'area': return `
+        <div class="field">
+          <label>${lbl}</label>
+          <textarea data-act="field" data-k="${fd.key}" rows="${fd.rows || 3}"${ph}>${esc(v)}</textarea>
+        </div>`;
+      case 'select': return `
+        <div class="field">
+          <label>${lbl}</label>
+          <select data-act="field" data-k="${fd.key}">
+            ${fd.options().map(o => `<option ${v === o ? 'selected' : ''}>${esc(o)}</option>`).join('')}
+          </select>
+        </div>`;
+      case 'chips': return `
+        <div class="field">
+          <label>${lbl}</label>
+          <div class="check-group">${chips(fd.options(), v, fd.key)}</div>
+        </div>`;
+      case 'toggle': return `
+        <div class="field" style="flex-direction:row;align-items:center;gap:10px">
+          <button class="chip ${v ? 'on' : ''}" data-act="ftoggle" data-k="${fd.key}" style="padding:8px 16px;font-size:14px">${lbl}</button>
+          ${v && fd.hint ? `<span style="font-size:12px;color:var(--teal-h)">${esc(fd.hint)}</span>` : ''}
+        </div>`;
+      case 'durations': return `
+        <div class="field">
+          <label>${lbl}</label>
+          <div class="dur-rows" id="dur-rows">${durRows()}</div>
+          <button class="btn-add" data-act="dur-add">+ добавить срок</button>
+        </div>`;
+      case 'subGames': return subGamesHTML();
+      default: return '';
+    }
+  }
 
-  else if (f.category === 'ai_sub') catFields = `
-    <div class="field">
-      <label>Сервис</label>
-      <select data-act="field" data-k="aiService">
-        ${AI_SERVICES.map(s => `<option ${f.aiService===s?'selected':''}>${esc(s)}</option>`).join('')}
-      </select>
-    </div>
-    <div class="field">
-      <label>Срок</label>
-      <select data-act="field" data-k="aiDuration">
-        ${DURATIONS.map(o => `<option ${f.aiDuration===o?'selected':''}>${o}</option>`).join('')}
-      </select>
-    </div>
-    <div class="field">
-      <label>Цена, ₽</label>
-      <input type="number" min="0" value="${esc(f.aiPrice)}"
-        data-act="field" data-k="aiPrice" placeholder="2000">
-    </div>
-    <div class="field">
-      <label>Ключевые фичи</label>
-      <textarea data-act="field" data-k="aiFeatures" rows="3"
-        placeholder="Claude Code, Projects, Artifacts…">${esc(f.aiFeatures)}</textarea>
-    </div>`;
-
-  else if (f.category === 'digital') catFields = `
-    <div class="field">
-      <label>Название товара</label>
-      <input type="text" value="${esc(f.digitalName)}"
-        data-act="field" data-k="digitalName" placeholder="Microsoft Office 2024">
-    </div>
-    <div class="field">
-      <label>Описание</label>
-      <textarea data-act="field" data-k="digitalDesc" rows="3"
-        placeholder="Что входит, для кого, ключевые возможности…">${esc(f.digitalDesc)}</textarea>
-    </div>
-    <div class="field">
-      <label>Цена, ₽</label>
-      <input type="number" min="0" value="${esc(f.digitalPrice)}"
-        data-act="field" data-k="digitalPrice">
-    </div>`;
-
-  else if (f.category === 'game') catFields = `
-    <div class="field">
-      <label>Название игры</label>
-      <input type="text" value="${esc(f.gameName)}"
-        data-act="field" data-k="gameName" placeholder="Cyberpunk 2077">
-    </div>
-    <div class="field">
-      <label>Платформы</label>
-      <div class="check-group">${chips(GAME_PLATS, f.gamePlatforms, 'gplat')}</div>
-    </div>
-    <div class="field">
-      <label>Цена, ₽</label>
-      <input type="number" min="0" value="${esc(f.gamePrice)}"
-        data-act="field" data-k="gamePrice">
-    </div>
-    <div class="field">
-      <label>Жанр</label>
-      <input type="text" value="${esc(f.gameGenre)}"
-        data-act="field" data-k="gameGenre" placeholder="Экшн, RPG…">
-    </div>
-    <div class="field" style="flex-direction:row;align-items:center;gap:10px">
-      <button class="chip ${f.isPreorder ? 'on' : ''}" data-act="preorder" style="padding:8px 16px;font-size:14px">🔖 Предзаказ</button>
-      ${f.isPreorder ? `<span style="font-size:12px;color:var(--teal-h)">AI поищет актуальные бонусы в сети</span>` : ''}
-    </div>`;
+  const catFields = catDef(f.category).fields.map(fieldHTML).join('');
 
   return `<div class="form-body">
     <div id="ai-inline-panel" class="ai-inline-panel">${settingsHTML()}</div>
@@ -6362,26 +6390,23 @@ document.addEventListener('click', e => {
         b.classList.toggle('on', +b.dataset.val === state.form.count));
       break;
 
-    case 'plat': {
-      const val = el.dataset.val;
-      const arr = state.form.platforms;
+    // Чипы-мультивыбор любой категории (движок категорий): ключ приезжает в data-k.
+    // Перерисовываем не форму, а сам чип — иначе на каждом клике терялся бы фокус.
+    case 'fchip': {
+      const k = el.dataset.k, val = el.dataset.val;
+      if (!Array.isArray(state.form[k])) state.form[k] = [];
+      const arr = state.form[k];
       const i = arr.indexOf(val);
       if (i !== -1) arr.splice(i, 1); else arr.push(val);
       el.classList.toggle('on', arr.includes(val));
       save(); break;
     }
 
-    case 'gplat': {
-      const val = el.dataset.val;
-      const arr = state.form.gamePlatforms;
-      const i = arr.indexOf(val);
-      if (i !== -1) arr.splice(i, 1); else arr.push(val);
-      el.classList.toggle('on', arr.includes(val));
-      save(); break;
-    }
-
-    case 'preorder': {
-      state.form.isPreorder = !state.form.isPreorder;
+    // Тумблер любой категории. Здесь перерисовка формы нужна: рядом с тумблером
+    // может появляться подсказка (у предзаказа — про веб-поиск бонусов).
+    case 'ftoggle': {
+      const k = el.dataset.k;
+      state.form[k] = !state.form[k];
       save(); reForm(); break;
     }
 
