@@ -786,7 +786,7 @@ const BUILTIN_CATS = [
   },
   {
     id: 'digital', label: '📦 Цифровой товар', pName: 'Цифровой товар', builtin: true,
-    visionHint: 'ВСЁ ОСТАЛЬНОЕ, включая физические товары: консоли, геймпады, гарнитуры, диски в коробке, техника, вещи. Состояние и комплектацию по фото пиши в поле digitalDesc.',
+    visionHint: 'ЦИФРОВОЙ товар, который не игра и не подписка: программы, лицензии, ключи, подарочные карты, пополнения. Физические вещи сюда НЕ относятся — для них есть "phys".',
     fields: [
       { key: 'digitalName', type: 'text', label: 'Название товара', ph: 'Microsoft Office 2024',
         p: 'Название', req: 'название товара', isName: true },
@@ -818,7 +818,49 @@ const BUILTIN_CATS = [
 - Акцент: цена зафиксирована — даже если игра подорожает. Писать БЕЗ суммы: просто «Цена зафиксирована» или «стоимость не изменится» — никаких чисел и ₽
 В названии слово «предзаказ» — МОЖНО, но не обязательно. Иногда сильнее зайти с другого угла: топ-бонус, дата выхода, название игры без «предзаказа»` : '',
   },
+  // Физический товар (этап 4 направления 1) — вещь из рук в руки, а не цифра.
+  // Собран поверх того же движка дескрипторов: своих веток в коде у него нет.
+  {
+    id: 'phys', label: '🧷 Физический товар', pName: 'Физический товар', builtin: true,
+    visionHint: 'ФИЗИЧЕСКАЯ вещь из рук в руки: консоль, геймпад, гарнитура, диск в коробке, техника, аксессуары. Состояние и комплектацию бери строго по фото.',
+    // Своя раскладка проверок: «купить» и «оплата» для вещи из рук — обычные
+    // слова, а не юридический риск (в отличие от цифровых товаров); платформы и
+    // «оформляется в цифре» к вещи не относятся; цена в тексте — как у игр,
+    // клиент видит её в поле Авито.
+    scanRules: { payment: false, platform: false, digital_phrase: false, game_price: true },
+    fields: [
+      { key: 'physName', type: 'text', label: 'Что продаём', ph: 'Геймпад DualSense',
+        p: 'Название', req: 'название товара', isName: true },
+      { key: 'physState', type: 'select', label: 'Состояние',
+        options: () => PHYS_STATES, p: 'Состояние', req: 'состояние' },
+      { key: 'physKit', type: 'chips', label: 'Комплектация', options: () => PHYS_KIT,
+        p: 'Комплектация', pEmpty: '(не указана)' },
+      { key: 'physDefects', type: 'area', label: 'Дефекты и износ', rows: 2,
+        ph: 'Потёртость на левом стике, царапина на корпусе…',
+        p: 'Дефекты и износ', pEmpty: '(продавец не указал — не выдумывай)' },
+      { key: 'physWarranty', type: 'text', label: 'Гарантия', ph: 'осталось 8 месяцев', p: 'Гарантия' },
+      { key: 'physReason', type: 'text', label: 'Причина продажи', ph: 'перешёл на PS5', p: 'Причина продажи' },
+      // Цена намеренно БЕЗ p — в текст объявления не идёт (решение по аналогии с
+      // играми: клиент видит цену в поле Авито). Нужна для инфографики и для
+      // подстановки найденной рыночной цены.
+      { key: 'physPrice', type: 'num', label: 'Цена, ₽', ph: '4500', isPrice: true },
+      { key: 'physBargain', type: 'toggle', label: '🤝 Торг уместен',
+        pRender: f => f.physBargain ? 'Торг: уместен — упомяни это в описании, но без сумм' : '' },
+      { key: 'physDelivery', type: 'toggle', label: '📦 Авито-доставка',
+        pRender: f => f.physDelivery ? 'Авито-доставка: подключена — упомяни, что можно заказать с доставкой' : '' },
+    ],
+    extra: () => `
+ЭТО ФИЗИЧЕСКАЯ ВЕЩЬ ИЗ РУК В РУКИ, не цифровой товар:
+- Пиши обычным языком продавца вещей: «купить», «заберёшь», «отдам» — нормально. НЕ используй «оформляется», «оформить в цифре» — это про цифровые товары
+- Состояние и дефекты передавай ЧЕСТНО и ровно так, как указал продавец: не приукрашивай и не добавляй недостатков от себя
+- Если дефекты не указаны — не выдумывай их и не пиши «без дефектов»
+- Сумму в тексте НЕ называй — цена стоит в поле Авито
+- Уместны детали живого объявления: как использовалась вещь, что в комплекте, почему продаётся`,
+  },
 ];
+
+const PHYS_STATES = ['Новое', 'Как новое', 'Отличное', 'Хорошее', 'Б/у с дефектами'];
+const PHYS_KIT = ['Коробка', 'Документы', 'Провода', 'Чехол', 'Гарантийный талон'];
 
 // Типы полей, которые форма умеет рисовать. Всё, чего здесь нет (например,
 // категория из JSON новее этой версии инструмента), в форму не попадёт —
@@ -929,7 +971,9 @@ function applyCatPatch(base, p) {
   }
   if (Array.isArray(p.scanRequire) && p.scanRequire.length) c.scanRequire = p.scanRequire;
   if (Array.isArray(p.scanForbid)  && p.scanForbid.length)  c.scanForbid  = p.scanForbid;
-  if (p.scanRules && Object.keys(p.scanRules).length) c.scanRules = p.scanRules;
+  // Патч правил — поверх заводского набора категории, а не вместо него:
+  // иначе снятая одна галочка обнулила бы остальные заводские значения
+  if (p.scanRules && Object.keys(p.scanRules).length) c.scanRules = { ...(base.scanRules || {}), ...p.scanRules };
   if (p.visionHint) c.visionHint = p.visionHint;
   return c;
 }
@@ -1008,6 +1052,15 @@ const DEF_FORM = {
   gamePrice: '',
   gameGenre: '',
   isPreorder: false,
+  physName: '',
+  physState: 'Отличное',
+  physKit: [],
+  physDefects: '',
+  physWarranty: '',
+  physReason: '',
+  physPrice: '',
+  physBargain: false,
+  physDelivery: false,
   notes: '',
   style: 'selling',
   customStyle: '',
@@ -3407,7 +3460,7 @@ function catDraftFor(id) {
       scanRequire: (p.scanRequire || []).join('\n'),
       scanForbid:  (p.scanForbid  || []).join('\n'),
       scanRules: Object.fromEntries(SCAN_RULES.map(r => [r.id,
-        p.scanRules && Object.prototype.hasOwnProperty.call(p.scanRules, r.id) ? !!p.scanRules[r.id] : !!r.def(id)])),
+        p.scanRules && Object.prototype.hasOwnProperty.call(p.scanRules, r.id) ? !!p.scanRules[r.id] : scanRuleFactory(id, r.id)])),
       fields,
     };
   }
@@ -3420,7 +3473,7 @@ function catDraftFor(id) {
     scanRequire: (d.scanRequire || []).join('\n'),
     scanForbid:  (d.scanForbid  || []).join('\n'),
     scanRules: Object.fromEntries(SCAN_RULES.map(r => [r.id,
-      d.scanRules && Object.prototype.hasOwnProperty.call(d.scanRules, r.id) ? !!d.scanRules[r.id] : !!r.def(id)])),
+      d.scanRules && Object.prototype.hasOwnProperty.call(d.scanRules, r.id) ? !!d.scanRules[r.id] : scanRuleFactory(id, r.id)])),
     fields: (Array.isArray(d.fields) ? d.fields : []).map(draftFieldFromData),
   };
 }
@@ -3453,7 +3506,7 @@ function catDraftApply(draft) {
     const rules = {};
     for (const r of SCAN_RULES) {
       const want = !!draft.scanRules[r.id];
-      if (want !== !!r.def(draft.id)) rules[r.id] = want;
+      if (want !== scanRuleFactory(draft.id, r.id)) rules[r.id] = want;
     }
     if (Object.keys(rules).length) p.scanRules = rules;
     for (const fd of draft.fields) {
@@ -3492,7 +3545,7 @@ function catDraftApply(draft) {
     const rules = {};
     for (const r of SCAN_RULES) {
       const want = !!draft.scanRules[r.id];
-      if (want !== !!r.def(draft.id)) rules[r.id] = want;
+      if (want !== scanRuleFactory(draft.id, r.id)) rules[r.id] = want;
     }
     if (Object.keys(rules).length) d.scanRules = rules;
     if (!Array.isArray(state.catsCfg.custom)) state.catsCfg.custom = [];
@@ -6411,9 +6464,13 @@ const SCAN_ERRORS = [
   { rule: 'links',     re: /8[\s\-]?\(?\d{3}\)?[\s\-]?\d{3}[\s\-]?\d{2}[\s\-]?\d{2}/, label: 'Номер телефона (8-...)' },
   { rule: 'messenger', re: /(пишите|напишите|пиши|пишу|писать|со\s+мной|свяжитесь|связь).{0,40}(телеграм|telegram|\btg\b|вацап|(?<![а-яёa-z0-9])вк(?![а-яёa-z0-9])|whatsapp|viber|вайбер)/i, label: 'Контакт через мессенджер (запрещено Авито)' },
   { rule: 'messenger', re: /(телеграм|telegram|\btg\b|вацап|(?<![а-яёa-z0-9])вк(?![а-яёa-z0-9])|whatsapp|viber|вайбер).{0,40}(пишите|напишите|пиши|пишу|писать|со\s+мной|свяжитесь|связь)/i, label: 'Контакт через мессенджер (запрещено Авито)' },
-  { rule: 'account',   re: /(?<![а-яёa-z0-9])аккаунт(?![а-яёa-z0-9])/i,          label: '⛔ Слово «аккаунт» — Авито банит за продажу аккаунтов' },
-  { rule: 'account',   re: /учётная\s+запись|учетная\s+запись/i, label: '⛔ «Учётная запись» — риск блокировки как продажа аккаунта' },
-  { rule: 'account',   re: /(?<![а-яёa-z0-9])профил[ья](?![а-яёa-z0-9])/i,       label: '⛔ Слово «профиль» — риск блокировки как продажа аккаунта' },
+  // Косвенные падежи ловятся наравне с именительным: «продам вместе с аккаунтом»
+  // опаснее для объявления, чем голое «аккаунт», а прежний lookahead их пропускал.
+  { rule: 'account',   re: /(?<![а-яёa-z0-9])аккаунт[а-яё]*(?![а-яёa-z0-9])/i,   label: '⛔ Слово «аккаунт» — Авито банит за продажу аккаунтов' },
+  { rule: 'account',   re: /уч[её]тн(?:ая|ой|ую|ые|ых|ым|ыми)\s+запис(?:ь|и|ью|ей|ям|ями|ях)(?![а-яёa-z0-9])/i, label: '⛔ «Учётная запись» — риск блокировки как продажа аккаунта' },
+  // У «профиля» окончания перечислены поимённо: «профил[а-яё]*» поймал бы
+  // «профилактику» и «профильную трубу».
+  { rule: 'account',   re: /(?<![а-яёa-z0-9])профил(?:ь|я|ю|ем|е|и|ей|ям|ями|ях)(?![а-яёa-z0-9])/i, label: '⛔ Слово «профиль» — риск блокировки как продажа аккаунта' },
 ];
 
 const SCAN_WARNINGS = [
@@ -6450,11 +6507,19 @@ const SCAN_RULES = [
   { id: 'game_price', label: 'Цена в названии и описании запрещена', def: id => id === 'game' },
 ];
 
-// Включено ли правило для категории: сначала явная галочка, иначе заводской дефолт.
+// Заводское значение правила: сначала то, что прописано в самом дескрипторе
+// встроенной категории (у физтовара свой набор), иначе общий def.
+function scanRuleFactory(catId, ruleId) {
+  const base = BUILTIN_CATS.find(c => c.id === catId);
+  if (base?.scanRules && Object.prototype.hasOwnProperty.call(base.scanRules, ruleId)) return !!base.scanRules[ruleId];
+  return !!SCAN_RULES.find(r => r.id === ruleId)?.def(catId);
+}
+
+// Включено ли правило для категории: сначала галочка из редактора, иначе заводское.
 function scanRuleOn(catId, ruleId) {
   const rules = catDef(catId).scanRules;
   if (rules && Object.prototype.hasOwnProperty.call(rules, ruleId)) return !!rules[ruleId];
-  return !!SCAN_RULES.find(r => r.id === ruleId)?.def(catId);
+  return scanRuleFactory(catId, ruleId);
 }
 
 function checkAds(title, desc, category) {
@@ -6507,9 +6572,12 @@ function checkAds(title, desc, category) {
       ok.push('«Оформляется в цифре» присутствует');
     }
   }
+  // Формулировка зависит от категории: для игр она историческая и точная,
+  // для остальных — нейтральная (правило теперь общее, а не только игровое).
+  const priceWhere = category === 'game' ? 'для игр' : 'в этой категории';
   if (on('game_price')) {
     if (/\d[\d\s]*₽|₽|\d+\s*руб|\d+\s*р\.|(?<![а-яёa-z0-9])руб(?![а-яёa-z0-9])/i.test(title)) {
-      errors.push('Цена в названии — для игр ЗАПРЕЩЕНА');
+      errors.push(`Цена в названии — ${priceWhere} ЗАПРЕЩЕНА`);
     }
   }
 
@@ -6518,7 +6586,9 @@ function checkAds(title, desc, category) {
   }
 
   if (on('game_price') && /\d[\d\s]*₽|\d+\s*руб|\d+\s*рублей|\d+\s*р(?![а-яёa-z0-9])/i.test(desc)) {
-    errors.push('Цена в описании игры — ЗАПРЕЩЕНА (клиент видит цену в поле Авито)');
+    errors.push(category === 'game'
+      ? 'Цена в описании игры — ЗАПРЕЩЕНА (клиент видит цену в поле Авито)'
+      : 'Цена в описании — ЗАПРЕЩЕНА в этой категории (клиент видит цену в поле Авито)');
   }
 
   // F19: «цена: N» как ярлык-ценник. Для игр цена-с-валютой уже ошибка выше,

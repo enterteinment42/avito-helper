@@ -21,11 +21,15 @@ export async function runEditor(browser, base, t) {
   t.section('editor — конструктор категорий');
   const { ctx, page, consoleErrors } = await openApp(browser, `${base}/avito-helper.html`);
   try {
+    // Число встроенных категорий берём из приложения: добавление новой (физтовар
+    // на этапе 4) не должно ронять стенд на зашитой константе
+    const BUILTIN = await page.evaluate(() => BUILTIN_CATS.length);
+
     await go(page, 'settings');
     t.ok('карточка «Категории товаров» на вкладке Настроек',
       await page.locator('#cat-editor-box').count() === 1);
     t.eq('в редакторе все встроенные категории',
-      await page.locator('#cat-ed-sel option').count(), 4);
+      await page.locator('#cat-ed-sel option').count(), BUILTIN);
 
     // ── Правка встроенной категории ─────────────────────────
     await pickCat(page, 'game');
@@ -107,7 +111,7 @@ export async function runEditor(browser, base, t) {
     await stubDialogs(page, { prompt: '🧷 Физический товар' });
     await page.click('[data-act="cat-new"]'); await page.waitForTimeout(50);
     const newId = await page.evaluate(() => state.catEditId);
-    t.ok('новая категория появилась в CATS', await page.evaluate(() => CATS.length) === 5);
+    t.ok('новая категория появилась в CATS', await page.evaluate(() => CATS.length) === BUILTIN + 1);
     await page.click('[data-act="cat-fld-add"]'); await page.waitForTimeout(30);
     const j = await page.evaluate(() => state.catDraft.fields.length - 1);
     await page.selectOption(`[data-act="catf"][data-i="${j}"][data-k="type"]`, 'chips');
@@ -127,7 +131,7 @@ export async function runEditor(browser, base, t) {
     // Персист
     await page.reload({ waitUntil: 'domcontentloaded' });
     await page.waitForFunction(() => document.querySelector('#app header'));
-    t.eq('категория пережила reload', await page.evaluate(() => CATS.length), 5);
+    t.eq('категория пережила reload', await page.evaluate(() => CATS.length), BUILTIN + 1);
     t.eq('её поля тоже', await page.evaluate(id => CATS.find(c => c.id === id).fields.length, newId), 2);
 
     // ── Экспорт / импорт JSON ───────────────────────────────
@@ -140,11 +144,11 @@ export async function runEditor(browser, base, t) {
 
     const exported = await page.evaluate(() => JSON.stringify(state.catsCfg));
     await page.evaluate(() => { state.catsCfg = { builtin: {}, custom: [] }; rebuildCats(); save(); render(); });
-    t.eq('перед импортом категорий 4', await page.evaluate(() => CATS.length), 4);
+    t.eq('перед импортом остались только встроенные', await page.evaluate(() => CATS.length), BUILTIN);
     await stubDialogs(page, { confirm: true });
     await page.setInputFiles('#cat-json-file', { name: 'cats.json', mimeType: 'application/json', buffer: Buffer.from(exported) });
     await page.waitForTimeout(80);
-    t.eq('импорт вернул категории', await page.evaluate(() => CATS.length), 5);
+    t.eq('импорт вернул категории', await page.evaluate(() => CATS.length), BUILTIN + 1);
     t.ok('импорт вернул именно ту категорию', await page.evaluate(id => CATS.some(c => c.id === id), newId));
 
     // ── Удаление ────────────────────────────────────────────
@@ -152,7 +156,7 @@ export async function runEditor(browser, base, t) {
     await page.evaluate(id => { state.form.category = id; save(); }, newId);
     await stubDialogs(page, { confirm: true });
     await page.click('[data-act="cat-del"]'); await page.waitForTimeout(50);
-    t.eq('категория удалена', await page.evaluate(() => CATS.length), 4);
+    t.eq('категория удалена', await page.evaluate(() => CATS.length), BUILTIN);
     t.ok('форма ушла с удалённой категории',
       await page.evaluate(id => state.form.category !== id, newId));
 
@@ -183,7 +187,7 @@ export async function runEditor(browser, base, t) {
       return { len: CATS.length, gameLabel: CATS.find(c => c.id === 'game').label };
     });
     t.eq('пользовательская категория не затеняет встроенную', shadow.gameLabel, '🕹️ Игра');
-    t.eq('и не добавляется дубликатом', shadow.len, 4);
+    t.eq('и не добавляется дубликатом', shadow.len, BUILTIN);
 
     const broken = await page.evaluate(() => {
       state.catsCfg.custom = [{ id: 'u_broken', label: 'Битая' }]; // без fields

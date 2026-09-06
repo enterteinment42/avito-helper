@@ -144,7 +144,8 @@ export async function runStage3(browser, base, t) {
     // ── Сканер: селект категорий ────────────────────────────
     await page.click('[data-tab="scanner"]');
     await page.waitForTimeout(50);
-    t.eq('в селекте Сканера все категории', await page.locator('#scan-cat option').count(), 5);
+    const builtin = await page.evaluate(() => BUILTIN_CATS.length);
+    t.eq('в селекте Сканера все категории', await page.locator('#scan-cat option').count(), builtin + 1);
     const optText = await page.locator('#scan-cat option[value="u_phys"]').innerText();
     t.ok('и видно, что у физтовара слова оплаты разрешены', /слова оплаты разрешены/.test(optText), optText);
 
