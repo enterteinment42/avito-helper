@@ -4,3 +4,7 @@ avito-helper-netlify.zip
 # Выгрузки журнала самообучения для локального разбора — статистику действий не публикуем
 journal/
 avito-journal-*.jsonl
+
+# Регрессионный стенд: зависимости и версия-база из git HEAD собираются локально
+tests/node_modules/
+tests/.baseline/

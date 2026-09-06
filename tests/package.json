@@ -1,0 +1,12 @@
+{
+  "name": "avito-helper-tests",
+  "private": true,
+  "type": "module",
+  "description": "Регрессионный стенд avito-helper: паритет промпта с прошлой версией + функциональные проверки в реальном браузере",
+  "scripts": {
+    "test": "node run.mjs"
+  },
+  "devDependencies": {
+    "playwright": "^1.49.0"
+  }
+}

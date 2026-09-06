@@ -398,6 +398,32 @@
     .preset-item { display: flex; align-items: center; gap: 8px; padding: 7px 10px; border-radius: var(--r); background: var(--card2); border: 1px solid var(--border); }
     .preset-item-name { flex: 1; font-size: 13px; color: var(--text); }
     .preset-item-meta { font-size: 11px; color: var(--muted); }
+    /* ── Редактор категорий (конструктор, направление 1) ── */
+    .cat-ed-bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+    .cat-ed-bar select { width: auto; min-width: 190px; }
+    .cat-ed-note { font-size: 11.5px; color: var(--muted); background: var(--card2); border: 1px dashed var(--border2); border-radius: var(--r); padding: 7px 10px; }
+    .cat-ed-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    .cat-ed-fields-title { font-size: 13px; font-weight: 600; color: var(--text); margin-top: 4px; }
+    .cat-ed-fields { display: flex; flex-direction: column; gap: 7px; }
+    .cat-ed-soon { font-size: 10.5px; color: var(--teal-h); font-weight: 400; margin-left: 5px; }
+    .cat-fld { background: var(--card2); border: 1px solid var(--border); border-radius: var(--r); padding: 8px 10px; display: flex; flex-direction: column; gap: 7px; }
+    .cat-fld.off { opacity: .55; }
+    .cat-fld-head { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; }
+    .cat-fld-num { font-size: 11px; color: var(--muted); min-width: 14px; }
+    .cat-fld-type { font-size: 11.5px; color: var(--teal-h); background: var(--card3); border-radius: 20px; padding: 2px 9px; white-space: nowrap; }
+    .cat-fld-type-sel { width: auto; font-size: 12px; padding: 4px 7px; }
+    .cat-fld-label { flex: 1; min-width: 130px; font-size: 13px; }
+    .cat-fld-key { font-family: var(--mono, monospace); font-size: 10.5px; color: var(--muted); }
+    .cat-fld-body { display: flex; flex-direction: column; gap: 7px; padding-left: 21px; }
+    .cat-fld-sub { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--text2); }
+    .cat-fld-note { font-size: 11.5px; color: var(--muted); }
+    .cat-fld-flags { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+    .cat-fld-chk { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; color: var(--text2); cursor: pointer; }
+    .cat-fld-chk input { accent-color: var(--teal); width: 14px; height: 14px; }
+    .cat-fld-chk input:disabled { cursor: not-allowed; }
+    .cat-fld-p { max-width: 230px; font-size: 12px; }
+    .cat-dirty { box-shadow: 0 0 0 2px var(--accent); }
+    @media (max-width: 720px) { .cat-ed-grid { grid-template-columns: 1fr; } .cat-fld-body { padding-left: 0; } }
     /* ── Vision: распознавание товара по фото (направление 2а, план сближения с Айдентикой) ── */
     .vision-card { background: var(--card2); border: 1px solid var(--border2); border-radius: var(--r); padding: 11px 12px; display: flex; flex-direction: column; gap: 9px; }
     .vision-head { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
@@ -710,7 +736,7 @@ const STYLES = [
 //   reqCheck(f)— своя проверка вместо req (возвращает текст нехватки или '')
 // ══════════════════════════════════════════
 
-const CATS = [
+const BUILTIN_CATS = [
   {
     id: 'gaming_sub', label: '🎮 Игровая подписка', pName: 'Игровая подписка', builtin: true,
     fields: [
@@ -789,9 +815,43 @@ const CATS = [
   },
 ];
 
+// Типы полей, которые форма умеет рисовать. Всё, чего здесь нет (например,
+// категория из JSON новее этой версии инструмента), в форму не попадёт —
+// значит и требовать его в валидации нельзя, иначе человек увидит «не хватает…»
+// про поле, которого на экране нет.
+const FIELD_TYPES = ['text', 'num', 'area', 'select', 'chips', 'toggle', 'durations', 'subGames'];
+// Типы, доступные в конструкторе категорий. durations/subGames — кодовые:
+// за ними живая логика сроков и каталога игр, руками их не собрать.
+const USER_FIELD_TYPES = [
+  { id: 'text',   label: 'Строка' },
+  { id: 'num',    label: 'Число' },
+  { id: 'area',   label: 'Многострочное' },
+  { id: 'select', label: 'Выбор из списка' },
+  { id: 'chips',  label: 'Чипы (несколько)' },
+  { id: 'toggle', label: 'Тумблер' },
+];
+const CODE_FIELD_TYPES = ['durations', 'subGames'];
+
+// Список опций поля: у встроенных это функция (список живёт в коде и может
+// меняться), у собранных в конструкторе — обычный массив из localStorage.
+function fdOptions(fd) {
+  const o = fd.options;
+  if (typeof o === 'function') { try { return o() || []; } catch(e) { return []; } }
+  return Array.isArray(o) ? o : [];
+}
+
+// CATS пересобирается из встроенных + пользовательских: категория — это данные,
+// новая заводится в Настройках без правок кода. Потребители (селект формы,
+// catDef, Сканер, эталоны) читают CATS как раньше и о слоях не знают.
+let CATS = BUILTIN_CATS.slice();
+
 // Категория по id. Неизвестная (например, удалённая пользовательская, оставшаяся
-// в сохранённой форме) не должна ронять рендер — отдаём первую.
-function catDef(id) { return CATS.find(c => c.id === id) || CATS[0]; }
+// в сохранённой форме) не должна ронять рендер — отдаём первую. Дескриптор без
+// fields (битый импорт JSON) тоже не должен ронять: подставляем пустой список.
+function catDef(id) {
+  const c = CATS.find(x => x.id === id) || CATS[0] || {};
+  return Array.isArray(c.fields) ? c : { ...c, fields: [] };
+}
 
 // Значение поля с безопасным дефолтом по типу: у пользовательской категории
 // ключа может ещё не быть в сохранённой форме.
@@ -800,6 +860,96 @@ function fieldVal(f, fd) {
   if (fd.type === 'chips') return Array.isArray(v) ? v : [];
   if (fd.type === 'toggle') return !!v;
   return v == null ? '' : v;
+}
+
+// ── Конструктор категорий (этап 2) ────────────────────────────────
+// Встроенные категории правятся ОВЕРЛЕЕМ (патчем), а не копией: заводской
+// дескриптор остаётся источником правды, патч хранит только отличия — поэтому
+// «сбросить к заводской» это просто удалить патч, а будущие правки заводских
+// категорий в коде доезжают до Дениса, а не замораживаются его копией.
+
+// Поле из data-вида (localStorage / импорт JSON) в дескриптор движка.
+function fieldFromData(d) {
+  const fd = { key: d.key, type: d.type, label: d.label || d.key };
+  if (d.ph) fd.ph = d.ph;
+  if (d.rows) fd.rows = d.rows;
+  if (Array.isArray(d.options)) fd.options = d.options;
+  if (d.hint) fd.hint = d.hint;
+  if (d.isName) fd.isName = true;
+  // p — подпись в промпте. Пустая (снят флаг «в промпт») означает: поле в промпт
+  // не идёт. Так живёт цена игры — по правилам площадки её нет в тексте объявления.
+  if (d.p) { fd.p = d.p; if (d.pSuffix) fd.pSuffix = d.pSuffix; if (d.pEmpty) fd.pEmpty = d.pEmpty; }
+  if (d.req) fd.req = d.reqText || (d.label || d.key).toLowerCase();
+  return fd;
+}
+
+// Применение патча к встроенной категории. Без патча — возвращаем заводской
+// объект как есть (ссылкой), чтобы поведение осталось байт-в-байт прежним.
+function applyCatPatch(base, p) {
+  if (!p || typeof p !== 'object') return base;
+  const c = { ...base };
+  if (p.label) c.label = p.label;
+  if (p.pName) c.pName = p.pName;
+
+  const fp = p.fields || {};
+  let fields = base.fields
+    .filter(fd => !fp[fd.key]?.hidden)
+    .map(fd => {
+      const patch = fp[fd.key];
+      if (!patch) return fd;
+      const out = { ...fd };
+      if (patch.label) out.label = patch.label;
+      if (patch.ph != null) out.ph = patch.ph;
+      // Снять обязательность можно только у поля с простым req: за reqCheck
+      // (сроки и цены, каталог игр) стоит логика, а не галочка.
+      if (patch.req === false && out.req) delete out.req;
+      if (patch.isName) out.isName = true;
+      return out;
+    });
+  // Свои поля, дописанные к встроенной категории
+  if (Array.isArray(p.add)) fields = fields.concat(p.add.map(fieldFromData));
+  // Порядок: ключи из order идут первыми в заданном порядке, остальные — следом
+  if (Array.isArray(p.order) && p.order.length) {
+    const pos = k => { const i = p.order.indexOf(k); return i === -1 ? 1e6 : i; };
+    fields = fields.slice().sort((a, b) => pos(a.key) - pos(b.key));
+  }
+  c.fields = fields;
+
+  // Своё правило промпта дописывается ПОСЛЕ заводского (у игры это блок предзаказа)
+  if (p.extraText) {
+    const baseExtra = base.extra;
+    c.extra = f => (baseExtra ? baseExtra(f) : '') + '\n' + p.extraText;
+  }
+  if (Array.isArray(p.scanRequire) && p.scanRequire.length) c.scanRequire = p.scanRequire;
+  if (Array.isArray(p.scanForbid)  && p.scanForbid.length)  c.scanForbid  = p.scanForbid;
+  return c;
+}
+
+// Пользовательская категория целиком из данных.
+function catFromData(d) {
+  const c = {
+    id: d.id, label: d.label || d.id, pName: d.pName || d.label || d.id,
+    fields: Array.isArray(d.fields) ? d.fields.map(fieldFromData) : [],
+  };
+  if (d.extraText) c.extra = () => '\n' + d.extraText;
+  if (Array.isArray(d.scanRequire) && d.scanRequire.length) c.scanRequire = d.scanRequire;
+  if (Array.isArray(d.scanForbid)  && d.scanForbid.length)  c.scanForbid  = d.scanForbid;
+  return c;
+}
+
+// Пересобрать CATS из заводских + оверлея. Зовётся при старте и после каждой
+// правки в редакторе категорий.
+function rebuildCats() {
+  const cfg = (typeof state !== 'undefined' && state.catsCfg) || {};
+  const builtin = cfg.builtin || {};
+  const custom  = Array.isArray(cfg.custom) ? cfg.custom : [];
+  const seen = new Set(BUILTIN_CATS.map(c => c.id));
+  CATS = BUILTIN_CATS.map(c => applyCatPatch(c, builtin[c.id]))
+    .concat(custom
+      // id пользовательской категории не должен затенять встроенную — иначе
+      // catDef отдал бы её вместо заводской, а форма молча лишилась бы полей
+      .filter(d => d && d.id && !seen.has(d.id) && (seen.add(d.id), true))
+      .map(catFromData));
 }
 
 const REGIONS = [
@@ -876,6 +1026,13 @@ const state = {
   error: null,
   catalogs:   ls('avito_catalogs', {}),
   catEditSub: 'PS Plus Extra',
+  // Конструктор категорий: { builtin: { <id>: патч }, custom: [ категория ] }.
+  // Встроенные хранятся патчем-отличием, а не копией — см. applyCatPatch.
+  catsCfg:    ls('avito_cats', { builtin: {}, custom: [] }),
+  catEditId:  null,   // какая категория открыта в редакторе Настроек
+  // Черновик редактора живёт в state, а не в DOM: карточка перерисовывается на
+  // добавление/удаление/перестановку поля, и набранное иначе терялось бы.
+  catDraft:   null,
   db:       ls('avito_db', []),
   refs:     ls('avito_refs', []), // эталоны: объявления без инструмента + чужие удачные (журнал самообучения)
   dbForm:   { product: '', region: 'Москва', status: 'active', note: '' },
@@ -910,6 +1067,8 @@ const state = {
     priceLoading: false, price: null,  // { low, typical, high, comment }
   },
 };
+
+rebuildCats(); // категории собираются сразу после state — до первого render()
 
 // ══════════════════════════════════════════
 // LOCALSTORAGE
@@ -947,6 +1106,7 @@ function _saveAll() {
     localStorage.setItem('avito_results_form', JSON.stringify(state.resultsForm ?? null)); // F12: снимок формы для ↻/↻×5 после F5
     localStorage.setItem('avito_favorites',JSON.stringify(state.favorites));
     localStorage.setItem('avito_catalogs',  JSON.stringify(state.catalogs));
+    localStorage.setItem('avito_cats',      JSON.stringify(state.catsCfg));
     localStorage.setItem('avito_db',        JSON.stringify(state.db));
     localStorage.setItem('avito_refs',      JSON.stringify(state.refs));
     localStorage.setItem('avito_queue',     JSON.stringify(state.postQueue));
@@ -1445,6 +1605,7 @@ function catInfoBlock(f) {
   const c = catDef(f.category);
   const lines = [`Категория: ${c.pName || c.label}`];
   for (const fd of c.fields) {
+    if (!FIELD_TYPES.includes(fd.type)) continue; // поля нет в форме — не должно быть и в промпте
     if (fd.pRender) { const s = fd.pRender(f); if (s) lines.push(s); continue; }
     if (!fd.p) continue; // поле не для промпта (цена игры, тумблеры)
     const v = fieldVal(f, fd);
@@ -1491,6 +1652,9 @@ function buildMsg(overrideCount, excludeTitles = [], formOverride = null) {
 function validateForm(f = state.form) {
   const miss = [];
   for (const fd of catDef(f.category).fields) {
+    // Поле неизвестного типа форма не рисует — требовать его нельзя, иначе
+    // «Заполните: …» указывает на то, чего на экране нет (находка код-ревью этапа 1)
+    if (!FIELD_TYPES.includes(fd.type)) continue;
     if (fd.reqCheck) { const s = fd.reqCheck(f); if (s) miss.push(s); continue; }
     if (!fd.req) continue;
     const v = fieldVal(f, fd);
@@ -2727,17 +2891,27 @@ function formHTML() {
           <label>${lbl}</label>
           <textarea data-act="field" data-k="${fd.key}" rows="${fd.rows || 3}"${ph}>${esc(v)}</textarea>
         </div>`;
-      case 'select': return `
+      case 'select': {
+        // Значение может не входить в список — например, опцию убрали в редакторе
+        // категорий уже после того, как форма её запомнила. Молча показать первую
+        // опцию нельзя: селект утверждал бы одно, а в промпт уходило другое.
+        const opts = fdOptions(fd);
+        const known = opts.includes(String(v));
+        const stale = !known ? `<option value="" selected disabled>${v ? `${esc(v)} — нет в списке` : '— не выбрано —'}</option>` : '';
+        return `
         <div class="field">
           <label>${lbl}</label>
           <select data-act="field" data-k="${fd.key}">
-            ${fd.options().map(o => `<option ${v === o ? 'selected' : ''}>${esc(o)}</option>`).join('')}
+            ${stale}
+            ${opts.map(o => `<option value="${esc(o)}"${String(v) === o ? ' selected' : ''}>${esc(o)}</option>`).join('')}
           </select>
+          ${known ? '' : `<div style="font-size:11px;color:var(--warn);margin-top:3px">Выберите значение — прежнее «${esc(v || '')}» больше не в списке</div>`}
         </div>`;
+      }
       case 'chips': return `
         <div class="field">
           <label>${lbl}</label>
-          <div class="check-group">${chips(fd.options(), v, fd.key)}</div>
+          <div class="check-group">${chips(fdOptions(fd), v, fd.key)}</div>
         </div>`;
       case 'toggle': return `
         <div class="field" style="flex-direction:row;align-items:center;gap:10px">
@@ -2751,7 +2925,16 @@ function formHTML() {
           <button class="btn-add" data-act="dur-add">+ добавить срок</button>
         </div>`;
       case 'subGames': return subGamesHTML();
-      default: return '';
+      // Тип, которого эта версия инструмента не знает (категория пришла из JSON
+      // новее приложения). Молча пропасть поле не должно — иначе непонятно, куда
+      // делось. В валидацию оно не попадает (см. validateForm).
+      default: return `
+        <div class="field">
+          <label>${lbl}</label>
+          <div style="font-size:12px;color:var(--warn);border:1px dashed var(--border2);border-radius:8px;padding:8px 10px">
+            ⚠ Тип поля «${esc(fd.type || '—')}» не поддерживается этой версией — поле пропущено. Проверьте категорию в ⚙ Настройках.
+          </div>
+        </div>`;
     }
   }
 
@@ -3097,6 +3280,251 @@ function renderSession() {
     </div>`;
 }
 
+// ══════════════════════════════════════════
+// РЕДАКТОР КАТЕГОРИЙ (этап 2 направления 1)
+// Категория правится как ДАННЫЕ. Встроенные — оверлеем-патчем (см. applyCatPatch),
+// поэтому «сбросить к заводской» = удалить патч. Правки живут в черновике
+// (state.catDraft) и уезжают в state.catsCfg только по кнопке «Сохранить» —
+// иначе полуготовая категория ломала бы форму генератора прямо во время набора.
+// ══════════════════════════════════════════
+
+function splitLines(s) { return String(s || '').split('\n').map(x => x.trim()).filter(Boolean); }
+
+// Какая категория открыта в редакторе. По умолчанию — та, что выбрана в форме.
+function catEditTarget() {
+  if (state.catEditId && CATS.some(c => c.id === state.catEditId)) return state.catEditId;
+  state.catEditId = CATS.some(c => c.id === state.form.category) ? state.form.category : (CATS[0]?.id || null);
+  return state.catEditId;
+}
+
+function draftFieldFromData(d) {
+  return {
+    key: d.key, type: d.type, code: false, builtin: false,
+    label: d.label || '', ph: d.ph || '', hidden: false,
+    req: !!d.req, reqLocked: false, reqText: d.reqText || '',
+    inPrompt: !!d.p, promptLocked: false, p: d.p || '',
+    options: (Array.isArray(d.options) ? d.options : []).join('\n'), optionsLocked: false,
+    isName: !!d.isName,
+  };
+}
+
+function draftFieldToData(fd) {
+  const out = { key: fd.key, type: fd.type, label: (fd.label || '').trim() || fd.key };
+  if (fd.ph) out.ph = fd.ph;
+  if (fd.type === 'select' || fd.type === 'chips') out.options = splitLines(fd.options);
+  if (fd.inPrompt) out.p = (fd.p || '').trim() || out.label;
+  if (fd.req) { out.req = true; if (fd.reqText) out.reqText = fd.reqText; }
+  if (fd.isName) out.isName = true;
+  return out;
+}
+
+// Черновик категории: единый data-вид и для встроенной (заводское + патч),
+// и для пользовательской — редактор не различает их, кроме набора замков.
+function catDraftFor(id) {
+  const base = BUILTIN_CATS.find(c => c.id === id);
+  if (base) {
+    const p  = (state.catsCfg.builtin || {})[id] || {};
+    const fp = p.fields || {};
+    const fields = base.fields.map(fd => ({
+      key: fd.key, type: fd.type, builtin: true,
+      code: CODE_FIELD_TYPES.includes(fd.type), // сроки/каталог игр: логика в коде
+      label: fp[fd.key]?.label || fd.label,
+      ph: fp[fd.key]?.ph != null ? fp[fd.key].ph : (fd.ph || ''),
+      hidden: !!fp[fd.key]?.hidden,
+      req: fp[fd.key]?.req === false ? false : !!(fd.req || fd.reqCheck),
+      reqLocked: !!fd.reqCheck,       // за reqCheck стоит логика, а не галочка
+      reqText: fd.req || '',
+      inPrompt: !!(fd.p || fd.pRender),
+      promptLocked: !!fd.pRender,     // своя строка промпта — правится только в коде
+      p: fd.p || '',
+      options: fdOptions(fd).join('\n'),
+      optionsLocked: typeof fd.options === 'function', // список живёт в коде
+      isName: !!(fd.isName || fp[fd.key]?.isName),
+    })).concat((Array.isArray(p.add) ? p.add : []).map(draftFieldFromData));
+    if (Array.isArray(p.order) && p.order.length) {
+      const pos = k => { const i = p.order.indexOf(k); return i === -1 ? 1e6 : i; };
+      fields.sort((a, b) => pos(a.key) - pos(b.key));
+    }
+    return {
+      id, builtin: true, patched: !!Object.keys(p).length,
+      label: p.label || base.label, pName: p.pName || base.pName || '',
+      extraText: p.extraText || '',
+      scanRequire: (p.scanRequire || []).join('\n'),
+      scanForbid:  (p.scanForbid  || []).join('\n'),
+      fields,
+    };
+  }
+  const d = (state.catsCfg.custom || []).find(c => c.id === id);
+  if (!d) return null;
+  return {
+    id, builtin: false, patched: false,
+    label: d.label || '', pName: d.pName || '', extraText: d.extraText || '',
+    scanRequire: (d.scanRequire || []).join('\n'),
+    scanForbid:  (d.scanForbid  || []).join('\n'),
+    fields: (Array.isArray(d.fields) ? d.fields : []).map(draftFieldFromData),
+  };
+}
+
+function catDraftEnsure() {
+  const id = catEditTarget();
+  if (!id) { state.catDraft = null; return null; }
+  if (!state.catDraft || state.catDraft.id !== id) state.catDraft = catDraftFor(id);
+  return state.catDraft;
+}
+
+// Черновик → оверлей. Для встроенной пишем только ОТЛИЧИЯ от заводской: так
+// правки заводских категорий в будущих версиях доедут, а не замрут копией.
+function catDraftApply(draft) {
+  const keys = draft.fields.map(f => f.key);
+  if (new Set(keys).size !== keys.length) return 'В категории есть поля с одинаковым ключом';
+  if (!(draft.label || '').trim()) return 'Название категории не может быть пустым';
+
+  if (draft.builtin) {
+    const base = BUILTIN_CATS.find(c => c.id === draft.id);
+    const p = {}, fields = {}, add = [];
+    if (draft.label.trim() !== base.label)            p.label = draft.label.trim();
+    if (draft.pName.trim() !== (base.pName || ''))    p.pName = draft.pName.trim();
+    if (draft.extraText.trim())                        p.extraText = draft.extraText.trim();
+    const req = splitLines(draft.scanRequire), forb = splitLines(draft.scanForbid);
+    if (req.length)  p.scanRequire = req;
+    if (forb.length) p.scanForbid  = forb;
+    for (const fd of draft.fields) {
+      if (!fd.builtin) { add.push(draftFieldToData(fd)); continue; }
+      const bf = base.fields.find(x => x.key === fd.key);
+      if (!bf) continue;
+      const patch = {};
+      if ((fd.label || '').trim() && fd.label.trim() !== bf.label) patch.label = fd.label.trim();
+      if ((fd.ph || '') !== (bf.ph || ''))     patch.ph = fd.ph || '';
+      if (fd.hidden)                           patch.hidden = true;
+      if (!fd.req && bf.req)                   patch.req = false;
+      if (fd.isName && !bf.isName)             patch.isName = true;
+      if (Object.keys(patch).length) fields[fd.key] = patch;
+    }
+    if (Object.keys(fields).length) p.fields = fields;
+    if (add.length) p.add = add;
+    const order     = draft.fields.map(f => f.key).join('|');
+    const baseOrder = base.fields.map(f => f.key).concat(add.map(f => f.key)).join('|');
+    if (order !== baseOrder) p.order = draft.fields.map(f => f.key);
+    if (!state.catsCfg.builtin) state.catsCfg.builtin = {};
+    if (Object.keys(p).length) state.catsCfg.builtin[draft.id] = p;
+    else delete state.catsCfg.builtin[draft.id]; // правок не осталось — это и есть заводская
+  } else {
+    const d = {
+      id: draft.id,
+      label: draft.label.trim(),
+      pName: draft.pName.trim() || draft.label.trim(),
+      fields: draft.fields.map(draftFieldToData),
+    };
+    if (draft.extraText.trim()) d.extraText = draft.extraText.trim();
+    const req = splitLines(draft.scanRequire), forb = splitLines(draft.scanForbid);
+    if (req.length)  d.scanRequire = req;
+    if (forb.length) d.scanForbid  = forb;
+    if (!Array.isArray(state.catsCfg.custom)) state.catsCfg.custom = [];
+    const i = state.catsCfg.custom.findIndex(c => c.id === d.id);
+    if (i === -1) state.catsCfg.custom.push(d); else state.catsCfg.custom[i] = d;
+  }
+  rebuildCats(); save();
+  return '';
+}
+
+function catNewFieldKey(draft) {
+  let k;
+  do { k = 'u_' + Math.random().toString(36).slice(2, 7); } while (draft.fields.some(f => f.key === k));
+  return k;
+}
+
+function catEditorHTML() {
+  const d = catDraftEnsure();
+  if (!d) return `<div style="font-size:13px;color:var(--muted)">Нет ни одной категории — создайте новую.
+    <button class="btn-add" data-act="cat-new" style="margin-left:8px">+ Новая категория</button></div>`;
+  const typeLabel = t => USER_FIELD_TYPES.find(x => x.id === t)?.label
+    || (t === 'durations' ? 'Сроки и цены (кодовое)' : t === 'subGames' ? 'Каталог игр (кодовое)' : t);
+
+  const fieldRow = (fd, i) => `
+    <div class="cat-fld ${fd.hidden ? 'off' : ''}">
+      <div class="cat-fld-head">
+        <span class="cat-fld-num">${i + 1}</span>
+        ${fd.builtin
+          ? `<span class="cat-fld-type">${esc(typeLabel(fd.type))}${fd.code ? ' 🔒' : ''}</span>`
+          : `<select data-act="catf" data-i="${i}" data-k="type" class="cat-fld-type-sel">
+               ${USER_FIELD_TYPES.map(t => `<option value="${t.id}"${fd.type === t.id ? ' selected' : ''}>${t.label}</option>`).join('')}
+             </select>`}
+        <input type="text" data-act="catf" data-i="${i}" data-k="label" value="${esc(fd.label)}" placeholder="Подпись поля" class="cat-fld-label">
+        <span class="cat-fld-key" title="Ключ в форме — на него ссылаются обложки, распознавание по фото и пресеты">${esc(fd.key)}</span>
+        <button class="btn-icon" data-act="cat-fld-up"   data-i="${i}" title="Выше"${i === 0 ? ' disabled' : ''}>↑</button>
+        <button class="btn-icon" data-act="cat-fld-down" data-i="${i}" title="Ниже"${i === d.fields.length - 1 ? ' disabled' : ''}>↓</button>
+        ${fd.builtin
+          ? (fd.code ? '' : `<label class="cat-fld-chk" title="Убрать поле из формы этой категории"><input type="checkbox" data-act="catf" data-i="${i}" data-k="hidden"${fd.hidden ? ' checked' : ''}>скрыть</label>`)
+          : `<button class="btn-icon" data-act="cat-fld-del" data-i="${i}" title="Удалить поле" style="color:var(--warn)">×</button>`}
+      </div>
+      ${fd.hidden ? '' : `
+      <div class="cat-fld-body">
+        ${['select', 'chips'].includes(fd.type) ? (fd.optionsLocked
+          ? `<div class="cat-fld-note">Список вариантов задан в коде: ${esc(splitLines(fd.options).join(', ') || '—')}</div>`
+          : `<label class="cat-fld-sub">Варианты (по одному на строку)
+               <textarea data-act="catf" data-i="${i}" data-k="options" rows="3" placeholder="Отличное&#10;Хорошее&#10;Б/у">${esc(fd.options)}</textarea>
+             </label>`) : ''}
+        ${['text', 'num', 'area'].includes(fd.type) ? `
+          <label class="cat-fld-sub">Подсказка в пустом поле
+            <input type="text" data-act="catf" data-i="${i}" data-k="ph" value="${esc(fd.ph)}" placeholder="необязательно">
+          </label>` : ''}
+        <div class="cat-fld-flags">
+          <label class="cat-fld-chk" title="${fd.reqLocked ? 'Проверка этого поля задана в коде' : 'Без него генерация не запустится'}">
+            <input type="checkbox" data-act="catf" data-i="${i}" data-k="req"${fd.req ? ' checked' : ''}${fd.reqLocked ? ' disabled' : ''}>обязательное</label>
+          <label class="cat-fld-chk" title="${fd.promptLocked ? 'Строка промпта для этого поля собирается в коде' : 'Значение уйдёт в промпт генерации'}">
+            <input type="checkbox" data-act="catf" data-i="${i}" data-k="inPrompt"${fd.inPrompt ? ' checked' : ''}${fd.promptLocked ? ' disabled' : ''}>в промпт</label>
+          ${fd.inPrompt && !fd.promptLocked ? `
+            <input type="text" data-act="catf" data-i="${i}" data-k="p" value="${esc(fd.p)}" placeholder="как назвать в промпте (${esc(fd.label || fd.key)})" class="cat-fld-p">` : ''}
+          <label class="cat-fld-chk" title="Это поле — название товара: попадает в штамп варианта, историю и журнал">
+            <input type="checkbox" data-act="catf" data-i="${i}" data-k="isName"${fd.isName ? ' checked' : ''}>название товара</label>
+        </div>
+      </div>`}
+    </div>`;
+
+  return `
+    <div class="cat-ed-bar">
+      <select id="cat-ed-sel">
+        ${CATS.map(c => `<option value="${c.id}"${c.id === d.id ? ' selected' : ''}>${esc(c.label)}</option>`).join('')}
+      </select>
+      <button class="btn-add" data-act="cat-new">+ Новая</button>
+      <button class="btn-add" data-act="cat-clone">⧉ Клонировать</button>
+      ${d.builtin
+        ? (d.patched ? `<button class="btn-add" data-act="cat-reset" style="color:var(--warn)">↺ Сбросить к заводской</button>` : '')
+        : `<button class="btn-add" data-act="cat-del" style="color:var(--warn)">× Удалить категорию</button>`}
+      <span style="flex:1"></span>
+      <button class="btn-add" data-act="cat-json-export" title="Скачать все категории файлом — перенести на второе устройство">⬇ JSON</button>
+      <button class="btn-add" data-act="cat-json-import" title="Загрузить категории из файла">⬆ JSON</button>
+      <input type="file" id="cat-json-file" accept="application/json,.json" style="display:none">
+    </div>
+    ${d.builtin ? `<div class="cat-ed-note">Встроенная категория: подписи, порядок и свои поля меняются, заводская логика (сроки и цены, каталог игр, предзаказ) остаётся. Всё вернуть — «Сбросить к заводской».</div>` : ''}
+    <div class="cat-ed-grid">
+      <label class="cat-fld-sub">Название в списке категорий
+        <input type="text" data-act="catd" data-k="label" value="${esc(d.label)}" placeholder="🧷 Физический товар">
+      </label>
+      <label class="cat-fld-sub">Как называть категорию в промпте
+        <input type="text" data-act="catd" data-k="pName" value="${esc(d.pName)}" placeholder="Физический товар">
+      </label>
+    </div>
+    <label class="cat-fld-sub">Своё правило промпта для этой категории${d.builtin ? ' (добавится к заводскому)' : ''}
+      <textarea data-act="catd" data-k="extraText" rows="3" placeholder="Например: вещь бывшая в употреблении — писать честно о состоянии, «купить» и «оплата» разрешены.">${esc(d.extraText)}</textarea>
+    </label>
+    <div class="cat-ed-fields-title">Поля формы <span style="color:var(--muted);font-weight:400;font-size:12px">— порядок здесь = порядок в Генераторе</span></div>
+    <div class="cat-ed-fields">${d.fields.map(fieldRow).join('') || '<div style="font-size:13px;color:var(--muted);padding:6px 0">Полей пока нет.</div>'}</div>
+    <button class="btn-add" data-act="cat-fld-add">+ Добавить поле</button>
+    <div class="cat-ed-grid" style="margin-top:4px">
+      <label class="cat-fld-sub">Обязательные фразы <span class="cat-ed-soon">подключится на этапе 3</span>
+        <textarea data-act="catd" data-k="scanRequire" rows="3" placeholder="оформляется в цифре">${esc(d.scanRequire)}</textarea>
+      </label>
+      <label class="cat-fld-sub">Запрещённые слова <span class="cat-ed-soon">подключится на этапе 3</span>
+        <textarea data-act="catd" data-k="scanForbid" rows="3" placeholder="аккаунт&#10;подарок">${esc(d.scanForbid)}</textarea>
+      </label>
+    </div>
+    <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:4px">
+      <button class="btn-gen" data-act="cat-ed-save" style="width:auto;padding:9px 22px">Сохранить категорию</button>
+      <span style="font-size:12px;color:var(--muted)">Пока не сохранено — Генератор работает по прежней версии категории.</span>
+    </div>`;
+}
+
 // SETTINGS TAB
 // ══════════════════════════════════════════
 
@@ -3143,6 +3571,13 @@ function settingsTabHTML() {
         </div>
         <div style="font-size:12px;color:var(--muted)">При каждой генерации: ядровые — случайный вариант + перемешанный порядок. 2–4 маскирующих вклиниваются в список.</div>
         <button class="btn-gen" id="cat-save" style="width:auto;padding:9px 22px">Сохранить каталог</button>
+      </div>
+    </div>
+    <div class="card" style="margin-bottom:16px">
+      <div class="card-title">🗂 Категории товаров</div>
+      <div class="form-body">
+        <div style="font-size:12px;color:var(--muted)">Категория — это набор полей формы и правил промпта. Новую можно завести здесь, без правок кода: она сразу появится в Генераторе.</div>
+        <div id="cat-editor-box">${catEditorHTML()}</div>
       </div>
     </div>
     <div class="card" style="margin-bottom:16px">
@@ -3208,7 +3643,188 @@ function settingsTabHTML() {
   </div>`;
 }
 
+// Перерисовываем только карточку категорий: полный render() на каждую правку
+// сбрасывал бы фокус и в соседних карточках Настроек (каталог, промпт).
+function renderCatEditor() {
+  const box = document.getElementById('cat-editor-box');
+  if (!box) return;
+  box.innerHTML = catEditorHTML();
+  bindCatEditor();
+}
+
+function bindCatEditor() {
+  const box = document.getElementById('cat-editor-box');
+  if (!box) return;
+  const d = () => state.catDraft;
+
+  const dirty = () => {
+    // Черновик отличается от сохранённого — подсветим кнопку сохранения
+    box.querySelector('[data-act="cat-ed-save"]')?.classList.add('cat-dirty');
+  };
+
+  box.querySelector('#cat-ed-sel')?.addEventListener('change', e => {
+    state.catEditId = e.target.value; state.catDraft = null; renderCatEditor();
+  });
+
+  // Текстовые поля черновика пишутся БЕЗ перерисовки — иначе теряется фокус
+  box.querySelectorAll('[data-act="catd"]').forEach(el => {
+    el.addEventListener('input', () => { if (d()) { d()[el.dataset.k] = el.value; dirty(); } });
+  });
+  box.querySelectorAll('[data-act="catf"]').forEach(el => {
+    const i = +el.dataset.i, k = el.dataset.k;
+    if (el.type === 'checkbox' || el.tagName === 'SELECT') {
+      el.addEventListener('change', () => {
+        const fd = d()?.fields[i]; if (!fd) return;
+        if (el.type === 'checkbox') {
+          fd[k] = el.checked;
+          // «Название товара» — ровно одно поле на категорию: иначе непонятно,
+          // что писать в штамп варианта и в историю
+          if (k === 'isName' && el.checked) d().fields.forEach((o, j) => { if (j !== i) o.isName = false; });
+        } else {
+          fd[k] = el.value;
+          if (k === 'type' && !['select', 'chips'].includes(el.value)) fd.options = '';
+        }
+        dirty(); renderCatEditor();
+      });
+    } else {
+      el.addEventListener('input', () => { const fd = d()?.fields[i]; if (fd) { fd[k] = el.value; dirty(); } });
+    }
+  });
+
+  box.querySelectorAll('[data-act="cat-fld-up"], [data-act="cat-fld-down"]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const i = +btn.dataset.i, j = btn.dataset.act === 'cat-fld-up' ? i - 1 : i + 1;
+      const arr = d()?.fields; if (!arr || j < 0 || j >= arr.length) return;
+      [arr[i], arr[j]] = [arr[j], arr[i]];
+      renderCatEditor();
+    });
+  });
+  box.querySelectorAll('[data-act="cat-fld-del"]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const i = +btn.dataset.i, fd = d()?.fields[i]; if (!fd) return;
+      if (!confirm(`Удалить поле «${fd.label || fd.key}» из категории?`)) return;
+      d().fields.splice(i, 1); renderCatEditor();
+    });
+  });
+  box.querySelector('[data-act="cat-fld-add"]')?.addEventListener('click', () => {
+    if (!d()) return;
+    d().fields.push({
+      key: catNewFieldKey(d()), type: 'text', builtin: false, code: false,
+      label: '', ph: '', hidden: false, req: false, reqLocked: false, reqText: '',
+      inPrompt: true, promptLocked: false, p: '', options: '', optionsLocked: false, isName: false,
+    });
+    renderCatEditor();
+  });
+
+  box.querySelector('[data-act="cat-new"]')?.addEventListener('click', () => {
+    const name = prompt('Название новой категории (как в списке Генератора):', '🧷 Физический товар');
+    if (!name || !name.trim()) return;
+    const id = 'u_' + Date.now().toString(36);
+    state.catEditId = id;
+    state.catDraft = {
+      id, builtin: false, patched: false,
+      // В промпт имя категории идёт без ведущего эмодзи. Отрезаем всё до первой
+      // буквы/цифры через \p{L}: \W в JS не считает буквой кириллицу и срезал бы
+      // название целиком (та же ловушка, что была в правиле сканера F19).
+      label: name.trim(), pName: name.trim().replace(/^[^\p{L}\p{N}]+/u, ''), extraText: '',
+      scanRequire: '', scanForbid: '',
+      fields: [{
+        key: 'u_name', type: 'text', builtin: false, code: false,
+        label: 'Название товара', ph: '', hidden: false, req: true, reqLocked: false,
+        reqText: 'название товара', inPrompt: true, promptLocked: false, p: 'Название',
+        options: '', optionsLocked: false, isName: true,
+      }],
+    };
+    // Сохраняем сразу — иначе новой категории нет ни в CATS, ни в селекте редактора
+    const err = catDraftApply(state.catDraft);
+    if (err) { toast(err); return; }
+    state.catDraft = null; renderCatEditor(); toast('Категория создана — добавьте поля и сохраните');
+  });
+
+  box.querySelector('[data-act="cat-clone"]')?.addEventListener('click', () => {
+    const src = d(); if (!src) return;
+    const name = prompt('Название копии:', src.label + ' (копия)');
+    if (!name || !name.trim()) return;
+    const id = 'u_' + Date.now().toString(36);
+    // Ключи полей сохраняем: клон «Игры» продолжает работать с подгрузкой обложек,
+    // инфографикой и распознаванием по фото, которые ссылаются на эти же ключи.
+    // Кодовые поля (сроки, каталог игр) не переносятся — их логика живёт в коде.
+    const fields = src.fields.filter(f => !f.code && !f.hidden)
+      .map(f => ({ ...f, builtin: false, code: false, optionsLocked: false, promptLocked: false, reqLocked: false }));
+    state.catEditId = id;
+    state.catDraft = { ...src, id, builtin: false, patched: false, label: name.trim(), fields };
+    const err = catDraftApply(state.catDraft);
+    if (err) { toast(err); return; }
+    state.catDraft = null; renderCatEditor();
+    toast(src.fields.some(f => f.code) ? 'Скопировано (кодовые поля пропущены)' : 'Категория скопирована');
+  });
+
+  box.querySelector('[data-act="cat-reset"]')?.addEventListener('click', () => {
+    const id = d()?.id; if (!id) return;
+    if (!confirm('Вернуть категорию к заводскому виду? Все правки этой категории будут потеряны.')) return;
+    if (state.catsCfg.builtin) delete state.catsCfg.builtin[id];
+    rebuildCats(); save(); state.catDraft = null; renderCatEditor(); reForm();
+    toast('Категория сброшена к заводской');
+  });
+
+  box.querySelector('[data-act="cat-del"]')?.addEventListener('click', () => {
+    const id = d()?.id; if (!id) return;
+    if (!confirm(`Удалить категорию «${d().label}»? Объявления, уже сгенерированные в ней, останутся.`)) return;
+    state.catsCfg.custom = (state.catsCfg.custom || []).filter(c => c.id !== id);
+    rebuildCats();
+    // Форма не должна остаться на несуществующей категории
+    if (state.form.category === id) state.form.category = CATS[0]?.id || 'gaming_sub';
+    save(); state.catEditId = null; state.catDraft = null; renderCatEditor(); reForm();
+    toast('Категория удалена');
+  });
+
+  box.querySelector('[data-act="cat-ed-save"]')?.addEventListener('click', () => {
+    const draft = d(); if (!draft) return;
+    const err = catDraftApply(draft);
+    if (err) { toast(err); return; }
+    state.catDraft = null; renderCatEditor(); reForm();
+    toast('Категория сохранена');
+  });
+
+  box.querySelector('[data-act="cat-json-export"]')?.addEventListener('click', () => {
+    try {
+      const blob = new Blob([JSON.stringify(state.catsCfg, null, 2)], { type: 'application/json' });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = `avito-categories-${new Date().toISOString().slice(0, 10)}.json`;
+      a.click();
+      URL.revokeObjectURL(a.href);
+    } catch(e) { toast('Не удалось выгрузить категории'); }
+  });
+  box.querySelector('[data-act="cat-json-import"]')?.addEventListener('click', () => {
+    box.querySelector('#cat-json-file')?.click();
+  });
+  box.querySelector('#cat-json-file')?.addEventListener('change', e => {
+    const file = e.target.files && e.target.files[0];
+    e.target.value = ''; // тот же файл можно выбрать повторно
+    if (!file) return;
+    const rd = new FileReader();
+    rd.onload = () => {
+      let data;
+      try { data = JSON.parse(rd.result); } catch(err) { toast('Файл не читается как JSON'); return; }
+      if (!data || typeof data !== 'object' || (!data.builtin && !data.custom)) { toast('Это не файл категорий'); return; }
+      const cnt = (Array.isArray(data.custom) ? data.custom.length : 0);
+      if (!confirm(`Заменить настройки категорий на файл? Своих категорий в файле: ${cnt}. Текущие правки категорий будут потеряны.`)) return;
+      state.catsCfg = {
+        builtin: (data.builtin && typeof data.builtin === 'object') ? data.builtin : {},
+        custom:  Array.isArray(data.custom) ? data.custom.filter(c => c && c.id) : [],
+      };
+      rebuildCats();
+      if (!CATS.some(c => c.id === state.form.category)) state.form.category = CATS[0]?.id || 'gaming_sub';
+      save(); state.catEditId = null; state.catDraft = null; renderCatEditor(); reForm();
+      toast(`Категории загружены: ${CATS.length} всего`);
+    };
+    rd.readAsText(file);
+  });
+}
+
 function bindSettingsTab() {
+  bindCatEditor();
   document.querySelectorAll('[data-act="preset-rename"]').forEach(btn => {
     btn.addEventListener('click', () => {
       const id = +btn.dataset.id;
