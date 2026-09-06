@@ -640,10 +640,34 @@ const PROXY_OPENROUTER  = 'https://api.poigraem.shop/api/openrouter';
 const PROXY_JOURNAL     = 'https://api.poigraem.shop/api/journal';
 
 const CLAUDE_MODELS = [
-  { id: 'claude-sonnet-4-6',          label: 'Claude Sonnet 4.6 (рекомендуется)' },
-  { id: 'claude-haiku-4-5-20251001',  label: 'Claude Haiku 4.5 (быстро/дёшево)'  },
-  { id: 'claude-opus-4-7',            label: 'Claude Opus 4.7 (мощный)'          },
+  { id: 'claude-sonnet-5',    label: 'Claude Sonnet 5 (рекомендуется)'  },
+  { id: 'claude-opus-5',      label: 'Claude Opus 5 (самый умный)'      },
+  { id: 'claude-haiku-4-5',   label: 'Claude Haiku 4.5 (быстро/дёшево)' },
 ];
+
+// Возможности моделей различаются на уровне ПАРАМЕТРОВ ЗАПРОСА, а не только качества:
+// на моделях 5-го поколения и Opus 4.7+ параметр temperature УДАЛЁН и возвращает 400.
+// Раньше мы слали его всегда — то есть выбор «Opus 4.7» в настройках гарантированно
+// ронял любую генерацию (не всплывало только потому, что дефолтом был Sonnet 4.6).
+// Здесь же — режим размышления и версия инструмента веб-поиска.
+const MODEL_CAPS = {
+  'claude-sonnet-5':  { sampling: false, thinking: 'adaptive', webSearch: 'web_search_20260209' },
+  'claude-opus-5':    { sampling: false, thinking: 'adaptive', webSearch: 'web_search_20260209' },
+  'claude-haiku-4-5': { sampling: true,  thinking: null,       webSearch: 'web_search_20250305' },
+};
+// Неизвестная модель — самый осторожный набор: ничего необязательного не шлём,
+// такой запрос примут и старые, и новые модели.
+const CAPS_FALLBACK = { sampling: false, thinking: null, webSearch: 'web_search_20250305' };
+function modelCaps(id) { return MODEL_CAPS[id] || CAPS_FALLBACK; }
+
+// Настройки живут в localStorage с прошлых версий: без переноса Денис остался бы
+// на снятой с полки модели, а select показывал бы пустоту (её нет в списке).
+const MODEL_MIGRATION = {
+  'claude-sonnet-4-6': 'claude-sonnet-5',
+  'claude-opus-4-7': 'claude-opus-5',
+  'claude-opus-4-6': 'claude-opus-5',
+  'claude-haiku-4-5-20251001': 'claude-haiku-4-5',
+};
 
 const SUB_TYPES = [
   'PS Plus Essential', 'PS Plus Extra', 'PS Plus Deluxe',
@@ -690,7 +714,7 @@ const STATUS_CLS    = { active:'ok',      paused:'warn',  removed:'muted' };
 
 const DEF_SETTINGS = {
   provider: 'claude',
-  model: 'claude-sonnet-4-6',
+  model: 'claude-sonnet-5',
   orModel: 'anthropic/claude-3.5-sonnet',
   customSys: '',
   pageName:  'Страница 1',
@@ -728,7 +752,11 @@ const DEF_FORM = {
 const state = {
   tab: 'generator',
   aiOpen: false,
-  settings: ls('avito_settings', DEF_SETTINGS),
+  settings: (() => {
+    const s = ls('avito_settings', DEF_SETTINGS);
+    if (MODEL_MIGRATION[s.model]) s.model = MODEL_MIGRATION[s.model]; // перенос со снятых моделей
+    return s;
+  })(),
   form:     ls('avito_form',     DEF_FORM),
   loading: false,
   loadingKind: null, // 'titles' | 'descriptions' | null — текст спиннера для шага «сначала заголовки»
@@ -1246,8 +1274,15 @@ async function callAI(messages, opts = {}) {
   const system = opts.system || (state.settings.customSys ? SYS + '\n\n' + state.settings.customSys : SYS);
 
   if (provider === 'claude') {
-    const body = { model, max_tokens: opts.max_tokens || 4000, temperature, system, messages };
-    if (opts.webSearch) body.tools = [{ type: 'web_search_20250305', name: 'web_search' }];
+    const caps = modelCaps(model);
+    const body = { model, max_tokens: opts.max_tokens || 4000, system, messages };
+    // temperature только там, где она вообще принимается: на моделях 5-го поколения
+    // её присутствие — это 400, а не «проигнорируют».
+    if (caps.sampling) body.temperature = temperature;
+    // Размышление просим точечно (сейчас — распознавание по фото и поиск цены):
+    // там модель должна подумать, а не выпалить первое впечатление.
+    if (opts.thinking && caps.thinking === 'adaptive') body.thinking = { type: 'adaptive' };
+    if (opts.webSearch) body.tools = [{ type: caps.webSearch, name: 'web_search' }];
     const r = await fetch(PROXY_CLAUDE, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + getProxyToken() },
@@ -2381,7 +2416,9 @@ async function doVisionRecognize() {
     // provider жёстко claude: у OpenRouter другой формат картинок, и сам эндпоинт
     // на VPS отсутствует (Bug #9) — молча уводить распознавание в 404 нельзя.
     const text = await callAI([{ role: 'user', content }], {
-      provider: 'claude', system: VISION_SYS, max_tokens: 1200, temperature: 0.2,
+      // thinking: разглядеть товар на фото — как раз задача, где нужен разбор, а не
+      // первое впечатление. max_tokens поднят: размышление тратится из того же лимита.
+      provider: 'claude', system: VISION_SYS, max_tokens: 4000, temperature: 0.2, thinking: true,
     });
     const r = JSON.parse(extractJSON(text));
     if (!r || typeof r !== 'object') throw new Error('Модель вернула не JSON');
@@ -2426,7 +2463,7 @@ async function doVisionPrice() {
 Ответ — ТОЛЬКО JSON, без пояснений:
 {"low": число, "typical": число, "high": число, "comment": "одна строка: от чего зависит разброс"}`;
     const text = await callAI([{ role: 'user', content: msg }], {
-      provider: 'claude', system: VISION_PRICE_SYS, webSearch: true, max_tokens: 2500, temperature: 0.2,
+      provider: 'claude', system: VISION_PRICE_SYS, webSearch: true, max_tokens: 6000, temperature: 0.2, thinking: true,
     });
     const p = JSON.parse(extractJSON(text));
     const num = x => { const n = Math.round(Number(x)); return Number.isFinite(n) && n > 0 ? n : null; };
