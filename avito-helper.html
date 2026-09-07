@@ -6361,6 +6361,25 @@ function refsToAnalyze() {
   return (state.refs || []).filter(r => r.source === 'other' && !Array.isArray(r.tricks) && (r.title || r.desc));
 }
 
+const REF_TRICKS_CHUNK = 6;   // объявлений на один запрос
+const REF_TRICK_MAX_LEN = 160;
+
+// Приёмы вытащены из ЧУЖОГО текста, который мы не контролируем, и дальше идут
+// в КАЖДЫЙ промпт генерации. Поэтому перед сохранением они проходят тот же
+// фильтр, что и готовое объявление: приём вида «зовёт продолжить общение в
+// мессенджере» толкал бы генератор ровно к тому, за что Авито снимает.
+function sanitizeTricks(list) {
+  const out = [];
+  for (const raw of (Array.isArray(list) ? list : [])) {
+    const s = String(raw).trim().replace(/\s+/g, ' ').slice(0, REF_TRICK_MAX_LEN);
+    if (!s) continue;
+    if (SCAN_ERRORS.some(p => p.re.test(s))) continue;
+    if (SCAN_WARNINGS.some(p => (p.rule === 'messenger' || p.rule === 'account') && p.re.test(s))) continue;
+    out.push(s);
+  }
+  return out.slice(0, 3);
+}
+
 async function doRefTricks() {
   if (state._refTricksLoading) return;
   const pending = refsToAnalyze();
@@ -6368,34 +6387,44 @@ async function doRefTricks() {
   state._refTricksLoading = true;
   renderDb();
   const jT0 = Date.now();
-  try {
-    const list = pending.map(r => `id: ${r.id}\nНазвание: ${r.title || '—'}\nОписание: ${(r.desc || '').slice(0, 1200)}`).join('\n---\n');
-    const text = await callAI([{ role: 'user', content: `Разбери на приёмы эти объявления:\n\n${list}` }], {
-      system: REF_TRICKS_SYS, max_tokens: 2000,
-    });
-    const data = JSON.parse(extractJSON(text));
-    let n = 0;
-    for (const item of (Array.isArray(data?.items) ? data.items : [])) {
-      const ref = (state.refs || []).find(r => String(r.id) === String(item?.id));
-      if (!ref) continue;
-      const tricks = (Array.isArray(item.tricks) ? item.tricks : [])
-        .map(s => String(s).trim()).filter(Boolean).slice(0, 3);
-      if (!tricks.length) continue;
-      ref.tricks = tricks; n++;
+  // Разбираем чанками: на одном запросе большая пачка упирается в max_tokens,
+  // ответ обрывается на полуслове, JSON.parse падает — и кнопка не срабатывает
+  // уже никогда, пока эталоны не удалить руками.
+  const chunks = [];
+  for (let i = 0; i < pending.length; i += REF_TRICKS_CHUNK) chunks.push(pending.slice(i, i + REF_TRICKS_CHUNK));
+  let filled = 0, seen = 0, fails = 0;
+  for (const chunk of chunks) {
+    try {
+      const list = chunk.map(r => `id: ${r.id}\nНазвание: ${r.title || '—'}\nОписание: ${(r.desc || '').slice(0, 1200)}`).join('\n---\n');
+      const text = await callAI([{ role: 'user', content: `Разбери на приёмы эти объявления:\n\n${list}` }], {
+        system: REF_TRICKS_SYS, max_tokens: Math.min(4000, 500 + chunk.length * 300),
+      });
+      const data = JSON.parse(extractJSON(text));
+      for (const item of (Array.isArray(data?.items) ? data.items : [])) {
+        // Ищем только среди отправленных: выдуманный или перепутанный моделью id
+        // иначе прицепил бы приёмы к своему эталону или перезаписал чужие прежние
+        const ref = chunk.find(r => String(r.id) === String(item?.id));
+        if (!ref) continue;
+        const tricks = sanitizeTricks(item.tricks);
+        // Пустым списком помечаем ТОЛЬКО то, о чём модель реально ответила:
+        // остальные останутся неразобранными и попадут в следующий заход, а не
+        // застрянут навсегда в «разобрано, приёмов нет» без кнопки сброса
+        ref.tricks = tricks;
+        seen++;
+        if (tricks.length) filled++;
+      }
+    } catch (e) {
+      fails++;
+      console.error('Разбор приёмов: чанк не удался', e);
+      jlog('error', null, { stage: 'ref_tricks', message: String(e.message || '').slice(0, 300) });
     }
-    // Эталон, из которого вытащить нечего, помечаем пустым списком — иначе он
-    // будет попадать в «неразобранные» на каждый следующий запуск
-    for (const r of pending) if (!Array.isArray(r.tricks)) r.tricks = [];
-    save();
-    jlog('refs_tricks', null, { asked: pending.length, filled: n, latencyMs: Date.now() - jT0 });
-    toast(n ? `Разобрано: ${n} из ${pending.length}` : 'Модель не нашла приёмов в этих объявлениях');
-  } catch (e) {
-    toast('Не удалось разобрать: ' + (e.message || e));
-    jlog('error', null, { stage: 'ref_tricks', message: String(e.message || '').slice(0, 300) });
-  } finally {
-    state._refTricksLoading = false;
-    renderDb();
   }
+  save();
+  jlog('refs_tricks', null, { asked: pending.length, answered: seen, filled, chunks: chunks.length, fails, latencyMs: Date.now() - jT0 });
+  if (!seen) toast(fails ? 'Не удалось разобрать — попробуйте ещё раз' : 'Модель не нашла приёмов в этих объявлениях');
+  else toast(`Разобрано: ${filled} из ${seen}${seen < pending.length ? ` · осталось ${pending.length - seen}` : ''}`);
+  state._refTricksLoading = false;
+  renderDb();
 }
 
 // Зеркалим ввод в state.refForm — иначе перерисовка вкладки Истории (фильтр по товару

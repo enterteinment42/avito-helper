@@ -126,8 +126,111 @@ export async function runFewshot(browser, base, t) {
     t.ok('приёмы из другой категории подхватываются, если своих нет',
       (await page.evaluate(() => refTricksBlock('phys'))).includes('ход из игр'));
 
+    // ── Находки код-ревью разбора приёмов ───────────────────
+    // Большая пачка режется на чанки: один запрос упирался бы в max_tokens,
+    // ответ обрывался, JSON.parse падал — и кнопка не срабатывала бы никогда
+    const chunked = await page.evaluate(async () => {
+      state.refs = Array.from({ length: 14 }, (_, i) => ({
+        id: 100 + i, source: 'other', category: 'phys', title: 'Ч' + i, desc: 'текст ' + i,
+      }));
+      save();
+      const sizes = [];
+      window.callAI = async (m, opts = {}) => {
+        const ids = [...m[0].content.matchAll(/id: (\d+)/g)].map(x => +x[1]);
+        sizes.push({ n: ids.length, max: opts.max_tokens });
+        return JSON.stringify({ items: ids.map(id => ({ id, tricks: ['ход ' + id] })) });
+      };
+      await doRefTricks();
+      return { sizes, done: state.refs.filter(r => Array.isArray(r.tricks)).length };
+    });
+    t.eq('пачка разбита на чанки', chunked.sizes.length, 3);
+    t.ok('в чанке не больше шести объявлений', chunked.sizes.every(s => s.n <= 6), JSON.stringify(chunked.sizes));
+    t.ok('лимит ответа зависит от размера чанка', chunked.sizes[0].max > chunked.sizes[2].max,
+      JSON.stringify(chunked.sizes));
+    t.eq('разобраны все', chunked.done, 14);
+
+    // Не вернувшиеся в ответе эталоны остаются на следующий заход
+    const partial = await page.evaluate(async () => {
+      state.refs = [
+        { id: 201, source: 'other', category: 'phys', title: 'A', desc: 'a' },
+        { id: 202, source: 'other', category: 'phys', title: 'B', desc: 'b' },
+        { id: 203, source: 'other', category: 'phys', title: 'C', desc: 'c' },
+      ];
+      save();
+      // Модель ответила только про первое и второе (второе — без приёмов)
+      window.callAI = async () => JSON.stringify({ items: [
+        { id: 201, tricks: ['ход'] },
+        { id: 202, tricks: [] },
+      ] });
+      await doRefTricks();
+      return {
+        a: state.refs.find(r => r.id === 201).tricks,
+        b: state.refs.find(r => r.id === 202).tricks,
+        c: state.refs.find(r => r.id === 203).tricks,
+        pending: refsToAnalyze().map(r => r.id),
+      };
+    });
+    t.eq('ответивший с приёмами сохранён', partial.a.length, 1);
+    t.eq('ответивший без приёмов помечен пустым', partial.b.length, 0);
+    t.eq('неотвеченный НЕ помечен', partial.c, undefined);
+    t.eq('и вернётся в следующий заход', partial.pending.join(','), '203');
+
+    // Чужой id не цепляет посторонний эталон
+    const forgedId = await page.evaluate(async () => {
+      state.refs = [
+        { id: 301, source: 'mine',  category: 'phys', title: 'Моё', desc: 'мой текст' },
+        { id: 302, source: 'other', category: 'phys', title: 'Чужое', desc: 'чужой текст' },
+      ];
+      save();
+      window.callAI = async () => JSON.stringify({ items: [{ id: 301, tricks: ['подмена'] }] });
+      await doRefTricks();
+      return { mine: state.refs.find(r => r.id === 301).tricks, other: state.refs.find(r => r.id === 302).tricks };
+    });
+    t.eq('приёмы не прицепились к своему эталону', forgedId.mine, undefined);
+    t.eq('и чужой не помечен по чужому id', forgedId.other, undefined);
+
+    // Приёмы фильтруются тем же списком запретов, что и объявления
+    const clean = await page.evaluate(async () => {
+      state.refs = [{ id: 401, source: 'other', category: 'phys', title: 'Ч', desc: 'ч' }];
+      save();
+      window.callAI = async () => JSON.stringify({ items: [{ id: 401, tricks: [
+        'зовёт продолжить общение в телеграм — пишите в telegram',
+        'предлагает передать аккаунт вместе с товаром',
+        'даёт ссылку https://example.com на обзор',
+        'начинает с вопроса покупателя',
+        'x'.repeat(300),
+      ] }] });
+      await doRefTricks();
+      return state.refs[0].tricks;
+    });
+    t.ok('приём про мессенджер отброшен', !clean.some(s => /телеграм|telegram/i.test(s)), JSON.stringify(clean));
+    t.ok('приём про аккаунт отброшен', !clean.some(s => /аккаунт/i.test(s)), JSON.stringify(clean));
+    t.ok('приём со ссылкой отброшен', !clean.some(s => /https?:/i.test(s)), JSON.stringify(clean));
+    t.ok('безопасный приём сохранён', clean.some(s => s.includes('начинает с вопроса')), JSON.stringify(clean));
+    t.ok('длина приёма ограничена', clean.every(s => s.length <= 160), JSON.stringify(clean.map(s => s.length)));
+
+    // Падение одного чанка не роняет остальные
+    const resilient = await page.evaluate(async () => {
+      state.refs = Array.from({ length: 8 }, (_, i) => ({
+        id: 500 + i, source: 'other', category: 'phys', title: 'Ч' + i, desc: 'т' + i,
+      }));
+      save();
+      let call = 0;
+      window.callAI = async (m) => {
+        call++;
+        if (call === 1) return 'не json вовсе';
+        const ids = [...m[0].content.matchAll(/id: (\d+)/g)].map(x => +x[1]);
+        return JSON.stringify({ items: ids.map(id => ({ id, tricks: ['ход'] })) });
+      };
+      await doRefTricks();
+      return { done: state.refs.filter(r => Array.isArray(r.tricks)).length, pending: refsToAnalyze().length };
+    });
+    t.eq('второй чанк отработал, несмотря на падение первого', resilient.done, 2);
+    t.eq('упавший чанк вернётся в следующий заход', resilient.pending, 6);
+
     // Разбирать нечего — вызова нет
     const noop = await page.evaluate(async () => {
+      state.refs = []; save();          // предыдущий тест намеренно оставил неразобранные
       let called = 0;
       window.callAI = async () => { called++; return '{}'; };
       await doRefTricks();
@@ -135,7 +238,10 @@ export async function runFewshot(browser, base, t) {
     });
     t.eq('без неразобранных запрос не уходит', noop, 0);
 
-    t.ok('консоль чистая', consoleErrors.length === 0, consoleErrors.join('\n'));
+    // Диагностика упавшего чанка пишется в консоль намеренно (как у пакетной
+    // генерации) — её же и вызвал тест устойчивости выше
+    const unexpected = consoleErrors.filter(e => !/Разбор приёмов: чанк не удался/.test(e));
+    t.ok('консоль чистая', unexpected.length === 0, unexpected.join('\n'));
   } finally {
     await ctx.close();
   }
