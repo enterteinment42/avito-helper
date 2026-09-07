@@ -1422,7 +1422,7 @@ const J_UI_ACTS = new Set([
   'queue-add','queue-add-batch','queue-start','queue-clear','session-done','session-skip',
   'cv-download','cv-gen-vars','cv-gen-collage-vars','cv-dl-all-game','cv-dl-all-collage',
   'cv-igdb-fetch','cv-igdb-game-fetch','cv-mask-toggle','cv-to-toggle','cv-ig-toggle','cv-ig-fill',
-  'db-export','db-add','db-final','ref-add','conv-photo',
+  'db-export','db-add','db-final','ref-add','ref-tricks','conv-photo',
   'vision-recognize','vision-price','vision-apply-price','vision-covers','vision-undo','vision-pick',
 ]);
 
@@ -1769,6 +1769,21 @@ function fewShotSamples(category) {
   return own.length ? { list: own, own: true } : { list: all.filter(x => x.cat && x.cat !== category), own: false };
 }
 
+// Чужие удачные объявления (👀) не идут в промпт текстом: у них своя
+// комплектация, свой город и свои цены, и модель тащила бы эти факты в наше
+// объявление как правду. Вместо текста подмешиваются ПРИЁМЫ — то, что из
+// чужого объявления вытащено разбором (кнопка «🔎 Разобрать приёмы»).
+function refTricksBlock(category) {
+  const withTricks = (state.refs || []).filter(r => r.source === 'other' && Array.isArray(r.tricks) && r.tricks.length);
+  if (!withTricks.length) return '';
+  const own = withTricks.filter(r => r.category === category);
+  const pool = own.length ? own : withTricks;
+  const tricks = [...new Set(pool.flatMap(r => r.tricks).map(s => String(s).trim()).filter(Boolean))];
+  if (!tricks.length) return '';
+  const picks = [...tricks].sort(() => Math.random() - .5).slice(0, 4);
+  return `\n\nПриёмы, которые работают у других продавцов (разобраны из удачных чужих объявлений — это ходы, а не текст; ни одной чужой фразы дословно):\n${picks.map(s => `- ${s}`).join('\n')}`;
+}
+
 // Few-shot: 1-2 примера — модель ориентируется на характер продавца, а не
 // только на правила.
 function fewShotBlock(category) {
@@ -1785,6 +1800,11 @@ function fewShotBlock(category) {
     : `\n\nПримеры твоих объявлений ИЗ ДРУГОЙ КАТЕГОРИИ товара (своих по этой пока нет). Перенимай ТОЛЬКО тон, ритм и структуру. НЕ переноси оттуда формулировки и правила: у каждой категории они свои.\n${lines}`;
 }
 
+// Всё, что подмешивается к промпту из накопленного: свои образцы + чужие приёмы.
+function learnedBlock(category) {
+  return fewShotBlock(category) + refTricksBlock(category);
+}
+
 function buildMsg(overrideCount, excludeTitles = [], formOverride = null) {
   const f = formOverride || state.form;
   const count = overrideCount ?? f.count;
@@ -1792,7 +1812,7 @@ function buildMsg(overrideCount, excludeTitles = [], formOverride = null) {
   const notes = f.notes ? `\nДополнительно: ${f.notes}` : '';
   return `${catInfoBlock(f)}
 Стиль: ${styleLabel(f)}
-Вариантов: ${count}${excl}${notes}${fewShotBlock(f.category)}`;
+Вариантов: ${count}${excl}${notes}${learnedBlock(f.category)}`;
 }
 
 // ══════════════════════════════════════════
@@ -1993,7 +2013,7 @@ function buildTitlesMsg(n) {
   const notes = f.notes ? `\nДополнительно: ${f.notes}` : '';
   return `${catInfoBlock(f)}${notes}
 
-ЗАДАЧА: сгенерируй ${n} вариантов НАЗВАНИЙ (только названия, БЕЗ описаний) для одного и того же объявления. Каждое — из РАЗНОЙ точки пространства вариаций (разный крючок, разное написание/сокращение, разный порядок слов). Строго следуй формуле и правилам названий из системного промпта (лимит 50 символов, запрещённые слова, для игр — без цены).${fewShotBlock(f.category)}
+ЗАДАЧА: сгенерируй ${n} вариантов НАЗВАНИЙ (только названия, БЕЗ описаний) для одного и того же объявления. Каждое — из РАЗНОЙ точки пространства вариаций (разный крючок, разное написание/сокращение, разный порядок слов). Строго следуй формуле и правилам названий из системного промпта (лимит 50 символов, запрещённые слова, для игр — без цены).${learnedBlock(f.category)}
 
 Верни строго JSON без markdown-обёртки:
 {"titles":[{"title":"...","hook":"крючок одним-двумя словами"}]}`;
@@ -2054,7 +2074,7 @@ async function doGenDescriptionsForTitles() {
 Названия УЖЕ ВЫБРАНЫ продавцом — менять текст названия НЕЛЬЗЯ, перенеси его в поле title символ-в-символ:
 ${list}
 
-Для каждого напиши полное описание — разное по структуре и подаче цены между вариантами (см. правила описаний в системном промпте).${fewShotBlock(f.category)}
+Для каждого напиши полное описание — разное по структуре и подаче цены между вариантами (см. правила описаний в системном промпте).${learnedBlock(f.category)}
 Верни строго JSON без markdown-обёртки:
 {"variants":[{"id":1,"title":"(как в списке, без изменений)","title_length":число,"description":"...","style":"...","price_format":"...","hook":"...","structure":"..."}]}`;
     const text = await callAI([{ role: 'user', content: msg }], { webSearch, category: f.category, max_tokens: Math.min(8000, 800 + chosen.length * 1200) });
@@ -6265,15 +6285,26 @@ function refsCardHTML() {
       <span style="flex-shrink:0;font-size:11px;color:${r.source === 'mine' ? 'var(--teal-h)' : 'var(--accent-h)'}">${r.source === 'mine' ? '✍ моё' : '👀 чужое'}</span>
       <span class="preset-item-name" title="${esc((r.title || '') + '\n\n' + (r.desc || ''))}" style="cursor:help">${esc(r.title || (r.desc || '').slice(0, 60))}</span>
       <span class="preset-item-meta">${esc(r.date || '')}</span>
+      ${r.source === 'other' && Array.isArray(r.tricks) && r.tricks.length
+        ? `<span class="preset-item-meta" style="color:var(--teal-h);cursor:help" title="Приёмы, которые ушли в генерацию:&#10;${esc(r.tricks.join('\n'))}">🔎 ${r.tricks.length}</span>` : ''}
       <button class="btn-icon" data-act="ref-del" data-id="${r.id}" title="Удалить эталон" style="color:var(--warn)">×</button>
     </div>`).join('')}
   </div>` : '';
+  const pending = refsToAnalyze().length;
+  const tricksTotal = refs.filter(r => Array.isArray(r.tricks) && r.tricks.length).length;
   return `<div class="card" style="margin-top:16px">
     <div class="card-title">📥 Эталоны — объявления без инструмента и чужие удачные <span class="sec-badge">${refs.length}</span></div>
     <div style="font-size:12px;color:var(--muted);margin-bottom:12px">
       Скидывай сюда объявления, которые составил сам без генератора, или чужие, которые понравились.
-      Через месяц сравним их язык с языком генератора — это прямое сырьё для улучшения промпта.
+      <b style="color:var(--teal-h)">✍ Свои</b> идут в генерацию как образец твоего языка. <b style="color:var(--accent-h)">👀 Чужие</b> — не текстом:
+      кнопка ниже вытаскивает из них приёмы (ходы, структуру), и в промпт уходят только они, без чужих формулировок и фактов.
     </div>
+    ${refs.some(r => r.source === 'other') ? `<div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:12px">
+      <button class="btn-add" data-act="ref-tricks" ${state._refTricksLoading || !pending ? 'disabled' : ''}>
+        ${state._refTricksLoading ? '⏳ Разбираю…' : pending ? `🔎 Разобрать приёмы (${pending})` : '🔎 Все разобраны'}
+      </button>
+      <span style="font-size:11.5px;color:var(--muted)">${tricksTotal ? `Разобрано объявлений: ${tricksTotal} — их приёмы уже подмешиваются в генерацию` : 'Пока ни одно чужое объявление не разобрано'}</span>
+    </div>` : ''}
     <div class="form-body">
       <div style="display:flex;gap:10px;flex-wrap:wrap">
         <div class="field" style="min-width:170px">
@@ -6303,6 +6334,68 @@ function refsCardHTML() {
     </div>
     ${listHTML}
   </div>`;
+}
+
+// Разбор чужих эталонов на приёмы. Один вызов на всю пачку неразобранных:
+// текст чужого объявления в генерацию не попадает никогда — только вытащенные
+// из него ходы, поэтому чужие комплектации и цены физически не могут протечь
+// в наше объявление.
+const REF_TRICKS_SYS = `Ты — редактор, который разбирает чужие объявления Авито и вытаскивает из них ПРИЁМЫ.
+
+Приём — это ХОД, а не текст: с чего начали, как построили структуру, чем зацепили, как подали выгоду, как закрыли возражение, как оформили список.
+
+ПРАВИЛА:
+- Формулируй приём так, чтобы его можно было применить к ЛЮБОМУ товару: «начинает с вопроса, который сам себе задаёт покупатель», «список через тире, а не запятыми», «закрывает возражение о состоянии сразу после названия».
+- НЕ переписывай фразы из объявления и не цитируй их. Ни одной чужой формулировки.
+- НЕ переноси факты: комплектации, цены, города, сроки, названия конкретных товаров.
+- 2-3 приёма на объявление, только сильные. Нечего вытащить — верни пустой список для этого объявления.
+- Каждый приём — одна короткая строка на русском.
+
+ФОРМАТ ОТВЕТА — ТОЛЬКО JSON:
+{"items": [{"id": <id объявления как дано>, "tricks": ["приём", "приём"]}]}`;
+
+// Разобранным считается эталон, у которого tricks вообще ЕСТЬ — даже пустой
+// список. Иначе объявление, из которого приёмов не вытащилось, уходило бы на
+// разбор при каждом нажатии кнопки и жгло токены.
+function refsToAnalyze() {
+  return (state.refs || []).filter(r => r.source === 'other' && !Array.isArray(r.tricks) && (r.title || r.desc));
+}
+
+async function doRefTricks() {
+  if (state._refTricksLoading) return;
+  const pending = refsToAnalyze();
+  if (!pending.length) { toast('Нечего разбирать — все чужие эталоны уже разобраны'); return; }
+  state._refTricksLoading = true;
+  renderDb();
+  const jT0 = Date.now();
+  try {
+    const list = pending.map(r => `id: ${r.id}\nНазвание: ${r.title || '—'}\nОписание: ${(r.desc || '').slice(0, 1200)}`).join('\n---\n');
+    const text = await callAI([{ role: 'user', content: `Разбери на приёмы эти объявления:\n\n${list}` }], {
+      system: REF_TRICKS_SYS, max_tokens: 2000,
+    });
+    const data = JSON.parse(extractJSON(text));
+    let n = 0;
+    for (const item of (Array.isArray(data?.items) ? data.items : [])) {
+      const ref = (state.refs || []).find(r => String(r.id) === String(item?.id));
+      if (!ref) continue;
+      const tricks = (Array.isArray(item.tricks) ? item.tricks : [])
+        .map(s => String(s).trim()).filter(Boolean).slice(0, 3);
+      if (!tricks.length) continue;
+      ref.tricks = tricks; n++;
+    }
+    // Эталон, из которого вытащить нечего, помечаем пустым списком — иначе он
+    // будет попадать в «неразобранные» на каждый следующий запуск
+    for (const r of pending) if (!Array.isArray(r.tricks)) r.tricks = [];
+    save();
+    jlog('refs_tricks', null, { asked: pending.length, filled: n, latencyMs: Date.now() - jT0 });
+    toast(n ? `Разобрано: ${n} из ${pending.length}` : 'Модель не нашла приёмов в этих объявлениях');
+  } catch (e) {
+    toast('Не удалось разобрать: ' + (e.message || e));
+    jlog('error', null, { stage: 'ref_tricks', message: String(e.message || '').slice(0, 300) });
+  } finally {
+    state._refTricksLoading = false;
+    renderDb();
+  }
 }
 
 // Зеркалим ввод в state.refForm — иначе перерисовка вкладки Истории (фильтр по товару
@@ -7745,6 +7838,8 @@ document.addEventListener('click', e => {
 
     case 'db-final':
       showFinalDialog(+el.dataset.id); break;
+
+    case 'ref-tricks': doRefTricks(); break;
 
     case 'ref-add': {
       // Значения берём из state.refForm (DOM может быть уже перерисован), но живое поле

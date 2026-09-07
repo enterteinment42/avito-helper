@@ -72,6 +72,69 @@ export async function runFewshot(browser, base, t) {
     t.ok('требуется вариация написания названия', info.includes('ПС5 Про'));
     t.ok('и добор лимита символов', info.includes('Добивай лимит 50 символов'));
 
+    // ── Чужие эталоны: приёмы вместо текста ─────────────────
+    await seed(page, { refs: [
+      { id: 11, source: 'other', category: 'phys', title: 'Чужое название', desc: 'Чужой текст с двумя геймпадами и ценой 30000 в Казани.' },
+      { id: 12, source: 'other', category: 'phys', title: 'Второе чужое', desc: 'Ещё чужой текст.' },
+    ] });
+    const before = await page.evaluate(() => ({
+      block: fewShotBlock('phys') + refTricksBlock('phys'),
+      pending: refsToAnalyze().length,
+    }));
+    t.eq('до разбора чужие в промпт не идут', before.block, '');
+    t.eq('и числятся неразобранными', before.pending, 2);
+
+    const analyzed = await page.evaluate(async () => {
+      window.__asked = '';
+      window.callAI = async (m, opts = {}) => {
+        window.__asked = m.map(x => x.content).join('\n');
+        window.__sys = opts.system || '';
+        return JSON.stringify({ items: [
+          { id: 11, tricks: ['начинает с вопроса, который задаёт себе покупатель', 'список через тире, а не запятыми'] },
+          { id: 12, tricks: [] },
+        ] });
+      };
+      await doRefTricks();
+      return {
+        tricks: state.refs.find(r => r.id === 11).tricks,
+        empty: state.refs.find(r => r.id === 12).tricks,
+        pending: refsToAnalyze().length,
+        askedHasText: window.__asked.includes('Чужой текст с двумя геймпадами'),
+        sysBansFacts: window.__sys.includes('НЕ переноси факты'),
+      };
+    });
+    t.eq('приёмы сохранены', analyzed.tricks.length, 2);
+    t.ok('приём сформулирован как ход', analyzed.tricks[0].includes('начинает с вопроса'), analyzed.tricks[0]);
+    t.eq('объявление без приёмов помечено пустым списком', analyzed.empty.length, 0);
+    t.eq('повторно оно на разбор не пойдёт', analyzed.pending, 0);
+    t.ok('на разбор чужой текст уходит (иначе разбирать нечего)', analyzed.askedHasText);
+    t.ok('промпт разбора запрещает переносить факты', analyzed.sysBansFacts);
+
+    const after = await page.evaluate(() => ({
+      tricks: refTricksBlock('phys'),
+      full: learnedBlock('phys'),
+    }));
+    t.ok('приёмы подмешиваются в генерацию', after.tricks.includes('начинает с вопроса'), after.tricks);
+    t.ok('и помечены как чужие ходы', after.tricks.includes('это ходы, а не текст'), after.tricks);
+    t.ok('чужой ТЕКСТ в промпт не попадает', !after.full.includes('Чужой текст с двумя геймпадами'), after.full);
+    t.ok('и чужие факты тоже', !after.full.includes('30000') && !after.full.includes('Казани'), after.full);
+
+    // Приёмы своей категории в приоритете, но при их отсутствии берутся любые
+    await seed(page, { refs: [
+      { id: 13, source: 'other', category: 'game', title: 'Игровое', desc: 'x', tricks: ['ход из игр'] },
+    ] });
+    t.ok('приёмы из другой категории подхватываются, если своих нет',
+      (await page.evaluate(() => refTricksBlock('phys'))).includes('ход из игр'));
+
+    // Разбирать нечего — вызова нет
+    const noop = await page.evaluate(async () => {
+      let called = 0;
+      window.callAI = async () => { called++; return '{}'; };
+      await doRefTricks();
+      return called;
+    });
+    t.eq('без неразобранных запрос не уходит', noop, 0);
+
     t.ok('консоль чистая', consoleErrors.length === 0, consoleErrors.join('\n'));
   } finally {
     await ctx.close();
