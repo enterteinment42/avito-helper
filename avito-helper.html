@@ -1108,6 +1108,10 @@ const state = {
   loadingKind: null, // 'titles' | 'descriptions' | null — текст спиннера для шага «сначала заголовки»
   titleStep: null,   // { titles, selected, form } — промежуточный выбор заголовков до генерации описаний
   regenId: null,
+  // Ключи блоков «↺ Перефраз», по которым запрос уже в полёте. Перефразов может идти
+  // несколько (разные карточки), поэтому набор, а не один флаг. В save() не входит —
+  // это состояние текущей сессии, переживать F5 ему незачем.
+  rephBusy: new Set(),
   results:   ls('avito_results',   []),
   extraResults: ls('avito_extra_results', []), // UX-15: «Ещё варианты» — отдельный список, не заменяет основной
   extraLoading: false,
@@ -1471,9 +1475,15 @@ const J_UI_ACTS = new Set([
 // использование функции: обработчик всё равно выйдет сразу. Такие клики в перепись
 // не пускаем, иначе счётчик покажет не спрос на функцию, а нервность ожидания.
 // Каждое действие блокируется своим флагом — общего state.loading тут мало.
-function jActBusy(act) {
+function jActBusy(act, el) {
   try {
     switch (act) {
+      case 'rephrase': {
+        // Замок у перефраза — на блок конкретной карточки, поэтому нужен сам элемент
+        const fid = el && el.getAttribute('data-fid');
+        const vid = el && el.getAttribute('data-vid');
+        return state.rephBusy.has(fid ? `reph-f${fid}` : `reph-${vid}`);
+      }
       case 'gen': case 'gen-titles': case 'titles-next':  return state.loading;
       case 'gen-more':                                    return state.loading || state.extraLoading;
       case 'regen':                                       return state.regenId !== null;
@@ -2246,6 +2256,10 @@ async function doRegen(id) {
 
 async function doRephrase(vid, fid) {
   const boxId = fid ? `reph-f${fid}` : `reph-${vid}`;
+  // Кнопка «↺ Перефраз» лежит ВНЕ этого блока и спиннером не гасится, поэтому
+  // без замка двойной тап по ней = два оплаченных вызова и два события в журнале.
+  // Замок по ключу блока, а не общий: перефразы разных карточек не мешают друг другу.
+  if (state.rephBusy.has(boxId)) return;
   const box = document.getElementById(boxId);
   if (!box) return;
   const v = fid
@@ -2253,6 +2267,7 @@ async function doRephrase(vid, fid) {
     : findResult(vid);
   if (!v) return;
 
+  state.rephBusy.add(boxId);
   box.innerHTML = `<div style="padding:10px 12px;color:var(--muted);font-size:13px">⏳ Перефразирую...</div>`;
 
   try {
@@ -2312,6 +2327,8 @@ ${v.description}
     };
   } catch(e) {
     box.innerHTML = `<div style="padding:8px 12px;color:var(--err);font-size:13px">✗ ${esc(e.message)}</div>`;
+  } finally {
+    state.rephBusy.delete(boxId); // и при ошибке тоже — иначе кнопка залипнет навсегда
   }
 }
 
@@ -7342,7 +7359,7 @@ document.addEventListener('click', e => {
   // Журнал: перепись кликов по крупным функциям — мёртвые видны нулями при разборе.
   // Холостые клики по уже идущей операции отсекает jActBusy (каждое действие знает
   // свой флаг занятости — общего state.loading мало).
-  if (J_UI_ACTS.has(act) && !jActBusy(act)) jlog('ui', null, { act });
+  if (J_UI_ACTS.has(act) && !jActBusy(act, el)) jlog('ui', null, { act });
 
   switch (act) {
     case 'toggle-ai':

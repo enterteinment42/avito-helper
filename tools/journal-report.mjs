@@ -55,18 +55,21 @@ function readEvents(files) {
   const bad = [];
   for (const f of files) {
     const text = fs.readFileSync(f, 'utf8');
-    let n = 0, ok = 0;
+    // Строки и события считаем раздельно: одна строка локальной выгрузки может
+    // быть массивом и дать несколько событий, поэтому «событий больше, чем строк» —
+    // норма, а битые строки иначе потерялись бы в этой арифметике.
+    let lines = 0, broken = 0, events = 0;
     for (const line of text.split(/\r?\n/)) {
       if (!line.trim()) continue;
-      n++;
+      lines++;
       try {
         const e = JSON.parse(line);
         // Локальная выгрузка буфера может быть массивом в одной строке
-        if (Array.isArray(e)) { for (const x of e) { rows.push({ ...x, _src: f }); ok++; } }
-        else { rows.push({ ...e, _src: f }); ok++; }
-      } catch (err) { bad.push({ file: f, line: n }); }
+        if (Array.isArray(e)) { for (const x of e) { rows.push({ ...x, _src: f }); events++; } }
+        else { rows.push({ ...e, _src: f }); events++; }
+      } catch (err) { broken++; bad.push({ file: f, line: lines }); }
     }
-    console.log(`  ${f}: ${ok} строк${n !== ok ? ` (битых: ${n - ok})` : ''}`);
+    console.log(`  ${f}: ${lines} строк → ${events} событий${broken ? ` (битых строк: ${broken})` : ''}`);
   }
   if (bad.length) console.log(`  ! всего нечитаемых строк: ${bad.length}`);
   return rows;
@@ -229,13 +232,28 @@ if (scanC.get('error')) {
 
 h('6. ЧТО ПРАВЯТ РУКАМИ УЖЕ В АВИТО (editShare)');
 const edited = ev.filter(e => e.event === 'edited');
-const es = quantiles(edited.map(e => Number(e.editShare)).filter(Number.isFinite));
-if (!es) console.log('   Ни одного донесённого финала — доля правок неизвестна.');
+// ⚠️ Считать можно ТОЛЬКО доносы, где описание реально вставили. Если поле
+// описания в диалоге осталось пустым, клиент подставляет исходный текст сам
+// (avito-helper.html: `fd = fdRaw || r.description`), и editShare выходит нулевым
+// ПО ПОСТРОЕНИЮ, а не потому, что текст не правили. Смешать их в одну выборку —
+// значит утопить медиану в структурных нулях и получить вывод, обратный правде.
+const pasted   = edited.filter(e => e.descPasted === true);
+const unpasted = edited.filter(e => e.descPasted === false);
+const unmarked = edited.filter(e => typeof e.descPasted !== 'boolean');
+console.log(`   Доносов всего: ${edited.length}  ·  с вставленным описанием: ${pasted.length}  ·  без описания: ${unpasted.length}${unmarked.length ? `  ·  без пометки: ${unmarked.length}` : ''}`);
+if (unpasted.length) console.log(`   Доносы без описания в расчёт не идут — там editShare нулевой по построению.`);
+
+const es = quantiles(pasted.map(e => Number(e.editShare)).filter(Number.isFinite));
+if (!es) console.log('\n   Ни одного доноса с вставленным описанием — доля правок пока неизвестна.');
 else {
-  console.log(`   Доносов: ${es.n}`);
+  console.log(`\n   По ${es.n} доносам с описанием:`);
   console.log(`   Доля изменённых слов: min ${es.min.toFixed(2)} · p25 ${es.p25.toFixed(2)} · медиана ${es.med.toFixed(2)} · p75 ${es.p75.toFixed(2)} · max ${es.max.toFixed(2)}`);
-  console.log('   Медиана выше ~0.3 — промпт систематически не попадает, правки стоит вносить в SYS.');
+  if (es.med > 0.3) console.log(`   ⚠️ Медиана ${es.med.toFixed(2)} > 0.3 — промпт систематически не попадает, правки стоит вносить в SYS.`);
+  else console.log(`   Медиана ${es.med.toFixed(2)} — правки точечные, порог тревоги (0.3) не превышен.`);
 }
+// Заголовок правят отдельно от описания: он короткий, и его переписывают чаще
+const titleChanged = edited.filter(e => e.titleChanged === true).length;
+if (edited.length) console.log(`\n   Заголовок переписан: ${titleChanged} из ${edited.length}  (${pct(titleChanged, edited.length)})`);
 
 h('7. РАСПОЗНАВАНИЕ ПО ФОТО');
 const vis = ev.filter(e => e.event === 'vision');

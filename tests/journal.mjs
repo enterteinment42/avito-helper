@@ -1,7 +1,7 @@
 // Секция journal — доставка событий: ключ идемпотентности, пауза после неудач,
 // честность переписи кликов, устойчивость к недоступному localStorage.
 // Закрывает отложенные находки ревью 2026-09-06 (правки 2026-09-09).
-import { openApp } from './lib.mjs';
+import { openApp, stubAI, VARIANTS_JSON } from './lib.mjs';
 
 // Заглушка прокси ставится внутри страницы: jFlush читает у ответа только ok/status
 
@@ -162,6 +162,51 @@ export async function runJournal(browser, base, t) {
   });
   t.ok('клик по живой кнопке попадает в перепись', clicked.skipped || clicked.logged,
     JSON.stringify(clicked));
+
+  // ── Замок перефраза ─────────────────────────────────────
+  // Кнопка «↺ Перефраз» лежит вне блока, который получает спиннер, поэтому
+  // остаётся кликабельной во время запроса: без замка двойной тап оплачивался дважды.
+  await stubAI(page, VARIANTS_JSON);
+  const rephSetup = await page.evaluate(async () => {
+    state.form = JSON.parse(JSON.stringify({ ...DEF_FORM, category: 'game', gameName: 'Doom', gamePlatforms: ['PS5'] }));
+    state.results = []; state.extraResults = [];
+    await doGenerate();
+    render();
+    const btn = document.querySelector('[data-act="rephrase"]');
+    return { hasBtn: !!btn, n: state.results.length };
+  });
+  t.ok('карточка с кнопкой перефраза отрисована', rephSetup.hasBtn && rephSetup.n > 0, JSON.stringify(rephSetup));
+
+  const reph = await page.evaluate(async () => {
+    // Запрос «зависает», пока мы его не отпустим — окно, в которое летит второй клик
+    window.__rephCalls = 0;
+    window.callAI = () => { window.__rephCalls++; return new Promise(r => { window.__release = r; }); };
+    _jBuf.length = 0;
+    const btn = document.querySelector('[data-act="rephrase"]');
+    btn.click();
+    btn.click();                       // нетерпеливый второй тап
+    await new Promise(r => setTimeout(r, 30));
+    const during = { calls: window.__rephCalls, ui: _jBuf.filter(e => e.event === 'ui' && e.act === 'rephrase').length };
+    window.__release(JSON.stringify({ variants: [{ id: 1, title: 'Перефраз', description: 'Другой текст. Оформляется в цифре. PS5' }] }));
+    await new Promise(r => setTimeout(r, 60));
+    clearTimeout(_jFlushT);
+    return { during, after: { calls: window.__rephCalls, busy: state.rephBusy.size } };
+  });
+  t.eq('двойной тап оплачивается один раз', reph.during.calls, 1);
+  t.eq('и в перепись попадает один клик', reph.during.ui, 1);
+  t.eq('после ответа замок снят', reph.after.busy, 0);
+
+  const rephAgain = await page.evaluate(async () => {
+    const btn = document.querySelector('[data-act="rephrase"]');
+    btn.click();                       // после снятия замка перефраз снова доступен
+    await new Promise(r => setTimeout(r, 30));
+    const calls = window.__rephCalls;
+    if (window.__release) window.__release(JSON.stringify({ variants: [{ id: 1, title: 'Ещё', description: 'Текст. Оформляется в цифре. PS5' }] }));
+    await new Promise(r => setTimeout(r, 60));
+    clearTimeout(_jFlushT);
+    return calls;
+  });
+  t.eq('повторный перефраз после ответа проходит', rephAgain, 2);
 
   // ── Недоступный localStorage ────────────────────────────
   // В приватном режиме сам доступ бросает исключение, а чтение стоит прямо
