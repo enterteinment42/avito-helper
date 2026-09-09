@@ -1166,6 +1166,12 @@ rebuildCats(); // категории собираются сразу после 
 // LOCALSTORAGE
 // ══════════════════════════════════════════
 
+// Сырое чтение ключа без разбора JSON. Обёртка нужна не для красоты: в приватном
+// режиме и при запрете сайту хранить данные сам ДОСТУП к localStorage бросает
+// исключение, а эти чтения стоят прямо в разметке — необёрнутое падение роняет
+// рендер всей вкладки, а не одну подпись.
+function lsRaw(key) { try { return localStorage.getItem(key); } catch(e) { return null; } }
+
 function ls(key, def) {
   try {
     const v = localStorage.getItem(key);
@@ -1231,10 +1237,18 @@ const J_BATCH_BYTES = 300000; // и не больше ~0.6МБ телом — и
 const J_FORCE_MS    = 30000;  // старейшее неотправленное ждёт не дольше этого, даже если клики идут потоком
 const J_FORCE_COUNT = 25;
 
+// Пауза после неудач: без неё отправка «голодает» наоборот — _jOldestAt сбрасывается
+// только когда буфер опустел, поэтому при постоянных ошибках (протухший токен, лежащий
+// сервер) условие «старейшее ждёт дольше 30с» становится вечным, дебаунс обходится, и
+// POST уходит на КАЖДЫЙ клик. На телефоне это лишняя сеть и батарея на ровном месте.
+const J_FAIL_BASE_MS = 5000;
+const J_FAIL_MAX_MS  = 300000; // 5 минут — дальше растить бессмысленно
+
 let _jBuf = (() => { try { const v = JSON.parse(localStorage.getItem(J_BUF_KEY) || '[]'); return Array.isArray(v) ? v : []; } catch(e) { return []; } })();
 let _jBufBytes = _jBuf.reduce((s, e) => s + JSON.stringify(e).length, 0);
 let _jDropped = 0;
 let _jOldestAt = _jBuf.length ? Date.now() : 0;
+let _jFails = 0, _jQuietUntil = 0;
 
 // Ид устройства — различает телефон/ПК в общем журнале на сервере
 function _jDevice() {
@@ -1246,6 +1260,17 @@ function _jDevice() {
 }
 
 function jEnabled() { try { return localStorage.getItem(J_OFF_KEY) !== '1'; } catch(e) { return false; } }
+
+// Ключ идемпотентности события. Если сервер записал батч, а ответ не дошёл (обрыв,
+// таймаут), клиент отправит его повторно — и в журнале появятся дубли. Дедуп по
+// ts+device+event их ловит, но грубо: два одинаковых клика в одну миллисекунду он
+// схлопнет в один. Собственный id снимает эту неоднозначность при разборе.
+function _jEid() {
+  try {
+    if (crypto && crypto.randomUUID) return crypto.randomUUID().slice(0, 13).replace('-', '');
+  } catch(e) {}
+  return Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+}
 
 function _jRecount() { _jBufBytes = _jBuf.reduce((s, ev) => s + JSON.stringify(ev).length, 0); }
 
@@ -1284,7 +1309,7 @@ function jlog(event, chainId, fields) {
   try {
     if (!jEnabled()) return;
     const e = {
-      ts: new Date().toISOString(), event, chainId: chainId || null,
+      ts: new Date().toISOString(), eid: _jEid(), event, chainId: chainId || null,
       device: _jDevice(), build: document.lastModified || '',
       ...(fields || {}),
     };
@@ -1307,17 +1332,30 @@ let _jFlushT = null, _jFlushing = false;
 // откладывалась бы бесконечно — поэтому по возрасту/количеству шлём немедленно.
 function _jScheduleFlush() {
   try {
+    // Пауза после неудач старше любых «пора слать»: сервер не станет доступнее
+    // оттого, что человек кликает чаще
+    const quiet = _jQuietUntil - Date.now();
+    if (quiet > 0) { clearTimeout(_jFlushT); _jFlushT = setTimeout(jFlush, quiet); return; }
     const overdue = _jBuf.length >= J_FORCE_COUNT || (_jOldestAt && Date.now() - _jOldestAt > J_FORCE_MS);
     if (overdue) { clearTimeout(_jFlushT); jFlush(); return; }
     clearTimeout(_jFlushT); _jFlushT = setTimeout(jFlush, 4000);
   } catch(e) {}
 }
 
+// Неудача доставки — растим паузу вдвое от 5с до 5 минут. force-отправки
+// (закрытие страницы, выключение журнала) паузу игнорируют: там важнее отдать.
+function _jFail() {
+  _jFails++;
+  _jQuietUntil = Date.now() + Math.min(J_FAIL_BASE_MS * Math.pow(2, _jFails - 1), J_FAIL_MAX_MS);
+}
+function _jOk() { _jFails = 0; _jQuietUntil = 0; }
+
 // force=true — отправить, даже если журнал только что выключили (иначе уже собранные
 // события навсегда осели бы в localStorage и занимали место)
 async function jFlush(force) {
   try {
     if (_jFlushing || !_jBuf.length || (!force && !jEnabled())) return;
+    if (!force && Date.now() < _jQuietUntil) return; // ждём после неудач, см. _jFail
     const token = localStorage.getItem('avito_admin_token'); // не спрашиваем — только берём готовый
     if (!token) return;
     _jFlushing = true;
@@ -1348,16 +1386,19 @@ async function jFlush(force) {
         _jSaveBuf();
       };
       if (r.ok) {
+        _jOk();
         drop();
         if (_jBuf.length) setTimeout(() => jFlush(force), 400); // дожимаем остаток батчами
       } else if (r.status === 400 || r.status === 413 || r.status === 422) {
         // Невосстановимое: этот батч не примут никогда. Если не выбросить — он
         // навсегда заткнёт голову очереди, а все новые события вытеснит по капу.
+        // Связь при этом жива, так что паузу не растим — следующий батч может пройти.
+        _jOk();
         drop();
         console.error('journal: батч отвергнут сервером (' + r.status + '), выброшен');
-      }
+      } else _jFail();
       // 401/404/5xx — молчим и ждём: токен чинит callAI, эндпоинт доедет с деплоем, буфер цел
-    } catch(e) { /* офлайн — буфер ждёт следующего повода */ }
+    } catch(e) { _jFail(); /* офлайн — буфер ждёт следующего повода */ }
     finally { _jFlushing = false; }
   } catch(e) { _jFlushing = false; }
 }
@@ -1425,6 +1466,25 @@ const J_UI_ACTS = new Set([
   'db-export','db-add','db-final','ref-add','ref-tricks','conv-photo',
   'vision-recognize','vision-price','vision-apply-price','vision-covers','vision-undo','vision-pick',
 ]);
+
+// Повторный клик по кнопке, чья операция УЖЕ идёт, — это нетерпение, а не
+// использование функции: обработчик всё равно выйдет сразу. Такие клики в перепись
+// не пускаем, иначе счётчик покажет не спрос на функцию, а нервность ожидания.
+// Каждое действие блокируется своим флагом — общего state.loading тут мало.
+function jActBusy(act) {
+  try {
+    switch (act) {
+      case 'gen': case 'gen-titles': case 'titles-next':  return state.loading;
+      case 'gen-more':                                    return state.loading || state.extraLoading;
+      case 'regen':                                       return state.regenId !== null;
+      case 'alt-titles':                                  return state.altTitlesLoading !== null;
+      case 'ref-tricks':                                  return !!state._refTricksLoading;
+      case 'vision-recognize':                            return state.vision.loading;
+      case 'vision-price':                                return state.vision.priceLoading;
+      default:                                            return false;
+    }
+  } catch(e) { return false; }
+}
 
 // Копирование = «этот текст пошёл в дело» — главный сигнал выбора в текстовом контуре.
 // kind/vid/bi читаются из data-j* атрибутов кнопок копирования.
@@ -3303,7 +3363,7 @@ function formHTML() {
 
 function settingsHTML() {
   const s = state.settings;
-  const hasToken = !!localStorage.getItem('avito_admin_token');
+  const hasToken = !!lsRaw('avito_admin_token');
   return `<div class="settings-row">
     <div class="s-group">
       <label>Провайдер</label>
@@ -3951,7 +4011,7 @@ function settingsTabHTML() {
         <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
           <button class="ai-btn ${jEnabled() ? 'active' : ''}" id="journal-toggle">${jEnabled() ? '✓ Журнал включён' : '✗ Журнал выключен'}</button>
           <button class="ai-btn" id="journal-dump" title="Скачать неотправленный буфер как JSONL (резервный путь, если сервер недоступен)">⬇ Буфер (JSONL)</button>
-          <span style="font-size:12px;color:var(--muted)" id="journal-status">Не отправлено: ${_jBuf.length} событий${localStorage.getItem('avito_admin_token') ? '' : ' · токен не задан — копятся локально'}</span>
+          <span style="font-size:12px;color:var(--muted)" id="journal-status">Не отправлено: ${_jBuf.length} событий${lsRaw('avito_admin_token') ? '' : ' · токен не задан — копятся локально'}</span>
         </div>
       </div>
     </div>
@@ -7280,11 +7340,9 @@ document.addEventListener('click', e => {
   }
 
   // Журнал: перепись кликов по крупным функциям — мёртвые видны нулями при разборе.
-  // Повторный клик по кнопке генерации, пока генерация уже идёт, — это нетерпение,
-  // а не использование функции: обработчик всё равно выйдет сразу, счётчик не портим.
-  if (J_UI_ACTS.has(act) && !(state.loading && (act === 'gen' || act === 'gen-titles' || act === 'gen-more'))) {
-    jlog('ui', null, { act });
-  }
+  // Холостые клики по уже идущей операции отсекает jActBusy (каждое действие знает
+  // свой флаг занятости — общего state.loading мало).
+  if (J_UI_ACTS.has(act) && !jActBusy(act)) jlog('ui', null, { act });
 
   switch (act) {
     case 'toggle-ai':
