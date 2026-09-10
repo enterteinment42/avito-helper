@@ -452,6 +452,10 @@
     .vision-res-sub { font-size: 11.5px; color: var(--muted); }
     .vision-price-box { border-top: 1px dashed var(--border2); padding-top: 7px; font-size: 12.5px; color: var(--text2); display: flex; flex-direction: column; gap: 5px; }
     .vision-err { font-size: 12px; color: var(--err); background: rgba(239,68,68,.08); border: 1px solid rgba(239,68,68,.25); border-radius: var(--rs); padding: 7px 10px; }
+    /* «Товар в интерьере» (2б): картинка вертикальная (3:4), поэтому ограничиваем
+       по высоте, а не по ширине — иначе на телефоне она занимает весь экран. */
+    .staged-out { display: flex; flex-direction: column; gap: 6px; }
+    .staged-out img { max-width: 100%; max-height: 380px; width: auto; border-radius: var(--rs); border: 1px solid var(--border2); display: block; }
 
     .batch-toggle-row { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; }
     .batch-toggle-label { font-size: 13px; color: var(--text2); cursor: pointer; user-select: none; }
@@ -671,6 +675,45 @@
 const PROXY_CLAUDE      = 'https://api.poigraem.shop/api/claude';
 const PROXY_OPENROUTER  = 'https://api.poigraem.shop/api/openrouter';
 const PROXY_JOURNAL     = 'https://api.poigraem.shop/api/journal';
+// Направление 2б: генерация «товар в интерьере». Отдельный маршрут, а не
+// /api/openrouter — модель там зашита на сервере, браузер её не выбирает
+// (картиночные модели дороже текстовых на порядок).
+const PROXY_IMAGE       = 'https://api.poigraem.shop/api/image';
+
+// Сцены для «товара в интерьере». Живут здесь, а не рядом с модулем 2б, потому
+// что state инициализируется дефолтной сценой раньше по файлу.
+// `p` — то, что уходит в промпт: обстановка, а НЕ описание товара. Товар модель
+// обязана перенести с фото как есть (см. stagedPrompt).
+const STAGED_SCENES = [
+  { id: 'shelf',  label: '📚 На полке',      p: 'на деревянной полке стеллажа в жилой комнате, рядом несколько книг и небольшое растение' },
+  { id: 'desk',   label: '🖥 На столе',      p: 'на письменном столе рядом с монитором и клавиатурой, тёплый настольный свет' },
+  { id: 'living', label: '🛋 В гостиной',    p: 'в гостиной под телевизором на низкой тумбе, вечерний свет из окна' },
+  { id: 'studio', label: '💡 Студийный фон', p: 'на однотонном светло-сером студийном фоне, мягкий рассеянный свет, лёгкая тень под предметом' },
+  { id: 'hands',  label: '🤲 В руках',       p: 'в руках человека на нейтральном размытом фоне комнаты, кадр по грудь, лицо не видно' },
+];
+
+// Чистое состояние карточки распознавания и интерьера. Одно место на всех:
+// раньше набор полей дублировался в инициализации state и в visionClear(), и
+// поле, добавленное только в одну из копий, роняло бы карточку после «убрать фото».
+function freshVision() {
+  return {
+    dataUrl: null, media: null,        // подготовленное (ужатое) фото и base64-payload для API
+    loading: false, error: '',
+    result: null,                      // { recognized, confidence, category, fields, notes, priceQuery }
+    applied: false, warn: '',          // применены ли поля к форме сейчас + предупреждение о пустом разборе
+    appliedForm: '',                   // форма сразу после применения — по ней видно, правил ли её потом Денис
+    prevForm: null,                    // снимок формы ДО первого заполнения — для «↩ вернуть форму»
+    priceLoading: false, price: null,  // { low, typical, high, comment }
+    uncertain: [], picks: {},          // «по фото не отличить» + что человек выбрал
+    staged: {                          // направление 2б: «товар в интерьере»
+      loading: false, error: '',
+      img: null,                       // { dataUrl, scene } — последняя сгенерированная картинка
+      scene: STAGED_SCENES[0].id,      // выбранная сцена
+      extra: '',                       // уточнение сцены словами
+      count: 0,                        // сколько раз генерировали (для имени файла)
+    },
+  };
+}
 
 const CLAUDE_MODELS = [
   { id: 'claude-sonnet-5',    label: 'Claude Sonnet 5 (рекомендуется)'  },
@@ -1150,18 +1193,11 @@ const state = {
   presets:   ls('avito_presets', []),
   postSession: { active: false, idx: 0, items: [] },
   queueForm: { product: '', region: 'Москва', source: 'auto', favId: null },
-  // Направление 2а (сближение с Айдентикой): распознавание товара по фото.
-  // Сознательно НЕ персистится — фото весит сотни КБ и делило бы квоту localStorage
-  // с реальными данными продавца (то же правило, что у журнала самообучения).
-  vision: {
-    dataUrl: null, media: null,        // подготовленное (ужатое) фото и base64-payload для API
-    loading: false, error: '',
-    result: null,                      // { recognized, confidence, category, fields, notes, priceQuery }
-    applied: false, warn: '',          // применены ли поля к форме сейчас + предупреждение о пустом разборе
-    appliedForm: '',                   // форма сразу после применения — по ней видно, правил ли её потом Денис
-    prevForm: null,                    // снимок формы ДО первого заполнения — для «↩ вернуть форму»
-    priceLoading: false, price: null,  // { low, typical, high, comment }
-  },
+  // Направления 2а (распознавание по фото) и 2б («товар в интерьере»).
+  // Сознательно НЕ персистится — фото и сгенерированная картинка весят сотни КБ
+  // и делили бы квоту localStorage с реальными данными продавца (то же правило,
+  // что у журнала самообучения). Набор полей — в freshVision(), одним местом.
+  vision: freshVision(),
 };
 
 rebuildCats(); // категории собираются сразу после state — до первого render()
@@ -1469,6 +1505,7 @@ const J_UI_ACTS = new Set([
   'cv-igdb-fetch','cv-igdb-game-fetch','cv-mask-toggle','cv-to-toggle','cv-ig-toggle','cv-ig-fill',
   'db-export','db-add','db-final','ref-add','ref-tricks','conv-photo',
   'vision-recognize','vision-price','vision-apply-price','vision-covers','vision-undo','vision-pick',
+  'staged-gen','staged-covers','staged-download','staged-scene',
 ]);
 
 // Повторный клик по кнопке, чья операция УЖЕ идёт, — это нетерпение, а не
@@ -1491,6 +1528,7 @@ function jActBusy(act, el) {
       case 'ref-tricks':                                  return !!state._refTricksLoading;
       case 'vision-recognize':                            return state.vision.loading;
       case 'vision-price':                                return state.vision.priceLoading;
+      case 'staged-gen':                                  return state.vision.staged.loading;
       default:                                            return false;
     }
   } catch(e) { return false; }
@@ -2834,7 +2872,9 @@ function visionPrepFile(file) {
 // Занят = идёт распознавание или поиск цены. Пока занят, фото менять и убирать
 // нельзя: запрос в полёте держит ссылку на state.vision и по возвращении записал
 // бы результат по СТАРОМУ фото в карточку, где уже показано новое.
-function visionBusy() { return state.vision.loading || state.vision.priceLoading; }
+// Генерация интерьера тоже держит ссылку на state.vision.dataUrl — на её время
+// фото менять и убирать нельзя по той же причине.
+function visionBusy() { return state.vision.loading || state.vision.priceLoading || state.vision.staged.loading; }
 
 async function visionPick(file) {
   const v = state.vision;
@@ -2845,6 +2885,10 @@ async function visionPick(file) {
     v.media = { media_type: prep.media_type, data: prep.data };
     v.error = ''; v.result = null; v.price = null; v.prevForm = null;
     v.applied = false; v.warn = ''; v.appliedForm = '';
+    // Интерьер был сгенерирован по ПРЕЖНЕМУ фото — оставить его рядом с новым
+    // значило бы показывать сцену чужого товара. Сцену и уточнение сохраняем:
+    // это выбор человека, а не результат. Счётчик обнуляем — он про это фото.
+    v.staged.img = null; v.staged.error = ''; v.staged.count = 0;
     reForm();
   } catch (e) {
     v.error = e.message || 'Не удалось прочитать фото';
@@ -2854,9 +2898,7 @@ async function visionPick(file) {
 
 function visionClear() {
   if (visionBusy()) { toast('Дождитесь окончания запроса'); return; }
-  state.vision = { dataUrl: null, media: null, loading: false, error: '', result: null, prevForm: null,
-                   priceLoading: false, price: null, applied: false, warn: '', appliedForm: '',
-                   uncertain: [], picks: {} };
+  state.vision = freshVision();
   reForm();
 }
 
@@ -3095,6 +3137,168 @@ function visionToCovers() {
   el.src = v.dataUrl;
 }
 
+// ══════════════════════════════════════════
+// НАПРАВЛЕНИЕ 2б: «ТОВАР В ИНТЕРЬЕРЕ» (staged-фото)
+// ══════════════════════════════════════════
+//
+// Идёт через /api/image на VPS: модель зашита на сервере, браузер её не выбирает.
+// Сцену выбирает человек, товар модель обязана перенести с фото БЕЗ изменений —
+// это не украшательство, а требование: перерисованная консоль другой ревизии
+// превращает объявление в обман покупателя.
+//
+// Соотношение сторон 3:4 — Авито предпочитает вертикальные фото, а обложки
+// инструмент рисует 1080×1350 (4:5); из ряда, который принимает модель
+// (1:1 4:3 3:4 16:9 9:16 21:9), 3:4 ближе всего.
+const STAGED_ASPECT = '3:4';
+
+function stagedScene(id) { return STAGED_SCENES.find(s => s.id === id) || STAGED_SCENES[0]; }
+
+function stagedPrompt() {
+  const st = state.vision.staged;
+  const sc = stagedScene(st.scene);
+  const extra = st.extra.trim();
+  // Название товара даём как подсказку, а не как задание «нарисуй такой товар»:
+  // источник истины — фото, текст лишь помогает не принять геймпад за пульт.
+  const known = currentProductName(state.form) || (state.vision.result && state.vision.result.recognized) || '';
+  return [
+    `Возьми товар с приложенного фото и покажи его ${sc.p}.`,
+    known ? `На фото: ${known}. Это подсказка — все детали бери с фото, а не из этого текста.` : '',
+    extra ? `Дополнительно: ${extra}` : '',
+    '',
+    'ОБЯЗАТЕЛЬНО:',
+    '- Сам товар перенеси с фото БЕЗ изменений: та же модель, цвет, надписи, разъёмы, состояние, потёртости. Ничего не «улучшай» и не заменяй похожим.',
+    '- Комплектацию не добавляй: если на фото нет коробки, кабеля или второго геймпада — их не должно быть и на картинке.',
+    '- Пропорции товара сохрани, товар — главный объект кадра.',
+    '- Никаких надписей, водяных знаков, логотипов магазинов, ценников и рамок.',
+    '- Фотореалистично, как снято на телефон в реальной комнате, без коллажа и без рисованного стиля.',
+  ].filter(Boolean).join('\n');
+}
+
+// Форма ответа вендора на момент написания НЕ проверена живьём (маршрут
+// /v1/images на странице модели не назван, серверная сессия это зафиксировала).
+// Поэтому разбираем терпимо — все правдоподобные формы, — а при полном промахе
+// показываем, ЧТО реально пришло: иначе первая живая проба даст «не получилось»
+// без единой зацепки, уже после списания за генерацию.
+function stagedExtractImage(d) {
+  const first = (d && Array.isArray(d.data) && d.data[0]) || null;
+  if (first) {
+    if (first.b64_json) return `data:${first.media_type || 'image/png'};base64,${first.b64_json}`;
+    if (typeof first.url === 'string' && first.url) return first.url;
+    if (first.image_url && typeof first.image_url.url === 'string') return first.image_url.url;
+  }
+  // Chat-completions-подобная форма, если вендор ответит ею
+  const msgImg = d?.choices?.[0]?.message?.images?.[0];
+  if (msgImg?.image_url?.url) return msgImg.image_url.url;
+  const keys = d && typeof d === 'object' ? Object.keys(d).slice(0, 8).join(', ') : typeof d;
+  throw new Error(`Картинки нет в ответе (получено: ${keys})`);
+}
+
+async function doStagedPhoto() {
+  const v = state.vision;
+  const st = v.staged;
+  if (st.loading || !v.dataUrl) return;
+  st.loading = true; st.error = '';
+  reForm();
+  const jT0 = Date.now();
+  const scene = st.scene;
+  try {
+    const r = await fetch(PROXY_IMAGE, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + getProxyToken() },
+      body: JSON.stringify({
+        prompt: stagedPrompt(),
+        input_references: [{ type: 'image_url', image_url: { url: v.dataUrl } }],
+        aspect_ratios: STAGED_ASPECT,
+        qualities: 'high',
+      }),
+    });
+    if (!r.ok) {
+      // 401 — токен: чистим, как в callAI (F13), чтобы следующий запрос переспросил.
+      // 503 — ключа OpenRouter нет на сервере: токен тут НИ ПРИ ЧЁМ, трогать его
+      // нельзя, иначе Денис будет вводить админ-токен заново на каждый клик.
+      if (r.status === 401) localStorage.removeItem('avito_admin_token');
+      const body = await r.text();
+      throw new Error(r.status === 503
+        ? 'Ключ OpenRouter не заведён на сервере — генерация картинок пока недоступна'
+        : `Картинка ${r.status}: ${body.slice(0, 300)}`);
+    }
+    const dataUrl = stagedExtractImage(await r.json());
+    st.img = { dataUrl, scene };
+    st.count++;
+    jlog('staged', null, {
+      ok: true, scene, aspect: STAGED_ASPECT,
+      extra: st.extra.trim().slice(0, 200),
+      category: state.form.category, product: currentProductName(state.form),
+      attempt: st.count, latencyMs: Date.now() - jT0,
+    });
+    toast('Картинка готова — проверьте, что товар не перерисован');
+  } catch (e) {
+    st.error = e.message || String(e);
+    console.error(e);
+    jlog('error', null, { stage: 'staged_photo', scene, message: String(e.message || '').slice(0, 300), latencyMs: Date.now() - jT0 });
+  } finally {
+    st.loading = false;
+    reForm();
+  }
+}
+
+// Готовая картинка почти всегда и есть будущая обложка. Переносим по кнопке —
+// по той же причине, что и фото товара в 2а: автоперенос затирал бы картинку
+// в режиме «Игра» и молча занимал слот в коллаже.
+function stagedToCovers() {
+  const st = state.vision.staged;
+  if (!st.img) return;
+  if (cv.mode === 'game' && cv.images.length && !confirm('В режиме «Игра» картинка одна — заменить текущую?')) return;
+  if (cv.mode === 'collage' && cv.images.length >= 10) { toast('Уже 10 картинок — удалите лишние в конструкторе'); return; }
+  const el = new Image();
+  el.onload = () => {
+    if (cv.mode === 'game') { cvRevokeGameBlobs(); cv.images = []; }
+    cv.images.push({ id: ++_cvId, url: st.img.dataUrl, el, transform: { scale: 1, ox: 0, oy: 0 } });
+    jlog('cv_images', null, { source: 'staged', mode: cv.mode, added: 1, scene: st.img.scene });
+    state.tab = 'covers';
+    render();
+  };
+  el.onerror = () => toast('Не удалось перенести картинку в обложки');
+  el.src = st.img.dataUrl;
+}
+
+function stagedDownload() {
+  const st = state.vision.staged;
+  if (!st.img) return;
+  const a = document.createElement('a');
+  a.href = st.img.dataUrl;
+  a.download = `staged-${st.img.scene}-${st.count}.png`;
+  a.click();
+  jlog('staged', null, { ok: true, phase: 'download', scene: st.img.scene, attempt: st.count });
+}
+
+function stagedCardHTML() {
+  const v = state.vision;
+  const st = v.staged;
+  if (!v.dataUrl) return '';   // без исходного фото ставить товар некуда
+  const busy = visionBusy();
+  return `<div class="vision-ask" style="gap:9px">
+    <div class="vision-ask-head">🏠 Товар в интерьере <span class="vision-hint">— фото товара на живом фоне, для антидубля обложек</span></div>
+    <div class="vision-ask-opts">
+      ${STAGED_SCENES.map(s => `<button class="chip ${st.scene === s.id ? 'on' : ''}" data-act="staged-scene" data-k="${s.id}" ${busy ? 'disabled' : ''}>${esc(s.label)}</button>`).join('')}
+    </div>
+    <input type="text" data-act="staged-extra" placeholder="своими словами: что ещё в кадре (необязательно)" value="${esc(st.extra)}" ${busy ? 'disabled' : ''}>
+    <div class="vision-btns">
+      <button class="vision-btn vision-btn-main" data-act="staged-gen" ${busy ? 'disabled' : ''}>
+        ${st.loading ? '⏳ Рисую сцену…' : st.img ? '↻ Ещё вариант' : '🏠 Поставить в интерьер'}
+      </button>
+      ${st.img ? `<button class="vision-btn" data-act="staged-covers" ${busy ? 'disabled' : ''}>🖼 → в обложки</button>` : ''}
+      ${st.img ? `<button class="vision-btn" data-act="staged-download" ${busy ? 'disabled' : ''}>⬇ Скачать</button>` : ''}
+    </div>
+    ${st.error ? `<div class="vision-err">⚠ ${esc(st.error)}</div>` : ''}
+    ${st.img ? `
+    <div class="staged-out">
+      <img src="${st.img.dataUrl}" alt="товар в интерьере">
+      <div class="vision-hint">Сцена «${esc(stagedScene(st.img.scene).label)}», ${STAGED_ASPECT}. ⚠ Сверьте с исходным фото: модель, цвет, надписи и комплектация должны совпадать — иначе объявление введёт покупателя в заблуждение.</div>
+    </div>` : ''}
+  </div>`;
+}
+
 function visionCardHTML() {
   const v = state.vision;
   const CONF = {
@@ -3168,6 +3372,7 @@ function visionCardHTML() {
           : `<div style="color:var(--muted);font-size:11.5px">${canApplyPrice ? '' : 'У подписки несколько сроков — впишите цены вручную в «Сроки и цены»'}</div>`}
       </div>` : ''}
     </div>` : ''}
+    ${stagedCardHTML()}
   </div>`;
 }
 
@@ -7377,6 +7582,14 @@ document.addEventListener('click', e => {
     case 'vision-clear':       visionClear(); break;
     case 'vision-pick':        visionPickOption(el.dataset.k, el.dataset.val); break;
 
+    // «Товар в интерьере» (направление 2б)
+    case 'staged-gen':         doStagedPhoto(); break;
+    case 'staged-covers':      stagedToCovers(); break;
+    case 'staged-download':    stagedDownload(); break;
+    case 'staged-scene':
+      if (!visionBusy()) { state.vision.staged.scene = el.dataset.k; reForm(); }
+      break;
+
     case 'title-pick': {
       const id = +el.dataset.id;
       if (state.titleStep) {
@@ -8038,6 +8251,9 @@ document.addEventListener('input', e => {
     state.form.durations[+el.dataset.i].price = el.value;
     clearTimeout(el._t); el._t = setTimeout(save, 400);
   }
+  // Уточнение сцены для «товара в интерьере». Без save() (staged не персистится)
+  // и без reForm() — перерисовка формы на каждый символ отняла бы фокус.
+  if (act === 'staged-extra') state.vision.staged.extra = el.value;
   if (el.id === 'cv-tz-scale') {
     let img;
     if (cv.mode === 'game' && cv.images.length) img = cv.images[0];
