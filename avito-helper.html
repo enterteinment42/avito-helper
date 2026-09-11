@@ -1889,12 +1889,6 @@ function styleLabel(f) {
 // (карточка «📥 Эталоны», пометка ✍ моё). Чужие удачные объявления (👀) в промпт
 // НЕ идут — они собираются для разбора, копировать чужой текст незачем.
 function fewShotSamples(category) {
-  const fromFav = (state.favorites || [])
-    .filter(v => v.title && v.description)
-    .map(v => ({ title: v.title, desc: v.description, cat: v._category }));
-  const fromRefs = (state.refs || [])
-    .filter(r => r.source === 'mine' && (r.title || r.desc))
-    .map(r => ({ title: r.title || '', desc: r.desc || '', cat: r.category }));
   // Финальные тексты с Авито — самый сильный образец голоса: вариант из избранного
   // написала модель и человек его одобрил, а финал он ДОРАБОТАЛ СВОЕЙ РУКОЙ уже в
   // форме Авито. Берём только реально изменённые: диалог финала подставляет
@@ -1903,8 +1897,21 @@ function fewShotSamples(category) {
   const fromFinal = (state.db || [])
     .filter(r => r.finalDesc && r.finalDesc !== r.description)
     .map(r => ({
-      title: r.finalTitle || r.title || '', desc: r.finalDesc, cat: r._category || null, final: true,
+      title: r.finalTitle || r.title || '', desc: r.finalDesc, cat: r._category || null,
+      final: true, chain: r._chain || null,
     }));
+  // Обычный путь такой: ☆ на варианте → «✓ Размещено» → донос финала. Тогда в
+  // корпусе лежат ДВА текста одного объявления, отличающиеся на несколько слов, и
+  // второй слот доставался бы бот-близнецу финала (у него почти те же слова, значит
+  // и близость максимальная). В промпт уходили бы два почти одинаковых примера —
+  // ровно подталкивание к самоповтору, против которого весь этот отбор и написан.
+  const finalChains = new Set(fromFinal.map(x => x.chain).filter(Boolean));
+  const fromFav = (state.favorites || [])
+    .filter(v => v.title && v.description && !(v._chain && finalChains.has(v._chain)))
+    .map(v => ({ title: v.title, desc: v.description, cat: v._category }));
+  const fromRefs = (state.refs || [])
+    .filter(r => r.source === 'mine' && (r.title || r.desc))
+    .map(r => ({ title: r.title || '', desc: r.desc || '', cat: r.category }));
   const all = [...fromFinal, ...fromFav, ...fromRefs];
   const own = all.filter(x => x.cat === category);
   // Своя категория в приоритете: факты и правила («оформляется в цифре», запрет
@@ -2072,7 +2079,14 @@ function fewShotBlock(f) {
 // сотня. Показываем их списком с длиной каждого: модель видит и манеру, и то,
 // что лимит принято добирать, а не останавливаться на 30 знаках.
 function titleSamplesBlock(f) {
+  // Заголовки, поправленные рукой уже в форме Авито, — самый прямой ответ на
+  // «модель не добирает лимит и хватается за состояние»: это буквально показ
+  // того, как человек переписал сгенерированное название перед публикацией.
+  const fromFinal = (state.db || [])
+    .filter(r => r.finalTitle && r.finalTitle !== r.title)
+    .map(r => ({ t: r.finalTitle, cat: r._category || null }));
   const pool = [
+    ...fromFinal,
     ...(state.favorites || []).filter(v => v.title).map(v => ({ t: v.title, cat: v._category })),
     ...(state.refs || []).filter(r => r.source === 'mine' && r.title).map(r => ({ t: r.title, cat: r.category })),
   ];
@@ -2080,7 +2094,12 @@ function titleSamplesBlock(f) {
   const list = own.length ? own : pool;
   const uniq = [...new Set(list.map(x => String(x.t).trim()).filter(Boolean))];
   if (!uniq.length) return '';
-  const picks = [...uniq].sort(() => Math.random() - .5).slice(0, TITLES_N);
+  // Правленые рукой идут первыми и не вытесняются жребием — их единицы против
+  // сотни сгенерированных, иначе они тонули бы в выборке.
+  const handMade = new Set(fromFinal.filter(x => list.includes(x)).map(x => String(x.t).trim()));
+  const hand = uniq.filter(s => handMade.has(s));
+  const restPicks = uniq.filter(s => !handMade.has(s)).sort(() => Math.random() - .5);
+  const picks = [...hand, ...restPicks].slice(0, TITLES_N);
   return `\n\nТвои НАСТОЯЩИЕ заголовки${own.length ? ' этой категории' : ' (из другой категории товара — перенимай только манеру)'} — так ты пишешь сам (в скобках длина, лимит 50):\n${picks.map(s => `- ${s} (${s.length})`).join('\n')}\nНЕ копируй их дословно: повтор собственного заголовка Авито считает дублем. Перенимай манеру — какие слова сокращаешь, куда ставишь платформу, чем цепляешь.`;
 }
 
@@ -6745,7 +6764,7 @@ function refsCardHTML() {
   const rf = state.refForm;
   const listHTML = refs.length ? `<div style="display:flex;flex-direction:column;gap:7px;margin-top:12px">
     ${[...refs].sort((a, b) => b.id - a.id).map(r => `<div class="preset-item">
-      <button class="btn-icon" data-act="ref-voice" data-id="${r.id}" style="flex-shrink:0;font-size:11px;color:${r.source === 'mine' ? 'var(--teal-h)' : 'var(--accent-h)'}"
+      <button class="btn-sm" data-act="ref-voice" data-id="${r.id}" style="flex-shrink:0;white-space:nowrap;padding:2px 7px;font-size:11px;color:${r.source === 'mine' ? 'var(--teal-h)' : 'var(--accent-h)'}"
         title="${r.source === 'mine' ? 'Голос мой — текст идёт в примеры генерации. Нажми, если голос на самом деле не твой' : 'Голос не мой — текст в примеры НЕ идёт, берутся только приёмы. Нажми, если голос всё-таки твой'}">${r.source === 'mine' ? '✍ мой голос' : '👀 не мой'}</button>
       <span class="preset-item-name" title="${esc((r.title || '') + '\n\n' + (r.desc || ''))}" style="cursor:help">${esc(r.title || (r.desc || '').slice(0, 60))}</span>
       <span class="preset-item-meta">${esc(r.date || '')}</span>
@@ -8417,7 +8436,11 @@ document.addEventListener('click', e => {
         title: v.title || '', description: v.description || '',
         status: 'active', note: '', date: new Date().toLocaleDateString('ru'),
         _chain: v._chain || null, // журнал: чтобы «донос финала» лёг в ту же цепочку
-        _category: v._category || state.form.category || null, // финал пойдёт в примеры — нужна его категория
+        // Категория берётся ТОЛЬКО из штампа варианта. Живая форма как фолбэк опасна:
+        // на старом избранном без штампа (до F4) она подставила бы категорию, на
+        // которую переключён генератор, и финал по вещи уехал бы в примеры игр —
+        // с ценой в теле, которую правила игр запрещают. Нет штампа — пусть null.
+        _category: v._category || null,
       });
       save();
       jlog('posted', v._chain || null, {

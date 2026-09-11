@@ -362,6 +362,58 @@ export async function runFewshot(browser, base, t) {
     });
     t.eq('запись Истории получает категорию варианта', stamped, 'phys');
 
+    // Находка ревью: ☆ на варианте → «✓ Размещено» → донос финала кладёт в корпус
+    // ДВА почти одинаковых текста, и второй слот доставался бы бот-близнецу финала.
+    const twin = await page.evaluate(() => {
+      state.refs = [];
+      state.favorites = [
+        { _fid: 1, title: 'Бот', description: 'БОТ-БЛИЗНЕЦ финала, отличается парой слов.', _category: 'phys', _chain: 'ch-1' },
+        { _fid: 2, title: 'Другое', description: 'СОВСЕМ ДРУГОЕ объявление про станцию.', _category: 'phys', _chain: 'ch-2' },
+      ];
+      state.db = [{ id: 1, product: 'PS5 Pro', region: 'Москва', title: 'Бот', description: 'БОТ-БЛИЗНЕЦ финала, отличается парой слов.',
+        finalTitle: 'Рука', finalDesc: 'БОТ-БЛИЗНЕЦ финала, отличается ПАРОЙ СЛОВ и рукой.', _category: 'phys', _chain: 'ch-1' }];
+      save();
+      const b = fewShotBlock({ ...DEF_FORM, category: 'phys', physName: 'PS5 Pro' });
+      return { b, pool: fewShotSamples('phys').list.length };
+    });
+    t.eq('бот-версия того же объявления выброшена из пула', twin.pool, 2);
+    t.ok('в промпте финал', twin.b.includes('и рукой'), twin.b);
+    t.ok('и НЕ его бот-близнец', !/БОТ-БЛИЗНЕЦ финала, отличается парой слов/.test(twin.b), twin.b);
+    t.ok('а второй пример — другое объявление', twin.b.includes('СОВСЕМ ДРУГОЕ'), twin.b);
+
+    // Находка ревью: заголовок, поправленный рукой, тоже должен попадать в блок
+    // названий — ради него блок и делался
+    const handTitle = await page.evaluate(() => {
+      state.refs = Array.from({ length: 30 }, (_, i) => ({
+        id: 1500 + i, source: 'mine', category: 'phys', title: 'Сгенерированный ' + i, desc: 'текст',
+      }));
+      state.favorites = [];
+      state.db = [{ id: 2, product: 'PS5 Pro', region: 'Москва', title: 'Бот-заголовок',
+        description: 'д', finalTitle: 'ПОПРАВЛЕННЫЙ РУКОЙ заголовок', finalDesc: 'д2', _category: 'phys' }];
+      save();
+      const f = { ...DEF_FORM, category: 'phys', physName: 'PS5 Pro' };
+      return Array.from({ length: 5 }, () => titleSamplesBlock(f));
+    });
+    t.ok('правленый рукой заголовок в блоке названий',
+      handTitle.every(b => b.includes('ПОПРАВЛЕННЫЙ РУКОЙ заголовок')), 'в какой-то выборке его не было');
+    t.ok('и бот-версия этого же заголовка не подмешана',
+      !handTitle[0].includes('Бот-заголовок'), handTitle[0]);
+
+    // Находка ревью: категория записи Истории не должна браться из ЖИВОЙ формы —
+    // на старом избранном без штампа финал по вещи уехал бы в примеры игр
+    const noBleed = await page.evaluate(() => {
+      state.db = [];
+      state.results = [{ id: 1, title: 'Т', description: 'Д', _product: 'Старое', _chain: 'c9' }]; // без _category
+      state.form = { ...DEF_FORM, category: 'game', gameName: 'GTA 5' };  // генератор переключён на игры
+      window.prompt = () => 'Москва';
+      save();
+      state.tab = 'generator'; render();
+      document.querySelector('[data-act="mark-posted"][data-vid="1"]')?.click();
+      document.getElementById('final-overlay')?.remove();
+      return state.db.length ? String(state.db[0]._category) : 'записи нет';
+    });
+    t.eq('без штампа варианта категория не подставляется из формы', noBleed, 'null');
+
     // ── Переразметка голоса ─────────────────────────────────
     // «Моё/чужое» оказалось не тем признаком: часть объявлений написана нейросетью,
     // но принята человеком, а часть «чужих» — его же объявления чужим голосом.
