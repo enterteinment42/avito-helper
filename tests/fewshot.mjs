@@ -274,7 +274,9 @@ export async function runFewshot(browser, base, t) {
       };
     }, TARGET);
     t.ok('близкий к товару эталон попадает в промпт всегда', hybrid.always, 'в какой-то выборке целевого эталона не было');
-    t.eq('примеров в блоке — три', hybrid.count, 3);
+    // Корпус в этом тесте целиком из одной категории: чужому слоту A взять нечего,
+    // слот B достаётся своей — три основных примера плюс он
+    t.eq('примеров в блоке — четыре', hybrid.count, 4);
     t.ok('но остальные меняются от запуска к запуску (антидубль)', hybrid.variety > 1, `выборка повторилась во всех прогонах`);
 
     // Товар не заполнен — скоринг не должен цепляться за слово «Товар»
@@ -435,6 +437,109 @@ export async function runFewshot(browser, base, t) {
     t.ok('и текст сразу начинает идти в примеры', voice.after.includes('ТЕКСТ ПЕРЕКЛЮЧАЕМОГО'), voice.after);
     t.eq('переключается обратно', voice.back, 'other');
     t.ok('метка на кнопке говорит про голос, а не про авторство', /голос|не мой/.test(voice.label || ''), voice.label);
+
+    // ── Схема примеров «3 + 2» ──────────────────────────────
+    // Три своих + слот A (гарантированно другая категория, категории равновероятны)
+    // + слот B (жребий по всему корпусу, чаще свой там, где своего сырья больше).
+    const scheme = await page.evaluate(() => {
+      state.db = []; state.favorites = [];
+      // Корпус с перекосом как у Дениса: подписок сильно больше остальных
+      state.refs = [
+        ...Array.from({ length: 20 }, (_, i) => ({ id: 2000 + i, source: 'mine', category: 'gaming_sub', title: 'Подписка ' + i, desc: 'Текст подписки ' + i })),
+        ...Array.from({ length: 3 },  (_, i) => ({ id: 2100 + i, source: 'mine', category: 'phys', title: 'Вещь ' + i, desc: 'Текст вещи ' + i })),
+        ...Array.from({ length: 3 },  (_, i) => ({ id: 2200 + i, source: 'mine', category: 'game', title: 'Игра ' + i, desc: 'Текст игры ' + i })),
+      ];
+      save();
+      const run = cat => {
+        const f = { ...DEF_FORM, category: cat, subType: 'PS Plus Extra', physName: 'Геймпад', gameName: 'GTA 5' };
+        const counts = { alien: 0, slotA: {} };
+        let examples = 0;
+        for (let i = 0; i < 200; i++) {
+          const b = fewShotBlock(f);
+          examples += (b.match(/^Пример \d+/gm) || []).length;
+          const alienPart = b.split('Это тоже ты, но ДРУГОЙ товар')[1] || '';
+          counts.alien += (alienPart.match(/^Пример \d+/gm) || []).length;
+          // Слот A рендерится первым в чужом блоке — по нему и судим о равновесии
+          // категорий; слот B взвешен по объявлениям и меряется отдельно
+          const firstAlien = alienPart.split(/^Пример \d+/m)[1] || '';
+          for (const [name, c] of [['Подписка ', 'gaming_sub'], ['Вещь ', 'phys'], ['Игра ', 'game']]) {
+            if (firstAlien.includes(name)) counts.slotA[c] = (counts.slotA[c] || 0) + 1;
+          }
+        }
+        return { avgExamples: examples / 200, alienPerRun: counts.alien / 200, slotA: counts.slotA };
+      };
+      return { sub: run('gaming_sub'), phys: run('phys') };
+    });
+    t.eq('в промпте пять примеров', Math.round(scheme.sub.avgExamples), 5);
+    t.ok('в богатой категории чужих примеров около одного (слот B чаще свой)',
+      scheme.sub.alienPerRun > 0.9 && scheme.sub.alienPerRun < 1.5, `чужих на запрос: ${scheme.sub.alienPerRun}`);
+    t.ok('в бедной категории чужих около двух (слот B чаще чужой)',
+      scheme.phys.alienPerRun > 1.5, `чужих на запрос: ${scheme.phys.alienPerRun}`);
+    t.ok('слот A всегда приносит чужую категорию', scheme.sub.alienPerRun >= 1, JSON.stringify(scheme.sub));
+    // Главное свойство равновесного жребия в слоте A: подписки (20 объявлений из 26)
+    // НЕ должны занимать его в 8 случаях из 10 только потому, что их больше
+    const a = scheme.phys.slotA;
+    const aSub = a.gaming_sub || 0, aGame = a.game || 0;
+    t.ok('слот A: подписки не давят числом — категории равновероятны',
+      aSub < 200 * 0.68, `подписка ${aSub} раз из 200: ${JSON.stringify(a)}`);
+    t.ok('слот A: вторая категория выпадает сопоставимо часто',
+      aGame > 200 * 0.3, `игра ${aGame} раз из 200: ${JSON.stringify(a)}`);
+
+    // ── Пометка про цены в чужом примере ────────────────────
+    const priceWarn = await page.evaluate(() => {
+      state.db = []; state.favorites = [];
+      state.refs = [
+        { id: 2300, source: 'mine', category: 'phys', title: 'Вещь', desc: 'Текст вещи без цифр.' },
+        { id: 2301, source: 'mine', category: 'gaming_sub', title: 'Подписка', desc: 'Подписка на год. 💲12 месяцев — 3000 рублей.' },
+      ];
+      save();
+      const phys = fewShotBlock({ ...DEF_FORM, category: 'phys', physName: 'Геймпад' });
+      const sub  = fewShotBlock({ ...DEF_FORM, category: 'gaming_sub', subType: 'PS Plus Extra' });
+      return { phys, sub, physRule: scanRuleOn('phys', 'game_price'), subRule: scanRuleOn('gaming_sub', 'game_price') };
+    });
+    t.ok('у физтовара цена в тексте запрещена', priceWarn.physRule);
+    t.ok('у подписки — разрешена', !priceWarn.subRule);
+    t.ok('в генерации вещи чужой пример с ценами получает предупреждение',
+      priceWarn.phys.includes('цена в тексте ЗАПРЕЩЕНА'), priceWarn.phys);
+    t.ok('в генерации подписки предупреждения нет — там цены нормальны',
+      !priceWarn.sub.includes('цена в тексте ЗАПРЕЩЕНА'), priceWarn.sub);
+
+    // ── Гарантированный слот финала — только от двух ────────
+    const oneFinal = await page.evaluate(() => {
+      state.favorites = [];
+      state.refs = Array.from({ length: 15 }, (_, i) => ({
+        id: 2400 + i, source: 'mine', category: 'gaming_sub', title: 'EA Play ' + i, desc: 'Текст про EA Play ' + i,
+      }));
+      // Один финал, и он про ДРУГОЙ товар категории
+      state.db = [{ id: 2500, product: 'PS Plus Extra', region: 'М', title: 'Бот', description: 'Бот-версия.',
+        finalTitle: 'Рука', finalDesc: 'ЕДИНСТВЕННЫЙ ФИНАЛ про PS Plus Extra.', _category: 'gaming_sub', _chain: 'f1' }];
+      save();
+      const otherProduct = Array.from({ length: 30 }, () =>
+        fewShotBlock({ ...DEF_FORM, category: 'gaming_sub', subType: 'EA Play' }));
+      const sameProduct = Array.from({ length: 10 }, () =>
+        fewShotBlock({ ...DEF_FORM, category: 'gaming_sub', subType: 'PS Plus Extra' }));
+      return {
+        inOther: otherProduct.filter(b => b.includes('ЕДИНСТВЕННЫЙ ФИНАЛ')).length,
+        inSame: sameProduct.filter(b => b.includes('ЕДИНСТВЕННЫЙ ФИНАЛ')).length,
+      };
+    });
+    t.ok('одиночный финал НЕ лезет в каждый запрос соседних товаров',
+      oneFinal.inOther < 25, `попал в ${oneFinal.inOther} из 30 генераций другого товара`);
+    t.eq('но приходит туда, где уместен — в генерацию того же товара', oneFinal.inSame, 10);
+
+    const twoFinals = await page.evaluate(() => {
+      state.db.push({ id: 2501, product: 'EA Play', region: 'К', title: 'Бот2', description: 'Бот-версия 2.',
+        finalTitle: 'Рука2', finalDesc: 'ВТОРОЙ ФИНАЛ про EA Play.', _category: 'gaming_sub', _chain: 'f2' });
+      save();
+      const runs = Array.from({ length: 20 }, () =>
+        fewShotBlock({ ...DEF_FORM, category: 'gaming_sub', subType: 'Game Pass' }));
+      return {
+        withFinal: runs.filter(b => /ФИНАЛ/.test(b)).length,
+        rotates: new Set(runs.map(b => /ЕДИНСТВЕННЫЙ ФИНАЛ/.test(b) ? 'a' : (/ВТОРОЙ ФИНАЛ/.test(b) ? 'b' : '-'))).size,
+      };
+    });
+    t.eq('с двух финалов слот резервируется в каждом запросе', twoFinals.withFinal, 20);
+    t.ok('и финалы чередуются между собой', twoFinals.rotates > 1, 'в слот всегда попадает один и тот же финал');
 
     // ── Мера близости: тип товара важнее платформы ──────────
     // Настоящий случай из корпуса Дениса: на «PS5 Pro» побеждал эталон про ДИСК
