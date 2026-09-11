@@ -1339,42 +1339,65 @@ function syncSetMeta(patch) {
   try { localStorage.setItem(SYNC_META_KEY, JSON.stringify({ ...syncMeta(), ...patch })); } catch(e) {}
 }
 
-// Ключи — те же, что у импорта бэкапа: по содержимому, не по id.
-const syncRefKey = r => ['ref', r.source || '', r.category || '', (r.title || '').trim(), (r.desc || '').trim()].join('|');
+// Ключи — по содержимому, не по id (id это Date.now() того устройства, где запись
+// создали). `source` эталона в ключ НЕ входит: это изменяемая метка голоса, которую
+// человек переключает нажатием, а не личность записи — иначе переключение на одном
+// устройстве плодило бы на остальных вторую копию того же объявления.
+const syncRefKey = r => ['ref', r.category || '', (r.title || '').trim(), (r.desc || '').trim()].join('|');
 const syncFavKey = f => ['fav', (f.title || '').trim(), (f.description || '').trim()].join('|');
 const syncDbKey  = r => ['db', r.product || '', r.region || '', (r.title || '').trim(), r.date || ''].join('|');
+// Момент создания записи — по нему решается, что новее: удаление или повторное
+// добавление той же записи.
+const syncBornAt = x => Number(x && (x._fid || x.id)) || 0;
 
-// Кладбище удалённого. Без него удалённый на телефоне эталон возвращался бы
-// с сервера при каждом старте — бесконечно. Ключи, а не записи: содержимое
-// удалённого хранится на сервере в корзине (см. syncVoiceDoc).
+// Кладбище удалённого: {k: ключ, at: когда удалили}. Без него удалённый на телефоне
+// эталон возвращался бы с сервера при каждом старте. Со временем удаления — потому
+// что запись с тем же содержимым можно завести заново, и тогда метка удаления
+// должна перестать действовать (иначе восстановленный эталон молча исчезал бы при
+// следующем запуске). Содержимое удалённого лежит в корзине, см. syncTrash.
 function syncTombs() {
-  try { const v = JSON.parse(lsRaw(SYNC_TOMB_KEY) || '[]'); return Array.isArray(v) ? v : []; }
-  catch(e) { return []; }
+  try {
+    const v = JSON.parse(lsRaw(SYNC_TOMB_KEY) || '[]');
+    if (!Array.isArray(v)) return [];
+    // Терпим и старый формат (голые строки) — он прожил ровно одну сессию
+    return v.map(x => typeof x === 'string' ? { k: x, at: 0 } : x).filter(x => x && x.k);
+  } catch(e) { return []; }
 }
 function syncTombSave(list) {
   try {
-    const t = [...new Set(list)];
+    const byKey = new Map();
+    for (const t of list) {
+      if (!t || !t.k) continue;
+      const prev = byKey.get(t.k);
+      if (!prev || (t.at || 0) > (prev.at || 0)) byKey.set(t.k, { k: t.k, at: t.at || 0 });
+    }
+    const t = [...byKey.values()];
     while (t.length > SYNC_TOMB_MAX) t.shift();
     localStorage.setItem(SYNC_TOMB_KEY, JSON.stringify(t));
   } catch(e) {}
 }
-// Вызывается из мест удаления. `rec` кладётся в корзину на сервере — сырьё не
-// должно пропадать даже по ошибочному нажатию.
-function syncTomb(key, rec) {
+// Вызывается из мест удаления. `rec` кладётся в корзину — сырьё не должно
+// пропадать даже от ошибочного нажатия, и вернуть его можно из ⚙ Настроек.
+function syncTomb(key, rec, kind) {
   try {
-    syncTombSave([...syncTombs(), key]);
-    if (rec) {
-      const trash = syncTrash();
-      trash.push({ key, at: new Date().toISOString(), rec });
-      while (trash.length > 200) trash.shift();
-      localStorage.setItem('avito_trash', JSON.stringify(trash));
-    }
+    syncTombSave([...syncTombs(), { k: key, at: Date.now() }]);
+    if (rec) syncTrashSave([...syncTrash(), { key, kind: kind || '', at: new Date().toISOString(), rec }]);
     syncPushSoon();
   } catch(e) {}
 }
 function syncTrash() {
   try { const v = JSON.parse(lsRaw('avito_trash') || '[]'); return Array.isArray(v) ? v : []; }
   catch(e) { return []; }
+}
+// Корзина ограничена БАЙТАМИ, а не числом записей: она уезжает в каждой отправке и
+// делит квоту localStorage с живыми данными продавца, а эталон бывает под 2 КБ.
+const SYNC_TRASH_MAX_BYTES = 200000;
+function syncTrashSave(list) {
+  try {
+    const t = [...list];
+    while (t.length > 1 && JSON.stringify(t).length > SYNC_TRASH_MAX_BYTES) t.shift();
+    localStorage.setItem('avito_trash', JSON.stringify(t));
+  } catch(e) {}
 }
 
 function syncVoiceDoc() {
@@ -1396,11 +1419,17 @@ function syncSettingsDoc() {
   };
 }
 
-// Дешёвая подпись документа: слать 260КБ при каждом клике незачем, а считать
-// полноценный хеш на телефоне — лишняя работа. Длина плюс размеры списков ловят
-// любое реальное изменение.
+// Подпись документа: слать 260КБ при каждом клике незачем. Длины мало — правка
+// опечатки в товаре или замена региона на равный по длине не меняют ни размер, ни
+// число записей, и такое изменение никогда не уехало бы с устройства. Поэтому
+// дешёвая контрольная сумма по всему тексту.
 function syncStamp(doc) {
-  try { return JSON.stringify(doc).length + ':' + Object.values(doc).map(v => Array.isArray(v) ? v.length : 1).join(','); }
+  try {
+    const s = JSON.stringify(doc);
+    let h = 0;
+    for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0;
+    return s.length + ':' + (h >>> 0).toString(36);
+  }
   catch(e) { return String(Date.now()); }
 }
 
@@ -1427,9 +1456,32 @@ function syncPushSoon() {
   try { clearTimeout(_syncT); _syncT = setTimeout(syncPush, SYNC_DEBOUNCE); } catch(e) {}
 }
 
-async function syncPush(force) {
+// Настройки по умолчанию отправлять незачем, а вот навредить ими можно: браузер с
+// очищенными данными держит пустые категории и пустые пресеты, и его отправка стёрла
+// бы на сервере копию настоящих — до того, как человек успеет нажать «↓ Забрать».
+// Поэтому отправляем настройки, только когда в них есть что-то своё.
+function syncSettingsWorth(d) {
   try {
-    if (_syncBusy || !syncEnabled() || !lsRaw('avito_admin_token')) return;
+    const cats = d.cats || {};
+    if (Object.keys(cats.builtin || {}).length || (cats.custom || []).length) return true;
+    if ((d.presets || []).length || (d.queue || []).length) return true;
+    if (Object.keys(d.catalogs || {}).length || d.cv) return true;
+    // Сами настройки считаем своими, если хоть одно поле отличается от заводского:
+    // имя страницы, модель, список регионов и свой системный промпт — всё это
+    // правки человека, и терять их на сервере незачем.
+    return JSON.stringify({ ...DEF_SETTINGS, ...(d.settings || {}) }) !== JSON.stringify(DEF_SETTINGS);
+  } catch(e) { return false; }
+}
+
+// Возвращает true, если отправка реально состоялась (по ней кнопка «↑ Отправить
+// сейчас» говорит правду, а не рапортует об успехе, когда запроса не было вовсе).
+async function syncPush(force) {
+  if (!syncEnabled() || !lsRaw('avito_admin_token')) return false;
+  // Правка, сделанная во время отправки, не должна потеряться: перезапускаем
+  // таймер вместо молчаливого выхода.
+  if (_syncBusy) { syncPushSoon(); return false; }
+  let sent = false;
+  try {
     _syncBusy = true;
     const meta = syncMeta();
     const voice = syncVoiceDoc();
@@ -1438,17 +1490,22 @@ async function syncPush(force) {
     const voiceEmpty = !voice.refs.length && !voice.favorites.length && !voice.db.length;
     const vStamp = syncStamp(voice);
     if (!voiceEmpty && (force || vStamp !== meta.voiceStamp)) {
-      const ok = await syncFetch('voice', { data: voice, device: _jDevice() });
-      if (ok) syncSetMeta({ voiceStamp: vStamp, voiceAt: new Date().toISOString() });
+      if (await syncFetch('voice', { data: voice, device: _jDevice() })) {
+        syncSetMeta({ voiceStamp: vStamp, voiceAt: new Date().toISOString() });
+        sent = true;
+      }
     }
     const settings = syncSettingsDoc();
     const sStamp = syncStamp(settings);
-    if (force || sStamp !== meta.settingsStamp) {
-      const ok = await syncFetch('settings', { data: settings, device: _jDevice() });
-      if (ok) syncSetMeta({ settingsStamp: sStamp, settingsAt: new Date().toISOString() });
+    if (syncSettingsWorth(settings) && (force || sStamp !== meta.settingsStamp)) {
+      if (await syncFetch('settings', { data: settings, device: _jDevice() })) {
+        syncSetMeta({ settingsStamp: sStamp, settingsAt: new Date().toISOString() });
+        sent = true;
+      }
     }
   } catch(e) { console.error('sync push:', e); }
   finally { _syncBusy = false; }
+  return sent;
 }
 
 // Забрать сырьё и слить с локальным. Вызывается при старте. Ничего не удаляет
@@ -1459,39 +1516,102 @@ async function syncPullVoice() {
     if (!got || got.empty || !got.data) return null;
     const d = got.data;
     const arr = v => Array.isArray(v) ? v : [];
-    // Кладбища объединяем: удалённое на другом устройстве должно уйти и здесь
-    const tombs = new Set([...syncTombs(), ...arr(d.deleted)]);
-    syncTombSave([...tombs]);
-    // Корзину тоже сливаем — из неё можно вернуть ошибочно удалённое
+    // Кладбища объединяем: удалённое на другом устройстве должно уйти и здесь.
+    // Храним для каждого ключа САМОЕ ПОЗДНЕЕ время удаления.
+    const tombAt = new Map();
+    for (const t of [...syncTombs(), ...arr(d.deleted).map(x => typeof x === 'string' ? { k: x, at: 0 } : x)]) {
+      if (!t || !t.k) continue;
+      tombAt.set(t.k, Math.max(tombAt.get(t.k) || 0, t.at || 0));
+    }
+    // Запись, заведённая ПОЗЖЕ удаления, метку снимает: иначе заново добавленный
+    // эталон (или восстановленный из корзины) молча исчезал бы при каждом запуске.
+    const revived = new Set();
+    const killed = (x, keyFn) => {
+      const k = keyFn(x);
+      const at = tombAt.get(k);
+      if (at == null) return false;
+      if (syncBornAt(x) > at) { revived.add(k); return false; }
+      return true;
+    };
+    // Корзину сливаем — из неё возвращают ошибочно удалённое
     const trashHave = new Set(syncTrash().map(x => x.key + '|' + x.at));
     const trashAdd = arr(d.trash).filter(x => x && !trashHave.has(x.key + '|' + x.at));
-    if (trashAdd.length) {
-      try { localStorage.setItem('avito_trash', JSON.stringify([...syncTrash(), ...trashAdd].slice(-200))); } catch(e) {}
-    }
+    if (trashAdd.length) syncTrashSave([...syncTrash(), ...trashAdd]);
 
-    const before = { refs: (state.refs || []).length, favs: (state.favorites || []).length, db: (state.db || []).length };
+    const before = JSON.stringify([(state.refs || []).length, (state.favorites || []).length, (state.db || []).length]);
     // Сначала выбрасываем удалённое где-то ещё, потом добавляем недостающее
-    state.refs      = (state.refs || []).filter(x => !tombs.has(syncRefKey(x)));
-    state.favorites = (state.favorites || []).filter(x => !tombs.has(syncFavKey(x)));
-    state.db        = (state.db || []).filter(x => !tombs.has(syncDbKey(x)));
+    state.refs      = (state.refs || []).filter(x => !killed(x, syncRefKey));
+    state.favorites = (state.favorites || []).filter(x => !killed(x, syncFavKey));
+    state.db        = (state.db || []).filter(x => !killed(x, syncDbKey));
 
-    const addRefs = mergeNewOnes(arr(d.refs).filter(x => !tombs.has(syncRefKey(x))), state.refs, syncRefKey);
-    const addFavs = mergeNewOnes(arr(d.favorites).filter(x => !tombs.has(syncFavKey(x))), state.favorites, syncFavKey);
-    const addDb   = mergeNewOnes(arr(d.db).filter(x => !tombs.has(syncDbKey(x))), state.db, syncDbKey);
-    const favMap = restampIds(addFavs, state.favorites, '_fid');
+    const addRefs = mergeNewOnes(arr(d.refs).filter(x => !killed(x, syncRefKey)), state.refs, syncRefKey);
+    const addFavs = mergeNewOnes(arr(d.favorites).filter(x => !killed(x, syncFavKey)), state.favorites, syncFavKey);
+    const addDb   = mergeNewOnes(arr(d.db).filter(x => !killed(x, syncDbKey)), state.db, syncDbKey);
+    // Переименовываем только совпавшие id. Ссылки очереди тут НЕ чиним: входящих
+    // позиций очереди в этом документе нет, а локальные указывают на локальное же
+    // избранное — правка увела бы их на чужой текст.
+    restampIds(addFavs, state.favorites, '_fid');
     restampIds(addRefs, state.refs);
     restampIds(addDb, state.db);
-    for (const q of (state.postQueue || [])) if (q.source === 'fav' && favMap.has(q.favId)) q.favId = favMap.get(q.favId);
 
     state.refs = [...state.refs, ...addRefs];
     state.favorites = [...state.favorites, ...addFavs];
     state.db = [...state.db, ...addDb];
-    const changed = addRefs.length || addFavs.length || addDb.length
-      || before.refs !== state.refs.length || before.favs !== state.favorites.length || before.db !== state.db.length;
-    if (changed) { save(); render(); }
-    syncSetMeta({ pulledAt: new Date().toISOString(), voiceStamp: syncStamp(syncVoiceDoc()) });
-    return { added: addRefs.length + addFavs.length + addDb.length, at: got.updated, device: got.device };
+
+    // Слияние по ключу добавляет только НОВЫЕ записи, а финальный текст приходит в
+    // уже известную: ключ записи Истории от финала не меняется. Без этого финал,
+    // донесённый на телефоне, не доезжал бы до компьютера — а это самое ценное сырьё.
+    let finalsMerged = 0;
+    const byKey = new Map(state.db.map(r => [syncDbKey(r), r]));
+    for (const inc of arr(d.db)) {
+      const local = byKey.get(syncDbKey(inc));
+      if (!local || !inc.finalDesc || local.finalDesc) continue;
+      local.finalTitle = inc.finalTitle; local.finalDesc = inc.finalDesc;
+      local.editShare = inc.editShare;
+      if (!local._category && inc._category) local._category = inc._category;
+      finalsMerged++;
+    }
+
+    // Снятые метки убираем, остальные сохраняем
+    syncTombSave([...tombAt].filter(([k]) => !revived.has(k)).map(([k, at]) => ({ k, at })));
+
+    const added = addRefs.length + addFavs.length + addDb.length;
+    const changed = added || finalsMerged
+      || before !== JSON.stringify([state.refs.length, state.favorites.length, state.db.length]);
+    syncSetMeta({ pulledAt: new Date().toISOString() });
+    if (changed) {
+      save(); render();
+      // После слияния локальный набор БОГАЧЕ серверного (наши записи там ещё не
+      // лежат). Отправляем объединение сразу и принудительно: иначе подпись,
+      // посчитанная от уже слитого документа, сделала бы отправку ненужной, и
+      // записи, заведённые только здесь, остались бы на одном устройстве.
+      syncPush(true).catch(() => {});
+    }
+    return { added, finals: finalsMerged, at: got.updated, device: got.device };
   } catch(e) { console.error('sync pull:', e); return null; }
+}
+
+// Корзина: удалённое сырьё, которое можно вернуть. Без этого списка обещание
+// «останется в корзине — вернуть можно» в подтверждении удаления было бы пустым:
+// записи копились бы, но достать их изнутри инструмента было бы нечем.
+const TRASH_KIND_LABEL = { ref: '📥 эталон', fav: '☆ избранное', db: '🗂 запись Истории' };
+function syncTrashHTML() {
+  const trash = syncTrash();
+  if (!trash.length) return '';
+  const rows = [...trash].reverse().slice(0, 20).map((x, i) => {
+    const r = x.rec || {};
+    const name = r.title || r.product || (r.desc || r.description || '').slice(0, 60) || '(без названия)';
+    return `<div class="preset-item">
+      <span class="preset-item-meta" style="flex-shrink:0">${esc(TRASH_KIND_LABEL[x.kind] || '')}</span>
+      <span class="preset-item-name" title="${esc((r.desc || r.description || r.finalDesc || ''))}" style="cursor:help">${esc(name)}</span>
+      <span class="preset-item-meta">${esc((x.at || '').slice(0, 10))}</span>
+      <button class="btn-sm" data-act="trash-restore" data-key="${esc(x.key)}" data-at="${esc(x.at || '')}" style="padding:2px 7px;font-size:11px">↩ вернуть</button>
+    </div>`;
+  }).join('');
+  return `<details style="margin-top:4px">
+    <summary style="cursor:pointer;font-size:12px;color:var(--muted)">🗑 Корзина — ${trash.length}, можно вернуть</summary>
+    <div style="display:flex;flex-direction:column;gap:7px;margin-top:10px">${rows}</div>
+  </details>`;
 }
 
 function syncStatusText() {
@@ -2878,7 +2998,7 @@ function toggleFav(variant) {
     const gone = state.favorites[idx];
     state.favorites.splice(idx, 1);
     jlog('fav_remove', variant._chain || null, { title: variant.title || '' });
-    syncTomb(syncFavKey(gone), gone);
+    syncTomb(syncFavKey(gone), gone, 'fav');
   } else {
     state.favorites.push({ ...variant, _fid: Date.now() });
     jlog('fav_add', variant._chain || null, { title: variant.title || '', category: variant._category || null, scan: jScanLevel(variant) });
@@ -2891,7 +3011,7 @@ function removeFav(fid) {
   if (!confirm('Убрать вариант из избранного? Если его уже нет в результатах — текст будет потерян.')) return;
   const gone = state.favorites.find(f => f._fid === fid);
   state.favorites = state.favorites.filter(f => f._fid !== fid);
-  if (gone) { jlog('fav_remove', gone._chain || null, { title: gone.title || '' }); syncTomb(syncFavKey(gone), gone); }
+  if (gone) { jlog('fav_remove', gone._chain || null, { title: gone.title || '' }); syncTomb(syncFavKey(gone), gone, 'fav'); }
   save(); refreshResults(); refreshFavs();
 }
 
@@ -4738,6 +4858,7 @@ function settingsTabHTML() {
           <button class="ai-btn" id="sync-pull-settings" title="Заменить локальные настройки серверными (сырьё не затрагивается)">↓ Забрать настройки</button>
         </div>
         <div style="font-size:12px;color:var(--muted)" id="sync-status">${syncStatusText()}</div>
+        ${syncTrashHTML()}
       </div>
     </div>
     <div class="card" style="margin-top:16px">
@@ -5023,9 +5144,13 @@ function bindSettingsTab() {
     const btn = e.currentTarget;
     if (!lsRaw('avito_admin_token')) { toast('Сначала задай админ-токен — без него сервер не примет'); return; }
     btn.disabled = true;
-    try { await syncPush(true); toast('Отправлено на сервер'); }
-    catch(err) { toast('Не удалось отправить: ' + err.message); }
-    finally { btn.disabled = false; const s = document.getElementById('sync-status'); if (s) s.textContent = syncStatusText(); }
+    // syncPush ничего не бросает и молча выходит, если сеть недоступна или
+    // отправлять нечего, поэтому «Отправлено» без проверки было бы враньём про
+    // сохранность сырья — самое опасное сообщение из возможных.
+    const sent = await syncPush(true);
+    toast(sent ? 'Отправлено на сервер' : (syncEnabled() ? 'Сервер недоступен — данные остались в браузере' : 'Синхронизация выключена'));
+    btn.disabled = false;
+    const s = document.getElementById('sync-status'); if (s) s.textContent = syncStatusText();
   });
   document.getElementById('sync-pull-settings')?.addEventListener('click', async e => {
     const btn = e.currentTarget;
@@ -8684,7 +8809,7 @@ document.addEventListener('click', e => {
       const goneRec = state.db.find(r => r.id === delId);
       // Запись Истории может нести финальный текст — сырьё голоса, поэтому она
       // уходит в корзину так же, как эталон
-      if (goneRec) syncTomb(syncDbKey(goneRec), goneRec);
+      if (goneRec) syncTomb(syncDbKey(goneRec), goneRec, 'db');
       state.db = state.db.filter(r => r.id !== delId);
       if (state.dbEditId === delId) { state.dbEditId = null; state.dbForm = { product: '', region: 'Москва', status: 'active', note: '' }; }
       save(); renderDb(); break;
@@ -8845,6 +8970,24 @@ document.addEventListener('click', e => {
 
     case 'ref-preview': showLearnedPreview(); break;
 
+    case 'trash-restore': {
+      const key = el.dataset.key, at = el.dataset.at || '';
+      const item = syncTrash().find(x => x.key === key && (x.at || '') === at);
+      if (!item || !item.rec) { toast('Запись не найдена в корзине'); break; }
+      // Возвращаем с НОВЫМ id: он же служит отметкой «заведено позже удаления»,
+      // по которой метка удаления перестаёт действовать и на других устройствах.
+      const rec = { ...item.rec };
+      const fresh = Date.now();
+      if (item.kind === 'fav') { rec._fid = fresh; state.favorites.push(rec); }
+      else if (item.kind === 'db') { rec.id = fresh; state.db.push(rec); }
+      else { rec.id = fresh; state.refs.push(rec); }
+      syncTombSave(syncTombs().filter(t => t.k !== key));
+      syncTrashSave(syncTrash().filter(x => !(x.key === key && (x.at || '') === at)));
+      save(); render();
+      toast('Возвращено из корзины');
+      break;
+    }
+
     // Переразметка голоса. Деление «моё/чужое» оказалось не тем признаком: часть
     // объявлений написана не человеком, но принята им, а часть «чужих» — это его же
     // объявления, просто чужим голосом. В примеры должен идти только его голос.
@@ -8881,7 +9024,7 @@ document.addEventListener('click', e => {
       if (!ref) break;
       if (!confirm('Удалить эталон? Он пропадёт на всех устройствах, но останется в корзине на сервере — вернуть можно.')) break;
       state.refs = state.refs.filter(r => r.id !== rid);
-      syncTomb(syncRefKey(ref), ref);
+      syncTomb(syncRefKey(ref), ref, 'ref');
       save(); renderDb();
       break;
     }
