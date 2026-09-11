@@ -10,6 +10,7 @@ import { runUncertain } from './uncertain.mjs';
 import { runFewshot } from './fewshot.mjs';
 import { runJournal } from './journal.mjs';
 import { runStaged } from './staged.mjs';
+import { runBackup } from './backup.mjs';
 import { runRegress } from './regress.mjs';
 
 const only = process.argv[2]; // node run.mjs parity|editor|regress — прогнать одну секцию
@@ -31,6 +32,7 @@ try {
   if (!only || only === 'fewshot') await runFewshot(browser, base, t);
   if (!only || only === 'journal') await runJournal(browser, base, t);
   if (!only || only === 'staged')  await runStaged(browser, base, t);
+  if (!only || only === 'backup')  await runBackup(browser, base, t);
   if (!only || only === 'regress') await runRegress(browser, base, t);
 } catch (e) {
   console.error('\nСтенд упал:', e);

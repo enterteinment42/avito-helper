@@ -1254,6 +1254,32 @@ function _saveAll() {
     localStorage.setItem('avito_batch_regions', JSON.stringify(state.batchRegions));
 }
 
+// Полный бэкап (v3). localStorage живёт ровно до чистки данных сайта и не существует
+// на втором устройстве, а эталоны, избранное и правки категорий вносятся руками и
+// нигде больше не хранятся — их потеря невосполнима. Поэтому в файл идёт ВСЁ
+// накопленное: история, эталоны, избранное, пресеты, очередь и конфигурация.
+// Транзитное (текущие результаты генерации, пакет по регионам, снимок формы)
+// сознательно НЕ входит: оно живёт часы, заново генерируется и только раздувало бы
+// файл. Админ-токен тоже НЕ входит — это ключ к платному API, а бэкап уезжает
+// в облако и пересылается между устройствами.
+function backupPayload() {
+  let cvCfg = null;
+  try { cvCfg = JSON.parse(lsRaw('avito_cv') || 'null'); } catch(e) {}
+  return {
+    v: 3,
+    exported: new Date().toISOString(),
+    db:        state.db || [],
+    refs:      state.refs || [],
+    favorites: state.favorites || [],
+    presets:   state.presets || [],
+    queue:     state.postQueue || [],
+    cats:      state.catsCfg || null,
+    catalogs:  state.catalogs || null,
+    settings:  state.settings || null,
+    cv:        cvCfg,
+  };
+}
+
 // ══════════════════════════════════════════
 // ЖУРНАЛ САМООБУЧЕНИЯ (методика bot-selflearn-log)
 // Сырьё — в журнал, смысл — постфактум. Каждое событие: что инструмент
@@ -6490,8 +6516,12 @@ function dbTabHTML() {
     <div class="db-toolbar">
       <span class="db-page-name">📋 ${esc(state.settings.pageName || 'Страница 1')}</span>
       <div style="flex:1"></div>
-      <button class="btn-sm" data-act="db-export">⬇ Экспорт JSON</button>
+      <button class="btn-sm" data-act="db-export">⬇ Бэкап JSON</button>
       <label class="btn-sm" style="cursor:pointer">⬆ Импорт<input type="file" id="db-import-file" accept=".json" style="display:none"></label>
+    </div>
+    <div style="font-size:12px;color:var(--muted);margin:-8px 0 10px">
+      💾 <b>Бэкап</b> сохраняет всё накопленное: историю, эталоны (${(state.refs || []).length}), избранное (${(state.favorites || []).length}), пресеты, очередь и настройки с категориями.
+      Всё это живёт только в этом браузере — чистка данных сайта стирает его целиком, а на другом устройстве его нет. Делай бэкап после каждой большой порции сырья и держи файл вне компьютера (облако/почта). Токен в файл не попадает.
     </div>
     <div style="font-size:12px;color:var(--muted);margin:-8px 0 14px">📝 = сохранён текст объявления — участвует в проверке на дубли (кнопка 🔎 Дубли). Заполняется автоматически кнопками «✓ Размещено» и «✓ Готово» в сессии постинга.</div>
 
@@ -6733,42 +6763,130 @@ function bindDbTab() {
     r.onload = ev => {
       try {
         const raw = JSON.parse(ev.target.result);
-        // v2 — объект {db, refs}; старые бэкапы — голый массив записей Истории
-        const data = Array.isArray(raw) ? raw : (Array.isArray(raw?.db) ? raw.db : null);
-        const refsIn = (!Array.isArray(raw) && Array.isArray(raw?.refs)) ? raw.refs : [];
-        if (!data) throw new Error('Ожидался массив записей или объект {db, refs}');
+        // Три поколения файлов: v1 — голый массив записей Истории; v2 — {db, refs};
+        // v3 — полный бэкап (плюс избранное, пресеты, очередь, настройки).
+        const obj = (raw && !Array.isArray(raw) && typeof raw === 'object') ? raw : {};
+        const data = Array.isArray(raw) ? raw : (Array.isArray(obj.db) ? obj.db : null);
+        if (!data) throw new Error('Ожидался массив записей или объект бэкапа');
         if (data.some(r => typeof r?.product !== 'string')) throw new Error('В записях отсутствует поле "product"');
+        const arr = v => Array.isArray(v) ? v : [];
+        const refsIn = arr(obj.refs), favsIn = arr(obj.favorites), presetsIn = arr(obj.presets), queueIn = arr(obj.queue);
+
+        // Списки сравниваются по СОДЕРЖИМОМУ, а не по id: id — это Date.now() того
+        // устройства, где запись создали, у разных баз он ничего не значит.
+        const refKey    = r => [r.source || '', r.category || '', (r.title || '').trim(), (r.desc || '').trim()].join('|');
+        const favKey    = f => [(f.title || '').trim(), (f.description || '').trim()].join('|');
+        const presetKey = p => (p.name || '').trim();
+        const queueKey  = q => [q.product || '', q.region || '', q.source || '', q.variant?.title || ''].join('|');
+        const newOnes = (incoming, have, key) => {
+          const seen = new Set((have || []).map(key));
+          return incoming.filter(x => { const k = key(x); if (seen.has(k)) return false; seen.add(k); return true; });
+        };
+        const refsAdded    = newOnes(refsIn,    state.refs,       refKey);
+        const favsAdded    = newOnes(favsIn,    state.favorites,  favKey);
+        const presetsAdded = newOnes(presetsIn, state.presets,    presetKey);
+        const queueAdded   = newOnes(queueIn,   state.postQueue,  queueKey);
+
+        // А вот сами id при слиянии двух баз совпасть МОГУТ — и тогда удаление,
+        // которое ищет строго по id, снесло бы обе записи разом. Коллизии
+        // переименовываем; у избранного заодно чиним ссылки очереди из этого же
+        // файла (позиция source:'fav' указывает на _fid).
+        const restampIds = (added, have, idField = 'id') => {
+          const busy = new Set((have || []).map(x => x[idField]));
+          const map = new Map();
+          let n = 0;
+          for (const x of added) {
+            if (busy.has(x[idField])) {
+              let fresh = Date.now() + (++n);
+              while (busy.has(fresh)) fresh = Date.now() + (++n);
+              map.set(x[idField], fresh);
+              x[idField] = fresh;
+            }
+            busy.add(x[idField]);
+          }
+          return map;
+        };
+        const favIdMap = restampIds(favsAdded, state.favorites, '_fid');
+        restampIds(refsAdded,    state.refs);
+        restampIds(presetsAdded, state.presets);
+        restampIds(queueAdded,   state.postQueue);
+        for (const q of queueAdded) if (q.source === 'fav' && favIdMap.has(q.favId)) q.favId = favIdMap.get(q.favId);
+
         // F14: раньше импорт молча ЗАМЕНЯЛ всю базу — бэкап со второго устройства стирал
         // локальную историю дублей без единого подтверждения. Теперь явно спрашиваем слияние
         // или замену, а замену дополнительно подтверждаем отдельно (двойная защита от потери).
-        const refsNote = refsIn.length ? ` и ${refsIn.length} эталонов` : '';
-        const merge = confirm(`Файл содержит ${data.length} записей${refsNote}. Текущая база: ${state.db.length} записей.\n\nOK — слить с текущей базой (добавить новые, не трогая старые)\nОтмена — полностью заменить базу`);
-        // Эталоны сливаются ВСЕГДА, даже при выборе «заменить»: замена относится к истории
-        // размещений, а терять ручные эталоны молча — ровно та ловушка, из-за которой
-        // они и не попадали в бэкап (дедуп по источнику+тексту, id могут совпасть у разных устройств)
-        const refKey = r => [r.source || '', r.category || '', (r.title || '').trim(), (r.desc || '').trim()].join('|');
-        const refsHave = new Set((state.refs || []).map(refKey));
-        const refsAdded = refsIn.filter(r => !refsHave.has(refKey(r)));
-        // ВАЖНО: сами эталоны дописываются только ПОСЛЕ всех подтверждений (ниже).
-        // Раньше слияние стояло здесь, до второго confirm — и при отказе от замены
-        // базы функция выходила без save()/renderDb(): эталоны из файла уже лежали
-        // в памяти, в интерфейсе их не было, а на диск они уезжали молча при первом
-        // же постороннем save(). Отменил импорт — значит ничего не добавилось.
-        const mergeRefs = () => { if (refsAdded.length) state.refs = [...(state.refs || []), ...refsAdded]; };
+        const has = [`${data.length} записей истории`];
+        if (refsIn.length)    has.push(`${refsIn.length} эталонов`);
+        if (favsIn.length)    has.push(`${favsIn.length} избранного`);
+        if (presetsIn.length) has.push(`${presetsIn.length} пресетов`);
+        if (queueIn.length)   has.push(`${queueIn.length} позиций очереди`);
+        const merge = confirm(`Файл содержит: ${has.join(', ')}.\nТекущая база: ${state.db.length} записей.\n\nOK — слить с текущей базой (добавить новые, не трогая старые)\nОтмена — полностью заменить базу\n\nЭталоны, избранное, пресеты и очередь в обоих случаях ДОБАВЛЯЮТСЯ, ничего не стирая.`);
+        // Замену подтверждаем сразу, до остальных вопросов: отказ здесь — это отказ
+        // от импорта целиком, и спрашивать после него про настройки незачем.
+        if (!merge && !confirm(`Точно заменить всю базу? Текущие ${state.db.length} записей будут удалены безвозвратно.`)) return;
+
+        // Накопленное руками сливается ВСЕГДА, даже при выборе «заменить»: замена
+        // относится к истории размещений, а терять эталоны и избранное молча — ровно
+        // та ловушка, из-за которой они и не попадали в бэкап.
+        // ВАЖНО: дописываем только ПОСЛЕ всех подтверждений (ниже). Раньше слияние
+        // стояло выше второго confirm — и при отказе от замены базы функция выходила
+        // без save()/renderDb(): данные из файла уже лежали в памяти, в интерфейсе их
+        // не было, а на диск уезжали молча при первом же постороннем save().
+        const mergeLists = () => {
+          if (refsAdded.length)    state.refs      = [...(state.refs || []),      ...refsAdded];
+          if (favsAdded.length)    state.favorites = [...(state.favorites || []), ...favsAdded];
+          if (presetsAdded.length) state.presets   = [...(state.presets || []),   ...presetsAdded];
+          if (queueAdded.length)   state.postQueue = [...(state.postQueue || []), ...queueAdded];
+        };
+        const addedNote = [
+          refsAdded.length    ? `эталонов ${refsAdded.length}`    : '',
+          favsAdded.length    ? `избранного ${favsAdded.length}`  : '',
+          presetsAdded.length ? `пресетов ${presetsAdded.length}` : '',
+          queueAdded.length   ? `очередь ${queueAdded.length}`    : '',
+        ].filter(Boolean).join(', ');
+
+        // Настройки (категории, каталоги, оформление, обложки) — отдельный вопрос:
+        // при восстановлении на чистом браузере их нужно вернуть, а при подливке
+        // сырья с телефона на рабочий ПК — точно нет, там свои правки категорий.
+        const cfgHas = [];
+        if (obj.cats)     cfgHas.push(`категории (своих ${arr(obj.cats.custom).length})`);
+        if (obj.catalogs) cfgHas.push('каталоги игр');
+        if (obj.settings) cfgHas.push('настройки генератора');
+        if (obj.cv)       cfgHas.push('настройки обложек');
+        const restoreCfg = cfgHas.length && confirm(`В файле есть ещё ${cfgHas.join(', ')}.\n\nOK — восстановить их, ЗАМЕНИВ текущие\nОтмена — оставить текущие настройки как есть (данные выше всё равно импортируются)`);
+        const applyCfg = () => {
+          if (!restoreCfg) return;
+          if (obj.cats && typeof obj.cats === 'object') {
+            state.catsCfg = { builtin: obj.cats.builtin || {}, custom: arr(obj.cats.custom) };
+            rebuildCats();
+          }
+          if (obj.catalogs && typeof obj.catalogs === 'object') state.catalogs = obj.catalogs;
+          if (obj.settings && typeof obj.settings === 'object') {
+            state.settings = { ...DEF_SETTINGS, ...obj.settings };
+            if (MODEL_MIGRATION[state.settings.model]) state.settings.model = MODEL_MIGRATION[state.settings.model];
+          }
+          if (obj.cv && typeof obj.cv === 'object') {
+            // Только известные поля: чужой ключ из файла осел бы в cv навсегда,
+            // а картинки и служебные _-поля не сохраняются по построению.
+            for (const k in obj.cv) { if (k === 'images' || k.startsWith('_') || !(k in cv)) continue; cv[k] = obj.cv[k]; }
+            cvSave();
+          }
+        };
+
         if (merge) {
           const key = rec => [rec.product, rec.region, rec.title || '', rec.date || ''].join('|');
           const existing = new Set(state.db.map(key));
           const added = data.filter(rec => !existing.has(key(rec)));
           state.db = [...state.db, ...added];
-          mergeRefs();
-          save();
-          toast(`Слияние: добавлено ${added.length} из ${data.length}${refsAdded.length ? `, эталонов ${refsAdded.length}` : ''} (пропущено дублей: ${data.length - added.length})`);
+          mergeLists(); applyCfg(); save();
+          toast(`Слияние: добавлено ${added.length} из ${data.length}${addedNote ? `, ${addedNote}` : ''} (пропущено дублей: ${data.length - added.length})`);
         } else {
-          if (!confirm(`Точно заменить всю базу? Текущие ${state.db.length} записей будут удалены безвозвратно.`)) return;
-          state.db = data; mergeRefs(); save();
-          toast(`База заменена: ${data.length} записей${refsAdded.length ? `, эталонов добавлено ${refsAdded.length}` : ''}`);
+          state.db = data;
+          mergeLists(); applyCfg(); save();
+          toast(`База заменена: ${data.length} записей${addedNote ? `, ${addedNote}` : ''}`);
         }
-        renderDb();
+        // Категории и настройки меняют интерфейс целиком, одной вкладкой не обойтись
+        if (restoreCfg) render(); else renderDb();
       } catch(err) { toast('Ошибка импорта: ' + err.message); }
     };
     r.readAsText(file);
@@ -8187,17 +8305,17 @@ document.addEventListener('click', e => {
     }
 
     case 'db-export': {
-      // Эталоны вносятся руками и нигде больше не хранятся — без них «бэкап Истории»
-      // терял их при чистке данных сайта или переезде на другое устройство.
-      // Формат-объект новый; импорт по-прежнему понимает и старый файл-массив.
-      const payload = { v: 2, exported: new Date().toISOString(), db: state.db, refs: state.refs || [] };
+      // Полный бэкап (v3): история, эталоны, избранное, пресеты, очередь и настройки.
+      // Импорт по-прежнему понимает и старые файлы — голый массив (v1) и {db, refs} (v2).
+      const payload = backupPayload();
       const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
       const a = document.createElement('a');
       a.href = URL.createObjectURL(blob);
       const slug = (state.settings.pageName || 'page').replace(/[^a-zа-яё0-9]/gi, '_').toLowerCase();
-      a.download = `avito-db-${slug}-${new Date().toISOString().slice(0,10)}.json`;
+      a.download = `avito-backup-${slug}-${new Date().toISOString().slice(0,10)}.json`;
       a.click();
       URL.revokeObjectURL(a.href);
+      toast(`Бэкап: эталонов ${payload.refs.length}, избранного ${payload.favorites.length}, истории ${payload.db.length}`);
       break;
     }
   }
