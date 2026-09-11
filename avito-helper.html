@@ -1529,7 +1529,7 @@ const J_UI_ACTS = new Set([
   'queue-add','queue-add-batch','queue-start','queue-clear','session-done','session-skip',
   'cv-download','cv-gen-vars','cv-gen-collage-vars','cv-dl-all-game','cv-dl-all-collage',
   'cv-igdb-fetch','cv-igdb-game-fetch','cv-mask-toggle','cv-to-toggle','cv-ig-toggle','cv-ig-fill',
-  'db-export','db-add','db-final','ref-add','ref-tricks','conv-photo',
+  'db-export','db-add','db-final','ref-add','ref-tricks','ref-preview','conv-photo',
   'vision-recognize','vision-price','vision-apply-price','vision-covers','vision-undo','vision-pick',
   'staged-gen','staged-covers','staged-download','staged-scene',
 ]);
@@ -1903,6 +1903,38 @@ function fewShotSamples(category) {
   return own.length ? { list: own, own: true } : { list: all.filter(x => x.cat && x.cat !== category), own: false };
 }
 
+const FEWSHOT_N    = 3;    // примеров описаний в промпте
+const FEWSHOT_MAX  = 1800; // потолок длины примера (самый длинный эталон Дениса — 1720)
+const TITLES_N     = 12;   // заголовков в блоке названий
+
+// Насколько образец близок к тому, что продаём сейчас: доля слов названия товара,
+// встретившихся в образце. Без этого при сотне эталонов жребий на «PS Plus Extra»
+// с равной вероятностью подсовывал пример про EA Play, а собственный отточенный
+// текст именно по Extra модель не видела ни разу.
+function fewShotScore(sample, productName) {
+  const toks = [...new Set(String(productName || '').toLowerCase().match(/[a-zа-яё0-9+]{2,}/g) || [])];
+  if (!toks.length) return 0;
+  const hay = ((sample.title || '') + ' ' + (sample.desc || '')).toLowerCase();
+  let hit = 0;
+  for (const w of toks) if (hay.includes(w)) hit++;
+  return hit / toks.length;
+}
+
+// Отбор гибридный: один самый близкий к товару + остальные жребием. Чистая
+// близость выдавала бы по частому товару вечно одни и те же два эталона, модель
+// начала бы их пересказывать — и мы получили бы повтор СВОЕГО текста, то есть
+// ровно тот дубль, за который Авито снимает объявления.
+function fewShotPicks(list, productName, n) {
+  const rest = [...list];
+  const picks = [];
+  let bestIdx = -1, best = 0;
+  rest.forEach((s, i) => { const sc = fewShotScore(s, productName); if (sc > best) { best = sc; bestIdx = i; } });
+  if (bestIdx >= 0) picks.push(rest.splice(bestIdx, 1)[0]);
+  rest.sort(() => Math.random() - .5);
+  while (picks.length < n && rest.length) picks.push(rest.shift());
+  return picks;
+}
+
 // Чужие удачные объявления (👀) не идут в промпт текстом: у них своя
 // комплектация, свой город и свои цены, и модель тащила бы эти факты в наше
 // объявление как правду. Вместо текста подмешиваются ПРИЁМЫ — то, что из
@@ -1918,25 +1950,51 @@ function refTricksBlock(category) {
   return `\n\nПриёмы, которые работают у других продавцов (разобраны из удачных чужих объявлений — это ходы, а не текст; ни одной чужой фразы дословно):\n${picks.map(s => `- ${s}`).join('\n')}`;
 }
 
-// Few-shot: 1-2 примера — модель ориентируется на характер продавца, а не
-// только на правила.
-function fewShotBlock(category) {
+// Few-shot: примеры показываются ЦЕЛИКОМ. Обрезка по 220 знаков давала модели
+// только зачин — как продавец подаёт цены и чем закрывает объявление, она не
+// видела, хотя это и есть самое ценное в накопленных эталонах. Переносы строк
+// тоже сохраняем: оформление списка (запятыми / с новой строки / через тире) —
+// одна из осей вариации, схлопывать её в строку значит прятать её от модели.
+function fewShotBlock(f) {
+  const category = f.category;
   const { list, own } = fewShotSamples(category);
   if (!list.length) return '';
-  const picks = [...list].sort(() => Math.random() - .5).slice(0, 2);
+  // 'Товар' — это заглушка currentProductName, когда название не заполнено. Пускать
+  // её в скоринг нельзя: слово «товар» встречается в текстах и дало бы ложную близость.
+  const product = currentProductName(f);
+  const picks = fewShotPicks(list, product === 'Товар' ? '' : product, FEWSHOT_N);
   const lines = picks.map((v, i) => {
-    const d = v.desc.length > 220 ? v.desc.slice(0, 220).trim() + '…' : v.desc;
-    const body = d.replace(/\n+/g, ' ');
-    return v.title ? `${i + 1}. «${v.title}» — ${body}` : `${i + 1}. ${body}`;
-  }).join('\n');
+    const d = v.desc.length > FEWSHOT_MAX
+      ? v.desc.slice(0, FEWSHOT_MAX).trim() + '\n[…конец объявления обрезан по длине…]'
+      : v.desc;
+    return `${v.title ? `Пример ${i + 1} — «${v.title}»:` : `Пример ${i + 1}:`}\n${d}`;
+  }).join('\n\n');
   return own
-    ? `\n\nПримеры твоих же удачных объявлений этой категории (ориентируйся на характер и энергию, НЕ копируй дословно):\n${lines}`
+    ? `\n\nПримеры твоих же удачных объявлений этой категории (ориентируйся на характер, ритм и структуру, НЕ копируй дословно — повтор собственного текста Авито считает дублем):\n${lines}`
     : `\n\nПримеры твоих объявлений ИЗ ДРУГОЙ КАТЕГОРИИ товара (своих по этой пока нет). Перенимай ТОЛЬКО тон, ритм и структуру. НЕ переноси оттуда формулировки и правила: у каждой категории они свои.\n${lines}`;
 }
 
-// Всё, что подмешивается к промпту из накопленного: свои образцы + чужие приёмы.
-function learnedBlock(category) {
-  return fewShotBlock(category) + refTricksBlock(category);
+// Заголовки — отдельная задача: 50 знаков, свой ритм, свои сокращения. На ней
+// куски описаний почти бесполезны, а настоящих названий у продавца накоплена
+// сотня. Показываем их списком с длиной каждого: модель видит и манеру, и то,
+// что лимит принято добирать, а не останавливаться на 30 знаках.
+function titleSamplesBlock(f) {
+  const pool = [
+    ...(state.favorites || []).filter(v => v.title).map(v => ({ t: v.title, cat: v._category })),
+    ...(state.refs || []).filter(r => r.source === 'mine' && r.title).map(r => ({ t: r.title, cat: r.category })),
+  ];
+  const own = pool.filter(x => x.cat === f.category);
+  const list = own.length ? own : pool;
+  const uniq = [...new Set(list.map(x => String(x.t).trim()).filter(Boolean))];
+  if (!uniq.length) return '';
+  const picks = [...uniq].sort(() => Math.random() - .5).slice(0, TITLES_N);
+  return `\n\nТвои НАСТОЯЩИЕ заголовки${own.length ? ' этой категории' : ' (из другой категории товара — перенимай только манеру)'} — так ты пишешь сам (в скобках длина, лимит 50):\n${picks.map(s => `- ${s} (${s.length})`).join('\n')}\nНЕ копируй их дословно: повтор собственного заголовка Авито считает дублем. Перенимай манеру — какие слова сокращаешь, куда ставишь платформу, чем цепляешь.`;
+}
+
+// Всё, что подмешивается к промпту из накопленного: свои образцы описаний,
+// свои заголовки и приёмы, разобранные из чужих объявлений.
+function learnedBlock(f) {
+  return fewShotBlock(f) + titleSamplesBlock(f) + refTricksBlock(f.category);
 }
 
 function buildMsg(overrideCount, excludeTitles = [], formOverride = null) {
@@ -1946,7 +2004,7 @@ function buildMsg(overrideCount, excludeTitles = [], formOverride = null) {
   const notes = f.notes ? `\nДополнительно: ${f.notes}` : '';
   return `${catInfoBlock(f)}
 Стиль: ${styleLabel(f)}
-Вариантов: ${count}${excl}${notes}${learnedBlock(f.category)}`;
+Вариантов: ${count}${excl}${notes}${learnedBlock(f)}`;
 }
 
 // ══════════════════════════════════════════
@@ -2147,7 +2205,7 @@ function buildTitlesMsg(n) {
   const notes = f.notes ? `\nДополнительно: ${f.notes}` : '';
   return `${catInfoBlock(f)}${notes}
 
-ЗАДАЧА: сгенерируй ${n} вариантов НАЗВАНИЙ (только названия, БЕЗ описаний) для одного и того же объявления. Каждое — из РАЗНОЙ точки пространства вариаций (разный крючок, разное написание/сокращение, разный порядок слов). Строго следуй формуле и правилам названий из системного промпта (лимит 50 символов, запрещённые слова, для игр — без цены).${learnedBlock(f.category)}
+ЗАДАЧА: сгенерируй ${n} вариантов НАЗВАНИЙ (только названия, БЕЗ описаний) для одного и того же объявления. Каждое — из РАЗНОЙ точки пространства вариаций (разный крючок, разное написание/сокращение, разный порядок слов). Строго следуй формуле и правилам названий из системного промпта (лимит 50 символов, запрещённые слова, для игр — без цены).${learnedBlock(f)}
 
 Верни строго JSON без markdown-обёртки:
 {"titles":[{"title":"...","hook":"крючок одним-двумя словами"}]}`;
@@ -2208,7 +2266,7 @@ async function doGenDescriptionsForTitles() {
 Названия УЖЕ ВЫБРАНЫ продавцом — менять текст названия НЕЛЬЗЯ, перенеси его в поле title символ-в-символ:
 ${list}
 
-Для каждого напиши полное описание — разное по структуре и подаче цены между вариантами (см. правила описаний в системном промпте).${learnedBlock(f.category)}
+Для каждого напиши полное описание — разное по структуре и подаче цены между вариантами (см. правила описаний в системном промпте).${learnedBlock(f)}
 Верни строго JSON без markdown-обёртки:
 {"variants":[{"id":1,"title":"(как в списке, без изменений)","title_length":число,"description":"...","style":"...","price_format":"...","hook":"...","structure":"..."}]}`;
     const text = await callAI([{ role: 'user', content: msg }], { webSearch, category: f.category, max_tokens: Math.min(8000, 800 + chosen.length * 1200) });
@@ -6617,6 +6675,10 @@ function refsCardHTML() {
       </button>
       <span style="font-size:11.5px;color:var(--muted)">${tricksTotal ? `Разобрано объявлений: ${tricksTotal} — их приёмы уже подмешиваются в генерацию` : 'Пока ни одно чужое объявление не разобрано'}</span>
     </div>` : ''}
+    ${refs.length || (state.favorites || []).length ? `<div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:12px">
+      <button class="btn-sm" data-act="ref-preview">👁 Что уходит в промпт</button>
+      <span style="font-size:11.5px;color:var(--muted)">Показывает точный блок, который подмешивается к запросу по товару из формы генератора</span>
+    </div>` : ''}
     <div class="form-body">
       <div style="display:flex;gap:10px;flex-wrap:wrap">
         <div class="field" style="min-width:170px">
@@ -6646,6 +6708,43 @@ function refsCardHTML() {
     </div>
     ${listHTML}
   </div>`;
+}
+
+// «Что уходит в промпт» — предпросмотр накопленного блока ровно в том виде, в
+// каком он подмешивается к запросу. Сырьё эталонов собиралось долго, и вопрос
+// «а точно ли оно используется и ничего не теряется по дороге» должен решаться
+// проверкой, а не обещанием: тут видно и сами примеры целиком, и сколько их, и
+// по какому товару подобран близкий. Выборка случайная — кнопка «другая выборка»
+// показывает, что при каждой генерации она новая (это и есть антидубль).
+function showLearnedPreview() {
+  try {
+    document.getElementById('learned-overlay')?.remove();
+    const block = learnedBlock(state.form);
+    const product = currentProductName(state.form);
+    const ov = document.createElement('div');
+    ov.id = 'learned-overlay';
+    ov.style.cssText = 'position:fixed;inset:0;background:rgba(10,10,20,.82);z-index:600;display:flex;align-items:center;justify-content:center;padding:16px;overflow-y:auto';
+    ov.innerHTML = `<div class="card" style="max-width:760px;width:100%;border-color:var(--border2);max-height:90vh;display:flex;flex-direction:column">
+      <div class="card-title">👁 Что уходит в промпт — ${esc(product)}</div>
+      <div style="font-size:12px;color:var(--muted);margin-bottom:10px">
+        ${block
+          ? `Этот текст добавляется к каждому запросу генерации по текущему товару. Примеры показаны целиком, как они лежат в эталонах. Выборка при каждой генерации новая — иначе модель начала бы пересказывать одно и то же объявление.`
+          : `Пока пусто: по этой категории нет ни своих эталонов (✍), ни избранного, ни разобранных чужих приёмов.`}
+      </div>
+      <pre style="flex:1;overflow:auto;white-space:pre-wrap;word-break:break-word;font-family:var(--fm);font-size:12px;line-height:1.5;background:var(--bg);border:1px solid var(--border);border-radius:10px;padding:12px;margin:0">${esc(block.trim() || '—')}</pre>
+      <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:12px;flex-wrap:wrap">
+        <span style="flex:1;font-size:11.5px;color:var(--muted);align-self:center">${block ? `${block.length} символов` : ''}</span>
+        <button class="btn-sm" data-act="learned-again">🎲 Другая выборка</button>
+        <button class="btn-gen" data-act="learned-close" style="width:auto;padding:8px 20px">Закрыть</button>
+      </div>
+    </div>`;
+    ov.addEventListener('click', e => {
+      const act = e.target.closest('[data-act]')?.dataset.act;
+      if (act === 'learned-close' || e.target === ov) ov.remove();
+      if (act === 'learned-again') { ov.remove(); showLearnedPreview(); }
+    });
+    document.body.appendChild(ov);
+  } catch(e) { toast('Не удалось показать блок: ' + e.message); }
 }
 
 // Разбор чужих эталонов на приёмы. Один вызов на всю пачку неразобранных:
@@ -8275,6 +8374,8 @@ document.addEventListener('click', e => {
       showFinalDialog(+el.dataset.id); break;
 
     case 'ref-tricks': doRefTricks(); break;
+
+    case 'ref-preview': showLearnedPreview(); break;
 
     case 'ref-add': {
       // Значения берём из state.refForm (DOM может быть уже перерисован), но живое поле
