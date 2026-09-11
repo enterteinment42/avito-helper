@@ -28,8 +28,13 @@ export async function runFewshot(browser, base, t) {
     await seed(page, { favorites: [FAV_PHYS, FAV_GAME] });
     const ownBlock = await block(page, 'phys');
     t.ok('берётся пример своей категории', ownBlock.includes('PS5 Pro с коробкой'), ownBlock);
-    t.ok('и не берётся чужой', !ownBlock.includes('Doom'), ownBlock);
     t.ok('формулировка прежняя', ownBlock.includes('Примеры твоих же удачных объявлений этой категории'), ownBlock);
+    // Голос принадлежит продавцу, а не категории: объявление из другой категории
+    // теперь подмешивается ВСЕГДА, но отдельным слотом и с запретом на факты.
+    t.ok('чужая категория идёт слотом голоса', ownBlock.includes('Doom'), ownBlock);
+    t.ok('и слот подписан как другой товар', ownBlock.includes('Это тоже ты, но ДРУГОЙ товар'), ownBlock);
+    t.ok('с запретом переносить факты', ownBlock.includes('факты, комплектацию и правила оттуда НЕ переноси'), ownBlock);
+    t.ok('основные примеры при этом свои', ownBlock.indexOf('PS5 Pro с коробкой') < ownBlock.indexOf('Doom'), ownBlock);
 
     // Своих нет — берём чужие, но с пометкой
     await seed(page, { favorites: [FAV_GAME] });
@@ -301,6 +306,124 @@ export async function runFewshot(browser, base, t) {
     });
     t.ok('аномально длинный эталон обрезан', capped.marked, `длина блока ${capped.len}`);
     t.eq('потолок выше самого длинного реального эталона (1720)', capped.cap >= 1800, true);
+
+    // ── Финальный текст с Авито как образец голоса ──────────
+    // Вариант из избранного написала модель, а человек его одобрил. Финал он
+    // ДОРАБОТАЛ рукой уже в форме Авито — это самый точный слепок голоса, и до
+    // сессии 2026-09-11 он вообще не участвовал в генерации.
+    const finals = await page.evaluate(() => {
+      state.refs = [{ id: 1201, source: 'mine', category: 'phys', title: 'Эталон', desc: 'Текст эталона.' }];
+      state.favorites = [];
+      state.db = [
+        { id: 1301, product: 'PS5 Pro', region: 'Москва', title: 'Бот', description: 'Бот-версия описания.',
+          finalTitle: 'Рука', finalDesc: 'ФИНАЛ, доведённый рукой.', _category: 'phys' },
+        // Финал, где описание не вставляли: диалог подставляет бот-версию сам,
+        // и о голосе такой «финал» не говорит ничего
+        { id: 1302, product: 'PS5 Pro', region: 'Казань', title: 'Бот2', description: 'Бот-версия два.',
+          finalTitle: 'Бот2', finalDesc: 'Бот-версия два.', _category: 'phys' },
+        // Старая запись без категории — положить её некуда, правила категорий разные
+        { id: 1303, product: 'PS5 Pro', region: 'Омск', title: 'Стар', description: 'Старая бот-версия.',
+          finalTitle: 'Стар', finalDesc: 'СТАРЫЙ ФИНАЛ без категории.' },
+      ];
+      save();
+      const f = { ...DEF_FORM, category: 'phys', physName: 'PS5 Pro' };
+      const blocks = Array.from({ length: 5 }, () => fewShotBlock(f));
+      return {
+        blocks,
+        sample: blocks[0],
+        poolHasFinal: fewShotSamples('phys').list.some(s => s.final),
+      };
+    });
+    t.ok('финал попал в пул примеров', finals.poolHasFinal);
+    t.ok('и берётся в КАЖДОЙ выборке — слот под него зарезервирован',
+      finals.blocks.every(b => b.includes('ФИНАЛ, доведённый рукой')), 'в какой-то выборке финала не было');
+    t.ok('он подписан как финальный, а не как обычный пример',
+      finals.sample.includes('ФИНАЛЬНЫЙ текст'), finals.sample.slice(0, 400));
+    t.ok('невставленное описание финалом не считается',
+      !finals.sample.includes('Бот-версия два'), finals.sample);
+    t.ok('финал без категории не подмешивается',
+      !finals.blocks.join('').includes('СТАРЫЙ ФИНАЛ'), 'финал без категории просочился');
+    t.ok('обычные эталоны при этом никуда не делись',
+      finals.blocks.some(b => b.includes('Текст эталона')), finals.sample);
+
+    // Категория проставляется записи Истории в момент «✓ Размещено» — без неё
+    // финал по этой записи потом некуда положить
+    const stamped = await page.evaluate(() => {
+      state.db = []; state.results = [{
+        id: 1, title: 'Т', description: 'Д', _product: 'PS5 Pro', _category: 'phys', _chain: 'c1',
+      }];
+      state.form = { ...DEF_FORM, category: 'phys', physName: 'PS5 Pro' };
+      window.prompt = () => 'Москва';
+      save();
+      state.tab = 'generator'; render();   // кнопка «✓ Размещено» живёт на карточке варианта
+      document.querySelector('[data-act="mark-posted"][data-vid="1"]')?.click();
+      document.getElementById('final-overlay')?.remove();
+      return state.db[0]?._category || null;
+    });
+    t.eq('запись Истории получает категорию варианта', stamped, 'phys');
+
+    // ── Переразметка голоса ─────────────────────────────────
+    // «Моё/чужое» оказалось не тем признаком: часть объявлений написана нейросетью,
+    // но принята человеком, а часть «чужих» — его же объявления чужим голосом.
+    const voice = await page.evaluate(async () => {
+      state.refs = [{ id: 1401, source: 'other', category: 'phys', title: 'Переключаемое', desc: 'ТЕКСТ ПЕРЕКЛЮЧАЕМОГО.' }];
+      state.favorites = []; state.db = []; save();
+      state.tab = 'database'; render();
+      const f = { ...DEF_FORM, category: 'phys', physName: 'PS5 Pro' };
+      const before = fewShotBlock(f);
+      document.querySelector('[data-act="ref-voice"][data-id="1401"]')?.click();
+      await new Promise(r => setTimeout(r, 30));
+      const after = fewShotBlock(f);
+      const src = state.refs[0].source;
+      document.querySelector('[data-act="ref-voice"][data-id="1401"]')?.click();
+      return { before, after, src, back: state.refs[0].source, label: document.querySelector('[data-act="ref-voice"]')?.textContent.trim() };
+    });
+    t.ok('до переключения «не мой голос» в примеры не идёт', !voice.before.includes('ТЕКСТ ПЕРЕКЛЮЧАЕМОГО'), voice.before);
+    t.eq('нажатие меняет метку голоса', voice.src, 'mine');
+    t.ok('и текст сразу начинает идти в примеры', voice.after.includes('ТЕКСТ ПЕРЕКЛЮЧАЕМОГО'), voice.after);
+    t.eq('переключается обратно', voice.back, 'other');
+    t.ok('метка на кнопке говорит про голос, а не про авторство', /голос|не мой/.test(voice.label || ''), voice.label);
+
+    // ── Мера близости: тип товара важнее платформы ──────────
+    // Настоящий случай из корпуса Дениса: на «PS5 Pro» побеждал эталон про ДИСК
+    // (совпало слово ps5), а четыре объявления про приставки с комплектом —
+    // Xbox Series X/S и две про Пс4 — получали ноль. Слово ps5 стоит почти в
+    // каждом его объявлении и потому не отличает одно от другого.
+    const realish = await page.evaluate(() => {
+      // Корпус как у Дениса: «ps5» стоит в большинстве объявлений и потому
+      // ничего не отличает, а «консоль/приставка» — только в двух.
+      state.refs = [
+        { id: 1101, source: 'mine', category: 'phys', title: 'Новый диск (в пленке) Call Of Duty MW 3 PS5', desc: 'Диск запечатан, для ps5 и пс4. Забирай.' },
+        { id: 1102, source: 'mine', category: 'phys', title: 'Зарядная станция геймпадов PS5 (новая, в коробке)', desc: 'Станция для геймпадов ps5, в коробке.' },
+        { id: 1103, source: 'mine', category: 'phys', title: 'Xbox Series X + Game Pass Ultimate', desc: 'ПРИСТАВКА-ЯКОРЬ. Консоль Xbox Series X, два геймпада, коробка, чек, подписка в подарок.' },
+        { id: 1104, source: 'mine', category: 'phys', title: 'Пс4 слим 1тб два геймпада, подписка на 420 игр', desc: 'Консоль PS4 слим, два геймпада, коробка, чек, подписка.' },
+        { id: 1105, source: 'mine', category: 'phys', title: 'Диски новые (MW3, MK1, Re4) пс4, пс5', desc: 'Новые диски для ps5, запечатаны.' },
+        { id: 1106, source: 'mine', category: 'phys', title: 'Призрак цусимы ps4 (диск)', desc: 'Диск, идёт и на ps5.' },
+      ];
+      state.favorites = []; save();
+      // Форма заполнена как у человека: не только название, но и комплектация
+      const f = { ...DEF_FORM, category: 'phys', physName: 'PS5 Pro',
+        physKit: ['коробка', 'чек', 'два геймпада'], physState: 'отличное' };
+      const q = fewShotQuery(f);
+      const idf = fewShotIdf(fewShotSamples('phys').all);
+      const toks = [...new Set(fewShotTokens(q))];
+      const scored = fewShotSamples('phys').list
+        .map(s => ({ t: s.title, sc: fewShotScore(s, toks, idf) }))
+        .sort((a, b) => b.sc - a.sc);
+      return {
+        q,
+        top: scored[0].t,
+        idfPs5: +idf('ps5').toFixed(3),
+        idfKonsol: +idf('консол').toFixed(3),
+        blocks: Array.from({ length: 5 }, () => fewShotBlock(f)),
+      };
+    });
+    t.ok('в запрос идёт не только название товара', /геймпад/.test(realish.q), realish.q);
+    t.ok('частое слово «ps5» весит меньше редкого «консоль»', realish.idfPs5 < realish.idfKonsol,
+      `ps5=${realish.idfPs5}, консоль=${realish.idfKonsol}`);
+    t.eq('якорем становится приставка, а не диск с игрой', realish.top, 'Xbox Series X + Game Pass Ultimate');
+    t.ok('и она попадает в промпт в каждом прогоне',
+      realish.blocks.every(b => b.includes('ПРИСТАВКА-ЯКОРЬ')), 'в каком-то прогоне якоря не было');
 
     // ── Блок настоящих заголовков ───────────────────────────
     const titles = await page.evaluate(() => {

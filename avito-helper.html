@@ -1529,7 +1529,7 @@ const J_UI_ACTS = new Set([
   'queue-add','queue-add-batch','queue-start','queue-clear','session-done','session-skip',
   'cv-download','cv-gen-vars','cv-gen-collage-vars','cv-dl-all-game','cv-dl-all-collage',
   'cv-igdb-fetch','cv-igdb-game-fetch','cv-mask-toggle','cv-to-toggle','cv-ig-toggle','cv-ig-fill',
-  'db-export','db-add','db-final','ref-add','ref-tricks','ref-preview','conv-photo',
+  'db-export','db-add','db-final','ref-add','ref-tricks','ref-preview','ref-voice','conv-photo',
   'vision-recognize','vision-price','vision-apply-price','vision-covers','vision-undo','vision-pick',
   'staged-gen','staged-covers','staged-download','staged-scene',
 ]);
@@ -1895,44 +1895,130 @@ function fewShotSamples(category) {
   const fromRefs = (state.refs || [])
     .filter(r => r.source === 'mine' && (r.title || r.desc))
     .map(r => ({ title: r.title || '', desc: r.desc || '', cat: r.category }));
-  const all = [...fromFav, ...fromRefs];
+  // Финальные тексты с Авито — самый сильный образец голоса: вариант из избранного
+  // написала модель и человек его одобрил, а финал он ДОРАБОТАЛ СВОЕЙ РУКОЙ уже в
+  // форме Авито. Берём только реально изменённые: диалог финала подставляет
+  // бот-версию, если поле описания оставили пустым (fd = fdRaw || r.description),
+  // и такой «финал» ничего нового о голосе не говорит.
+  const fromFinal = (state.db || [])
+    .filter(r => r.finalDesc && r.finalDesc !== r.description)
+    .map(r => ({
+      title: r.finalTitle || r.title || '', desc: r.finalDesc, cat: r._category || null, final: true,
+    }));
+  const all = [...fromFinal, ...fromFav, ...fromRefs];
   const own = all.filter(x => x.cat === category);
-  // Своя категория в приоритете. Своих нет — берём чужие, но помечаем: тон и
-  // структуру перенимать можно, формулировки и правила чужой категории — нет
-  // (иначе физтовар получит «оформляется в цифре» из игр, и наоборот).
-  return own.length ? { list: own, own: true } : { list: all.filter(x => x.cat && x.cat !== category), own: false };
+  // Своя категория в приоритете: факты и правила («оформляется в цифре», запрет
+  // цены в тексте) у каждой свои, и переносить их нельзя. Своих нет — берём чужие
+  // с пометкой. А ГОЛОС категории не принадлежит: он у продавца один на всё, и для
+  // него ниже есть отдельный слот (voicePick) — см. fewShotBlock.
+  return own.length
+    ? { list: own, own: true, all }
+    : { list: all.filter(x => x.cat && x.cat !== category), own: false, all };
 }
 
-const FEWSHOT_N    = 3;    // примеров описаний в промпте
+const FEWSHOT_N    = 3;    // примеров описаний своей категории
 const FEWSHOT_MAX  = 1800; // потолок длины примера (самый длинный эталон Дениса — 1720)
 const TITLES_N     = 12;   // заголовков в блоке названий
 
-// Насколько образец близок к тому, что продаём сейчас: доля слов названия товара,
-// встретившихся в образце. Без этого при сотне эталонов жребий на «PS Plus Extra»
-// с равной вероятностью подсовывал пример про EA Play, а собственный отточенный
-// текст именно по Extra модель не видела ни разу.
-function fewShotScore(sample, productName) {
-  const toks = [...new Set(String(productName || '').toLowerCase().match(/[a-zа-яё0-9+]{2,}/g) || [])];
-  if (!toks.length) return 0;
-  const hay = ((sample.title || '') + ' ' + (sample.desc || '')).toLowerCase();
-  let hit = 0;
-  for (const w of toks) if (hay.includes(w)) hit++;
-  return hit / toks.length;
+// Слова для сравнения. Режем до 6 символов — грубая замена морфологии: «геймпад»
+// и «геймпады», «консоль» и «консоли» должны считаться одним словом, иначе
+// совпадение теряется на ровном месте.
+function fewShotTokens(s) {
+  return (String(s || '').toLowerCase().match(/[a-zа-яё0-9]{3,}/g) || []).map(w => w.slice(0, 6));
+}
+
+// Вес слова — по его редкости в СОБСТВЕННОМ корпусе эталонов. «ps5» и «пс4» стоят
+// почти в каждом объявлении Дениса и потому не отличают одно от другого, а «pro»,
+// «слим», «станция», «роутер» отличают. Без весов на «PS5 Pro» побеждал эталон про
+// диск с игрой (совпало «ps5»), а четыре объявления про приставки с комплектом —
+// Xbox Series X/S и две про Пс4 — получали ноль, хотя это ровно тот же тип
+// объявления. Ничего вести руками не нужно: веса пересчитываются по корпусу и
+// сами подстраиваются, когда эталонов становится больше.
+function fewShotIdf(list) {
+  const df = new Map();
+  for (const s of list) {
+    for (const w of new Set(fewShotTokens((s.title || '') + ' ' + (s.desc || '')))) {
+      df.set(w, (df.get(w) || 0) + 1);
+    }
+  }
+  const n = list.length || 1;
+  // +0.05 — чтобы совсем всеобщее слово весило мало, но не ноль: иначе запрос из
+  // одних частых слов дал бы деление на ноль и «все одинаково близкие».
+  return w => Math.log((n + 1) / ((df.get(w) || 0) + 1)) + 0.05;
+}
+
+// Запрос для сравнения — не только название товара. «PS5 Pro» это два слова, и
+// сигнала в них мало; а в форме уже заполнены состояние и комплектация
+// («приставка, два геймпада, коробка»), по которым консоль и находит консоль,
+// даже если платформа другая. Цены, сроки и тумблеры не берём: они про сделку,
+// а не про то, что за предмет продаётся.
+const FEWSHOT_Q_FIELD = 200, FEWSHOT_Q_MAX = 600;
+function fewShotQuery(f) {
+  const parts = [];
+  for (const fd of catDef(f.category).fields) {
+    if (!['text', 'area', 'select', 'chips'].includes(fd.type)) continue;
+    const v = fieldVal(f, fd);
+    const s = (Array.isArray(v) ? v.join(' ') : String(v ?? '')).trim();
+    if (s) parts.push(s.slice(0, FEWSHOT_Q_FIELD));
+  }
+  return parts.join(' ').slice(0, FEWSHOT_Q_MAX);
+}
+
+// Доля веса слов запроса, нашедшихся в образце.
+function fewShotScore(sample, qTokens, idf) {
+  if (!qTokens.length) return 0;
+  const hay = new Set(fewShotTokens((sample.title || '') + ' ' + (sample.desc || '')));
+  let hit = 0, total = 0;
+  for (const w of qTokens) { const wt = idf(w); total += wt; if (hay.has(w)) hit += wt; }
+  return total ? hit / total : 0;
 }
 
 // Отбор гибридный: один самый близкий к товару + остальные жребием. Чистая
 // близость выдавала бы по частому товару вечно одни и те же два эталона, модель
 // начала бы их пересказывать — и мы получили бы повтор СВОЕГО текста, то есть
 // ровно тот дубль, за который Авито снимает объявления.
-function fewShotPicks(list, productName, n) {
+function fewShotPicks(list, query, n, idf) {
   const rest = [...list];
   const picks = [];
-  let bestIdx = -1, best = 0;
-  rest.forEach((s, i) => { const sc = fewShotScore(s, productName); if (sc > best) { best = sc; bestIdx = i; } });
-  if (bestIdx >= 0) picks.push(rest.splice(bestIdx, 1)[0]);
+  const qTokens = [...new Set(fewShotTokens(query))];
+  // Ближайший по смыслу среди отобранных фильтром (или среди всех, если фильтр
+  // ничего не оставил): вынесено в функцию, потому что нужно дважды — сперва для
+  // финала, потом для обычного образца.
+  // anyway=true — взять лучшего даже при нулевой близости (жребием среди равных).
+  // Для обычных образцов так делать нельзя: при нулевой близости «лучшим» всегда
+  // оказывался бы первый по порядку, и выборка перестала бы меняться.
+  const takeBest = (pred, anyway) => {
+    const idx = [];
+    let best = 0;
+    rest.forEach((s, i) => {
+      if (pred && !pred(s)) return;
+      const sc = fewShotScore(s, qTokens, idf);
+      if (sc > best) { best = sc; idx.length = 0; idx.push(i); }
+      else if (anyway && sc === best) idx.push(i);
+    });
+    if (!idx.length) return;
+    const pick = idx.length > 1 ? idx[Math.floor(Math.random() * idx.length)] : idx[0];
+    picks.push(rest.splice(pick, 1)[0]);
+  };
+  // Финал с Авито — текст, доведённый рукой человека; если он есть, слот под него
+  // резервируется всегда, иначе сильнейший образец голоса тонул бы в жребии.
+  takeBest(s => s.final, true);
+  takeBest(null, false);
   rest.sort(() => Math.random() - .5);
   while (picks.length < n && rest.length) picks.push(rest.shift());
   return picks;
+}
+
+// Слот голоса: объявление из ДРУГОЙ категории. Голос — свойство человека, а не
+// категории: то, как Денис пишет про Xbox Series X, узнаётся и в объявлении о
+// подписке. Раньше примеры из другой категории подмешивались только когда своих
+// не было совсем — то есть при 68 эталонах по подпискам голос из физтовара не
+// попадал в промпт никогда. Жребием, а не по близости: задача слота — характер,
+// а не совпадение товара.
+function voicePick(all, category, taken) {
+  const used = new Set(taken.map(x => (x.title || '') + '|' + (x.desc || '')));
+  const other = all.filter(x => x.cat && x.cat !== category && !used.has((x.title || '') + '|' + (x.desc || '')));
+  return other.length ? other[Math.floor(Math.random() * other.length)] : null;
 }
 
 // Чужие удачные объявления (👀) не идут в промпт текстом: у них своя
@@ -1957,21 +2043,28 @@ function refTricksBlock(category) {
 // одна из осей вариации, схлопывать её в строку значит прятать её от модели.
 function fewShotBlock(f) {
   const category = f.category;
-  const { list, own } = fewShotSamples(category);
+  const { list, own, all } = fewShotSamples(category);
   if (!list.length) return '';
-  // 'Товар' — это заглушка currentProductName, когда название не заполнено. Пускать
-  // её в скоринг нельзя: слово «товар» встречается в текстах и дало бы ложную близость.
-  const product = currentProductName(f);
-  const picks = fewShotPicks(list, product === 'Товар' ? '' : product, FEWSHOT_N);
-  const lines = picks.map((v, i) => {
+  const idf = fewShotIdf(all);
+  const picks = fewShotPicks(list, fewShotQuery(f), FEWSHOT_N, idf);
+  const render = (v, i) => {
     const d = v.desc.length > FEWSHOT_MAX
       ? v.desc.slice(0, FEWSHOT_MAX).trim() + '\n[…конец объявления обрезан по длине…]'
       : v.desc;
-    return `${v.title ? `Пример ${i + 1} — «${v.title}»:` : `Пример ${i + 1}:`}\n${d}`;
-  }).join('\n\n');
-  return own
+    // Финал помечаем прямо в подписи: это не «одобренный вариант», а текст, который
+    // человек довёл своей рукой перед публикацией — самый точный слепок голоса
+    const mark = v.final ? ' (ФИНАЛЬНЫЙ текст — так продавец дошлифовал его перед публикацией, это эталон голоса)' : '';
+    return `${v.title ? `Пример ${i} — «${v.title}»${mark}:` : `Пример ${i}${mark}:`}\n${d}`;
+  };
+  const lines = picks.map((v, i) => render(v, i + 1)).join('\n\n');
+  const head = own
     ? `\n\nПримеры твоих же удачных объявлений этой категории (ориентируйся на характер, ритм и структуру, НЕ копируй дословно — повтор собственного текста Авито считает дублем):\n${lines}`
     : `\n\nПримеры твоих объявлений ИЗ ДРУГОЙ КАТЕГОРИИ товара (своих по этой пока нет). Перенимай ТОЛЬКО тон, ритм и структуру. НЕ переноси оттуда формулировки и правила: у каждой категории они свои.\n${lines}`;
+  // Слот голоса нужен только когда основные примеры уже свои: в ветке перетока
+  // они и так из другой категории, второй такой же блок был бы дублем.
+  const voice = own ? voicePick(all, category, picks) : null;
+  if (!voice) return head;
+  return `${head}\n\nЭто тоже ты, но ДРУГОЙ товар — перенимай голос и манеру, а факты, комплектацию и правила оттуда НЕ переноси:\n${render(voice, picks.length + 1)}`;
 }
 
 // Заголовки — отдельная задача: 50 знаков, свой ритм, свои сокращения. На ней
@@ -6652,7 +6745,8 @@ function refsCardHTML() {
   const rf = state.refForm;
   const listHTML = refs.length ? `<div style="display:flex;flex-direction:column;gap:7px;margin-top:12px">
     ${[...refs].sort((a, b) => b.id - a.id).map(r => `<div class="preset-item">
-      <span style="flex-shrink:0;font-size:11px;color:${r.source === 'mine' ? 'var(--teal-h)' : 'var(--accent-h)'}">${r.source === 'mine' ? '✍ моё' : '👀 чужое'}</span>
+      <button class="btn-icon" data-act="ref-voice" data-id="${r.id}" style="flex-shrink:0;font-size:11px;color:${r.source === 'mine' ? 'var(--teal-h)' : 'var(--accent-h)'}"
+        title="${r.source === 'mine' ? 'Голос мой — текст идёт в примеры генерации. Нажми, если голос на самом деле не твой' : 'Голос не мой — текст в примеры НЕ идёт, берутся только приёмы. Нажми, если голос всё-таки твой'}">${r.source === 'mine' ? '✍ мой голос' : '👀 не мой'}</button>
       <span class="preset-item-name" title="${esc((r.title || '') + '\n\n' + (r.desc || ''))}" style="cursor:help">${esc(r.title || (r.desc || '').slice(0, 60))}</span>
       <span class="preset-item-meta">${esc(r.date || '')}</span>
       ${r.source === 'other' && Array.isArray(r.tricks) && r.tricks.length
@@ -6665,9 +6759,9 @@ function refsCardHTML() {
   return `<div class="card" style="margin-top:16px">
     <div class="card-title">📥 Эталоны — объявления без инструмента и чужие удачные <span class="sec-badge">${refs.length}</span></div>
     <div style="font-size:12px;color:var(--muted);margin-bottom:12px">
-      Скидывай сюда объявления, которые составил сам без генератора, или чужие, которые понравились.
-      <b style="color:var(--teal-h)">✍ Свои</b> идут в генерацию как образец твоего языка. <b style="color:var(--accent-h)">👀 Чужие</b> — не текстом:
-      кнопка ниже вытаскивает из них приёмы (ходы, структуру), и в промпт уходят только они, без чужих формулировок и фактов.
+      Делим не по авторству, а по ГОЛОСУ. <b style="color:var(--teal-h)">✍ Мой голос</b> — текст идёт в генерацию как образец того, как пишешь ты.
+      <b style="color:var(--accent-h)">👀 Не мой</b> — объявление рабочее, но написано не твоим голосом (например, нейросетью): текст в промпт не идёт,
+      кнопка ниже вытаскивает из него только приёмы — ходы и структуру, без формулировок и фактов. Метку на любой строке можно переключить нажатием.
     </div>
     ${refs.some(r => r.source === 'other') ? `<div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:12px">
       <button class="btn-add" data-act="ref-tricks" ${state._refTricksLoading || !pending ? 'disabled' : ''}>
@@ -6684,8 +6778,8 @@ function refsCardHTML() {
         <div class="field" style="min-width:170px">
           <label>Источник</label>
           <select id="ref-source">
-            <option value="mine"${rf.source === 'mine' ? ' selected' : ''}>✍ Моё, написано руками</option>
-            <option value="other"${rf.source === 'other' ? ' selected' : ''}>👀 Чужое, понравилось</option>
+            <option value="mine"${rf.source === 'mine' ? ' selected' : ''}>✍ Мой голос — в примеры</option>
+            <option value="other"${rf.source === 'other' ? ' selected' : ''}>👀 Не мой голос — только приёмы</option>
           </select>
         </div>
         <div class="field" style="min-width:170px">
@@ -7974,6 +8068,9 @@ document.addEventListener('click', e => {
           title: item.variant?.title || '', description: item.variant?.description || '',
           status: 'active', note: '', date: new Date().toLocaleDateString('ru'),
           _chain: item.variant?._chain || null,
+          // Категория нужна финальному тексту: он идёт в примеры генерации, а правила
+          // и факты у категорий разные — без неё финал некуда положить
+          _category: item.variant?._category || null,
         });
         save();
         // Журнал: в сессии постинга диалог финала не показываем (не рвём конвейерный темп) —
@@ -8320,6 +8417,7 @@ document.addEventListener('click', e => {
         title: v.title || '', description: v.description || '',
         status: 'active', note: '', date: new Date().toLocaleDateString('ru'),
         _chain: v._chain || null, // журнал: чтобы «донос финала» лёг в ту же цепочку
+        _category: v._category || state.form.category || null, // финал пойдёт в примеры — нужна его категория
       });
       save();
       jlog('posted', v._chain || null, {
@@ -8359,6 +8457,7 @@ document.addEventListener('click', e => {
         title: item.variant.title || '', description: item.variant.description || '',
         status: 'active', note: '', date: new Date().toLocaleDateString('ru'),
         _chain: item.variant._chain || null,
+        _category: item.variant._category || null,
       });
       save();
       jlog('posted', item.variant._chain || null, {
@@ -8376,6 +8475,18 @@ document.addEventListener('click', e => {
     case 'ref-tricks': doRefTricks(); break;
 
     case 'ref-preview': showLearnedPreview(); break;
+
+    // Переразметка голоса. Деление «моё/чужое» оказалось не тем признаком: часть
+    // объявлений написана не человеком, но принята им, а часть «чужих» — это его же
+    // объявления, просто чужим голосом. В примеры должен идти только его голос.
+    case 'ref-voice': {
+      const ref = (state.refs || []).find(r => r.id === +el.dataset.id);
+      if (!ref) break;
+      ref.source = ref.source === 'mine' ? 'other' : 'mine';
+      save(); renderDb();
+      toast(ref.source === 'mine' ? 'Голос мой — текст пойдёт в примеры' : 'Голос не мой — текст в примеры не идёт');
+      break;
+    }
 
     case 'ref-add': {
       // Значения берём из state.refForm (DOM может быть уже перерисован), но живое поле
