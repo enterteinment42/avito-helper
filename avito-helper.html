@@ -1345,7 +1345,16 @@ function syncSetMeta(patch) {
 // устройстве плодило бы на остальных вторую копию того же объявления.
 const syncRefKey = r => ['ref', r.category || '', (r.title || '').trim(), (r.desc || '').trim()].join('|');
 const syncFavKey = f => ['fav', (f.title || '').trim(), (f.description || '').trim()].join('|');
-const syncDbKey  = r => ['db', r.product || '', r.region || '', (r.title || '').trim(), r.date || ''].join('|');
+// У записи Истории ключ по содержимому ломался на правке: ✎ меняет товар или
+// регион — меняется и ключ, то есть личность записи, и прежняя версия возвращалась
+// с сервера ОТДЕЛЬНОЙ строкой. Поэтому новые записи несут неизменный _uid, а
+// старые (заведённые до этой правки) продолжают дедуплицироваться по содержимому.
+const syncDbKey  = r => r && r._uid
+  ? 'db#' + r._uid
+  : ['db', r?.product || '', r?.region || '', (r?.title || '').trim(), r?.date || ''].join('|');
+// Личность записи, не зависящая от её полей. Случайный хвост — потому что две
+// записи, созданные в одну миллисекунду на двух устройствах, получили бы один id.
+function newUid() { return Date.now().toString(36) + Math.random().toString(36).slice(2, 8); }
 // Момент создания записи — по нему решается, что новее: удаление или повторное
 // добавление той же записи.
 const syncBornAt = x => Number(x && (x._fid || x.id)) || 0;
@@ -7775,6 +7784,13 @@ function showFinalDialog(recId) {
   try {
     const r = state.db.find(x => x.id === recId);
     if (!r || (!r.title && !r.description)) return; // без бот-версии сравнивать не с чем
+    // Повторное открытие («✓ N%» в Истории) — штатный сценарий: подсказка кнопки
+    // сама предлагает обновить финал. Поля предзаполняем УЖЕ СОХРАНЁННЫМ финалом:
+    // пустое поле означает «описание не менял» и раньше затирало донесённый финал
+    // бот-версией — потеря невосполнимого сырья от простого «открыл посмотреть».
+    const hadFinal = !!r.finalDesc;
+    const preTitle = r.finalTitle || r.title || '';
+    const preDesc  = hadFinal ? r.finalDesc : '';
     document.getElementById('final-overlay')?.remove();
     const ov = document.createElement('div');
     ov.id = 'final-overlay';
@@ -7784,15 +7800,16 @@ function showFinalDialog(recId) {
       <div style="font-size:12px;color:var(--muted);margin-bottom:10px">
         ${esc(r.product)} · 📍 ${esc(r.region)}. Если правил текст уже в форме Авито — вставь сюда финальную версию:
         инструмент сравнит с сгенерированной и запомнит, что ты меняешь руками.
+        ${hadFinal ? `<div style="color:var(--ok);margin-top:6px">✓ Финал уже сохранён (изменено ~${Math.round((r.editShare || 0) * 100)}%) — он в полях ниже. Правь или закрывай, текст не потеряется.</div>` : ''}
       </div>
       <div class="form-body">
         <div class="field">
-          <label>Финальное название${r.title ? ' (предзаполнено сгенерированным — поправь, если менял)' : ''}</label>
-          <input type="text" id="final-title" value="${esc(r.title || '')}" style="font-family:var(--fm);font-size:13px">
+          <label>Финальное название${hadFinal ? ' (сохранённый финал)' : (r.title ? ' (предзаполнено сгенерированным — поправь, если менял)' : '')}</label>
+          <input type="text" id="final-title" value="${esc(preTitle)}" style="font-family:var(--fm);font-size:13px">
         </div>
         <div class="field">
-          <label>Финальное описание — вставь как ушло на Авито (Ctrl+V)</label>
-          <textarea id="final-desc" rows="8" placeholder="Пусто = «описание не менял, взять сгенерированное как финал»"></textarea>
+          <label>Финальное описание${hadFinal ? ' (сохранённый финал — правь поверх)' : ' — вставь как ушло на Авито (Ctrl+V)'}</label>
+          <textarea id="final-desc" rows="8" placeholder="${hadFinal ? 'Очистить поле нельзя: пустое = оставить сохранённый финал как есть' : 'Пусто = «описание не менял, взять сгенерированное как финал»'}">${esc(preDesc)}</textarea>
         </div>
         <div style="display:flex;gap:8px">
           <button class="btn-gen" id="final-save" style="flex:1;padding:10px">✓ Сохранить финал</button>
@@ -7806,7 +7823,10 @@ function showFinalDialog(recId) {
     const finalDirty = () => {
       const t = (ov.querySelector('#final-title')?.value || '').trim();
       const d = (ov.querySelector('#final-desc')?.value || '').trim();
-      return !!d || t !== (r.title || '').trim();
+      // Сравниваем с тем, чем поля были ЗАПОЛНЕНЫ, а не с бот-версией: иначе
+      // повторное открытие уже сохранённого финала всегда считалось бы правкой
+      // и спрашивало «закрыть без сохранения?» на каждый просмотр.
+      return t !== preTitle.trim() || d !== preDesc.trim();
     };
     const closeFinal = () => {
       if (finalDirty() && !confirm('Закрыть без сохранения? Вставленный финальный текст не сохранится.')) return;
@@ -7817,7 +7837,18 @@ function showFinalDialog(recId) {
     ov.querySelector('#final-save').addEventListener('click', () => {
       const ft = (ov.querySelector('#final-title')?.value || '').trim();
       const fdRaw = (ov.querySelector('#final-desc')?.value || '').trim();
-      const fd = fdRaw || r.description || ''; // пусто = описание не менялось
+      // Пустое поле НИКОГДА не стирает уже сохранённый финал: для записи с финалом
+      // оно значит «оставить как есть», и только для записи без финала — «описание
+      // не менял, годится сгенерированное».
+      const fd = fdRaw || r.finalDesc || r.description || '';
+      // Открыл посмотреть и нажал «Сохранить» — ничего не изменилось. Второе
+      // событие edited с тем же текстом задвоило бы пару «бот → правка» при
+      // разборе и потянуло бы медиану editShare, поэтому просто закрываем.
+      if (hadFinal && fd === r.finalDesc && ft === (r.finalTitle || '')) {
+        ov.remove();
+        toast('Финал не изменился');
+        return;
+      }
       r.finalTitle = ft; r.finalDesc = fd;
       r.editShare = jEditShare(r.description || '', fd);
       save();
@@ -7825,7 +7856,10 @@ function showFinalDialog(recId) {
         product: r.product, region: r.region,
         botTitle: r.title || '', finalTitle: ft, titleChanged: ft !== (r.title || ''),
         botDescription: r.description || '', finalDescription: fd,
-        editShare: r.editShare, descPasted: !!fdRaw,
+        // Финал считается донесённым руками и когда поле предзаполнено прежним
+        // финалом: правило разбора «editShare только по descPasted» иначе выкинуло
+        // бы честную правку как структурный ноль.
+        editShare: r.editShare, descPasted: !!fdRaw || hadFinal,
       });
       ov.remove();
       toast(r.editShare != null ? `Финал сохранён — изменено ~${Math.round(r.editShare * 100)}% описания` : 'Финал сохранён');
@@ -8729,7 +8763,7 @@ document.addEventListener('click', e => {
       const item = si.items[si.idx];
       if (item) {
         state.db.push({
-          id: Date.now(), product: item.product, region: item.region,
+          id: Date.now(), _uid: newUid(), product: item.product, region: item.region,
           title: item.variant?.title || '', description: item.variant?.description || '',
           status: 'active', note: '', date: new Date().toLocaleDateString('ru'),
           _chain: item.variant?._chain || null,
@@ -8958,7 +8992,7 @@ document.addEventListener('click', e => {
     case 'db-add': {
       const f = state.dbForm;
       if (!f.product.trim() || !f.region.trim()) { toast('Укажите товар и регион'); break; }
-      state.db.push({ id: Date.now(), product: f.product.trim(), region: f.region.trim(), status: f.status || 'active', note: f.note.trim() });
+      state.db.push({ id: Date.now(), _uid: newUid(), product: f.product.trim(), region: f.region.trim(), status: f.status || 'active', note: f.note.trim() });
       state.dbForm = { product: f.product.trim(), region: f.region.trim(), status: 'active', note: '' };
       save(); renderDb(); break;
     }
@@ -8974,7 +9008,18 @@ document.addEventListener('click', e => {
       const f2 = state.dbForm;
       if (!f2.product.trim() || !f2.region.trim()) { toast('Укажите товар и регион'); break; }
       const idx = state.db.findIndex(r => r.id === state.dbEditId);
-      if (idx !== -1) state.db[idx] = { ...state.db[idx], product: f2.product.trim(), region: f2.region.trim(), status: f2.status, note: f2.note.trim() };
+      if (idx !== -1) {
+        const rec = state.db[idx];
+        // Запись, заведённая до появления _uid, опознаётся по содержимому — правка
+        // товара или региона меняет её ключ, и прежняя версия вернулась бы с
+        // сервера отдельной строкой. Гасим старую личность меткой удаления (в
+        // корзину не кладём: это правка, а не удаление) и выдаём постоянный _uid.
+        if (!rec._uid) {
+          syncTomb(syncDbKey(rec));
+          rec._uid = newUid();
+        }
+        state.db[idx] = { ...rec, product: f2.product.trim(), region: f2.region.trim(), status: f2.status, note: f2.note.trim() };
+      }
       state.dbEditId = null;
       save(); renderDb(); break;
     }
@@ -9078,11 +9123,21 @@ document.addEventListener('click', e => {
       const fid = el.dataset.fid ? +el.dataset.fid : null;
       const v = fid ? state.favorites.find(f => f._fid === fid) : findResult(vid);
       if (!v) break;
+      // Кнопка «✓ Размещено» есть у карточки, у конвейера и у избранного, замка от
+      // повторного нажатия нет — каждое создаёт НОВУЮ запись Истории. Две записи об
+      // одной публикации потом сбивают с толку: финал доносится в одну, вторая
+      // остаётся пустой. Переспрашиваем, а не запрещаем: одно объявление в разных
+      // регионах — нормальный рабочий сценарий.
+      const already = state.db.filter(r => (r.title || '') === (v.title || '') && (r.title || ''));
+      if (already.length && !confirm(
+        `Это объявление уже отмечено размещённым (${already.length}): ${already.map(r => r.region).join(', ')}.\n\nДобавить ещё одну публикацию?`
+      )) break;
       const region = prompt('Регион размещения?', (state.settings.regions || REGIONS)[0] || 'Москва');
       if (!region || !region.trim()) break;
       const recId = Date.now();
       state.db.push({
-        id: recId, product: v._product || currentProductName(state.form), region: region.trim(),  // F4: товар из варианта
+        id: recId, _uid: newUid(),
+        product: v._product || currentProductName(state.form), region: region.trim(),  // F4: товар из варианта
         title: v.title || '', description: v.description || '',
         status: 'active', note: '', date: new Date().toLocaleDateString('ru'),
         _chain: v._chain || null, // журнал: чтобы «донос финала» лёг в ту же цепочку
