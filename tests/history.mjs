@@ -201,6 +201,106 @@ export async function runHistory(browser, base, t) {
     await ctx.close();
   }
 
+  // ── descPasted: только реально отличающийся финал ───────
+  // tools/journal-report.mjs фильтрует выборку editShare по descPasted === true,
+  // чтобы в медиану не попали нули, возникшие ПО ПОСТРОЕНИЮ (финал равен
+  // бот-версии). Предзаполненное поле легко вернуло бы эту ловушку.
+  {
+    const { ctx, page, consoleErrors } = await openApp(browser, base + '/avito-helper.html');
+    const r = await page.evaluate(async ([bot, mine]) => {
+      const out = {};
+      window.__jlog = [];
+      const origJ = window.jlog;
+      window.jlog = (ev, chain, data) => { window.__jlog.push({ ev, data }); return origJ ? origJ(ev, chain, data) : undefined; };
+      state.db = [{ id: 1, _uid: 'u1', product: 'Doom', region: 'Москва', title: 'Бот-заголовок',
+        description: bot, status: 'active', note: '', date: '12.09.2026' }];
+
+      // Донесли «не менял описание» — финал равен бот-версии
+      showFinalDialog(1);
+      document.getElementById('final-save').click();
+      out.first = window.__jlog.find(x => x.ev === 'edited')?.data;
+
+      // Вернулись поправить ТОЛЬКО заголовок: описание в поле — бот-версия
+      window.__jlog = [];
+      showFinalDialog(1);
+      document.getElementById('final-title').value = 'Правленый заголовок';
+      document.getElementById('final-save').click();
+      out.titleOnly = window.__jlog.find(x => x.ev === 'edited')?.data;
+
+      // А теперь вставили настоящий финал
+      window.__jlog = [];
+      showFinalDialog(1);
+      document.getElementById('final-desc').value = mine;
+      document.getElementById('final-save').click();
+      out.real = window.__jlog.find(x => x.ev === 'edited')?.data;
+
+      window.jlog = origJ;
+      return out;
+    }, [BOT, MINE]);
+
+    t.ok('финал равный бот-версии НЕ считается донесённым руками', r.first?.descPasted === false,
+      JSON.stringify(r.first));
+    t.eq('и доля правок у него нулевая', r.first?.editShare, 0);
+    t.ok('правка одного заголовка тоже не тащит ноль в выборку editShare',
+      r.titleOnly?.descPasted === false, JSON.stringify(r.titleOnly));
+    t.ok('но сама правка заголовка записана', r.titleOnly?.titleChanged === true);
+    t.ok('настоящий финал помечен донесённым', r.real?.descPasted === true);
+    t.ok('и доля правок у него значимая', r.real?.editShare > 0.5, 'editShare: ' + r.real?.editShare);
+    t.ok('консоль чистая', consoleErrors.length === 0, consoleErrors.join('\n'));
+    await ctx.close();
+  }
+
+  // ── Четвёртая кнопка «Размещено» — у пакета по регионам ──
+  {
+    const { ctx, page, consoleErrors } = await openApp(browser, base + '/avito-helper.html');
+    const r = await page.evaluate(async () => {
+      const out = {};
+      const click = i => {
+        const b = document.createElement('button');
+        b.dataset.act = 'batch-mark-posted'; b.dataset.i = String(i);
+        document.body.appendChild(b); b.click(); b.remove();
+      };
+      state.db = [];
+      state.batchResults = [
+        { region: 'Москва', variant: { id: 1, title: 'Один заголовок', description: 'текст', _product: 'Doom', _category: 'game' } },
+        { region: 'Киров',  variant: { id: 2, title: 'Один заголовок', description: 'текст', _product: 'Doom', _category: 'game' } },
+      ];
+      let asked = 0;
+      window.confirm = () => { asked++; return true; };
+      click(0);
+      out.firstAsked = asked;
+      out.afterFirst = state.db.length;
+      out.uid = !!state.db[0]?._uid;
+      document.getElementById('final-overlay')?.remove();
+
+      // Тот же заголовок во второй регион — переспрос, отказ ничего не создаёт
+      asked = 0;
+      window.confirm = () => { asked++; return false; };
+      click(1);
+      out.secondAsked = asked;
+      out.afterRefuse = state.db.length;
+
+      window.confirm = () => true;
+      click(1);
+      out.afterAgree = state.db.length;
+      document.getElementById('final-overlay')?.remove();
+      out.uids = new Set(state.db.map(x => x._uid).filter(Boolean)).size;
+      out.keys = new Set(state.db.map(x => syncDbKey(x))).size;
+      return out;
+    });
+
+    t.eq('первая отметка из пакета вопросов не задаёт', r.firstAsked, 0);
+    t.eq('запись создана', r.afterFirst, 1);
+    t.ok('и несёт постоянный _uid', r.uid);
+    t.eq('повторный тот же заголовок переспрашивает', r.secondAsked, 1);
+    t.eq('отказ записи не создаёт', r.afterRefuse, 1);
+    t.eq('согласие создаёт вторую', r.afterAgree, 2);
+    t.eq('у обеих своя личность', r.uids, 2);
+    t.eq('и ключи синхронизации разные — на другом устройстве не схлопнутся', r.keys, 2);
+    t.ok('консоль чистая', consoleErrors.length === 0, consoleErrors.join('\n'));
+    await ctx.close();
+  }
+
   // ── Повторное «✓ Размещено» ─────────────────────────────
   {
     const { ctx, page, consoleErrors } = await openApp(browser, base + '/avito-helper.html');

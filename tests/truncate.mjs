@@ -411,9 +411,59 @@ export async function runTruncate(browser, base, t) {
     t.eq('↻×5: из оборванного ответа взяты дописанные названия', alt.n, 3);
     t.ok('и длины у них посчитаны', alt.lens.every(l => l > 0));
 
+    // ── Находки второго круга ревью ─────────────────────────
+    // Спасённый набор описаний может целиком не сопоставиться с выбранными
+    // названиями (модель не проставила id). Дальше по коду шаг заголовков
+    // обнуляется — продавец терял бы и генерацию, и выбранные названия.
+    const nomap = await page.evaluate(async () => {
+      // Первый вариант БЕЗ id, второй испорчен кавычкой → строгий разбор падает,
+      // спасается только первый, сопоставить его с названием нечем
+      window.callAI = async () => '{"variants":[' +
+        '{"title":"a","description":"описание один"},' +
+        '{"title":"b","description":"тут "кавычка" ломает"}]}';
+      state.form = JSON.parse(JSON.stringify({ ...DEF_FORM, category: 'game', gameName: 'Doom', gamePlatforms: ['PS5'] }));
+      state.results = [{ id: 99, title: 'старое', description: 'старое' }];
+      state.error = null;
+      state.titleStep = {
+        titles: [{ id: 1, title: 'З1', hook: 'a', len: 2 }, { id: 2, title: 'З2', hook: 'b', len: 2 }],
+        selected: { 1: true, 2: true }, form: JSON.parse(JSON.stringify(state.form)), _chain: 'test',
+      };
+      await doGenDescriptionsForTitles();
+      return {
+        err: state.error,
+        stepAlive: !!state.titleStep,
+        titles: state.titleStep?.titles.length || 0,
+        selected: Object.keys(state.titleStep?.selected || {}).length,
+        results: state.results.length,
+      };
+    });
+    t.ok('несопоставимый набор — это ошибка, а не пустой результат', /сопоставить/i.test(nomap.err || ''), 'ошибка: ' + nomap.err);
+    t.ok('шаг заголовков НЕ обнулён — повторить можно той же кнопкой', nomap.stepAlive);
+    t.eq('выбранные названия целы', nomap.titles, 2);
+    t.eq('и отметки выбора целы', nomap.selected, 2);
+    t.eq('прежний набор результатов не затёрт пустотой', nomap.results, 1);
+
+    // Полный список названий + обрыв на посторонней прозе после JSON — тост
+    // «пришло 8 из 8» был бы ложной тревогой.
+    const fullT = await page.evaluate(async p => {
+      window.__toasts = [];
+      const origToast = window.toast;
+      window.toast = m => { window.__toasts.push(String(m)); };
+      window.callAI = async (messages, opts = {}) => { opts.onTruncated?.('max_tokens'); return p.full; };
+      state.form = JSON.parse(JSON.stringify({ ...DEF_FORM, category: 'game', gameName: 'Doom', gamePlatforms: ['PS5'], count: 3 }));
+      state.titleStep = null;
+      await doGenTitlesOnly();
+      const r = { n: state.titleStep?.titles.length || 0, toasts: window.__toasts.slice() };
+      window.toast = origToast;
+      return r;
+    }, tPayload);
+    t.eq('все названия разобраны', fullT.n, 8);
+    t.ok('и про обрыв молчим — пришло столько, сколько просили',
+      !fullT.toasts.some(m => /оборвал/i.test(m)), 'тосты: ' + JSON.stringify(fullT.toasts));
+
     // Пустой ответ выше спровоцирован нарочно, и приложение штатно пишет его
     // в консоль — ждём отсутствия всего ОСТАЛЬНОГО.
-    const unexpected = consoleErrors.filter(m => !/оборвал/i.test(m));
+    const unexpected = consoleErrors.filter(m => !/оборвал|сопоставить/i.test(m));
     t.ok('в консоли нет ничего, кроме нарочно спровоцированной ошибки',
       unexpected.length === 0, unexpected.join('\n'));
   } finally {

@@ -2919,7 +2919,10 @@ async function doGenTitlesOnly() {
         ? 'Ответ модели оборвался — ни одного названия разобрать не удалось. Повторите попытку.'
         : 'AI не вернул названия');
     }
-    if (truncated) toast(`⚠️ Ответ оборвался — названий пришло ${titles.length} из ${n}.`);
+    // Только когда названий реально меньше заказанного: модель могла закрыть JSON
+    // и упереться в лимит уже на посторонней прозе (при веб-поиске это штатно —
+    // F3), и тогда «пришло 12 из 12» было бы ложной тревогой.
+    if (truncated && titles.length < n) toast(`⚠️ Ответ оборвался — названий пришло ${titles.length} из ${n}.`);
     state.titleStep = { titles, selected: {}, form: JSON.parse(JSON.stringify(state.form)), _chain: jChain };
     jlog('generated', jChain, {
       path: 'titles', category: state.form.category, product: currentProductName(state.form),
@@ -2984,6 +2987,12 @@ ${list}
       results.push({ ...v, title: chosen[pos].title, title_length: chosen[pos].len });
     });
     const n = results.length;
+    // Спасённый набор мог целиком не сопоставиться с выбранными названиями (модель
+    // не проставила id или пронумеровала с нуля). Раньше пустым результат быть не
+    // мог, а теперь может — и дальше идёт `state.titleStep = null`, то есть
+    // продавец терял и оплаченную генерацию, и сам список выбранных названий.
+    // Ошибка оставляет шаг заголовков на месте, повторить можно той же кнопкой.
+    if (!n) throw new Error('Ответ модели не удалось сопоставить с выбранными названиями. Повторите генерацию описаний.');
     if (n < chosen.length) {
       toast(`⚠️ AI описал ${n} из ${chosen.length} названий. Остальные повторите отдельно.`);
     }
@@ -7856,10 +7865,12 @@ function showFinalDialog(recId) {
         product: r.product, region: r.region,
         botTitle: r.title || '', finalTitle: ft, titleChanged: ft !== (r.title || ''),
         botDescription: r.description || '', finalDescription: fd,
-        // Финал считается донесённым руками и когда поле предзаполнено прежним
-        // финалом: правило разбора «editShare только по descPasted» иначе выкинуло
-        // бы честную правку как структурный ноль.
-        editShare: r.editShare, descPasted: !!fdRaw || hadFinal,
+        // descPasted отвечает на один вопрос разбора: финал ОТЛИЧАЕТСЯ от
+        // сгенерированного? Считать по «поле было непустым» больше нельзя — поле
+        // теперь предзаполняется, и правка одного заголовка притащила бы в выборку
+        // editShare структурный ноль (финал равен бот-версии), ради исключения
+        // которого фильтр `descPasted === true` в анализаторе и заведён.
+        editShare: r.editShare, descPasted: fd.trim() !== (r.description || '').trim(),
       });
       ov.remove();
       toast(r.editShare != null ? `Финал сохранён — изменено ~${Math.round(r.editShare * 100)}% описания` : 'Финал сохранён');
@@ -9179,9 +9190,18 @@ document.addEventListener('click', e => {
       const i = +el.dataset.i;
       const item = state.batchResults[i];
       if (!item?.variant) break;
+      // Четвёртая кнопка «Размещено» — у пакета по регионам. Ей нужны те же два
+      // предохранителя, что остальным: переспрос от случайного повторного нажатия
+      // и постоянный _uid (без него две записи с одинаковым товаром/регионом/
+      // названием/датой схлопнулись бы в одну на другом устройстве при слиянии).
+      const dupB = state.db.filter(r => (r.title || '') === (item.variant.title || '') && (r.title || ''));
+      if (dupB.length && !confirm(
+        `Это объявление уже отмечено размещённым (${dupB.length}): ${dupB.map(r => r.region).join(', ')}.\n\nДобавить ещё одну публикацию?`
+      )) break;
       const recId = Date.now();
       state.db.push({
-        id: recId, product: item.variant._product || currentProductName(state.form), region: item.region,  // F4: товар из варианта
+        id: recId, _uid: newUid(),
+        product: item.variant._product || currentProductName(state.form), region: item.region,  // F4: товар из варианта
         title: item.variant.title || '', description: item.variant.description || '',
         status: 'active', note: '', date: new Date().toLocaleDateString('ru'),
         _chain: item.variant._chain || null,
