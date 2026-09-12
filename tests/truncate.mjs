@@ -330,7 +330,92 @@ export async function runTruncate(browser, base, t) {
         'получено: ' + JSON.stringify(paths));
     }
 
-    t.ok('консоль чистая', consoleErrors.length === 0, consoleErrors.join('\n'));
+    // ── Шаг «сначала заголовки» ─────────────────────────────
+    // Второй живой обрыв 12.09: «Unexpected end of JSON input» в doGenTitlesOnly.
+    // У этого пути свой разбор и был свой фиксированный лимит 1400 на 8-12 названий.
+    const TITLES = { titles: [1, 2, 3, 4, 5, 6, 7, 8].map(i => ({ title: `Название ${i}`, hook: `крючок ${i}` })) };
+    const tPretty = JSON.stringify(TITLES, null, 2);
+    const tPayload = {
+      full: tPretty,
+      cut: tPretty.slice(0, tPretty.indexOf('"Название 4"') + 6), // обрыв посреди четвёртого
+      empty: '',                                                   // модель вернула вообще ничего
+    };
+
+    const tt = await page.evaluate(() => ({
+      eight: titleTokens(8, false), twelve: titleTokens(12, false),
+      web: titleTokens(8, true), def: titleTokens(undefined, false),
+    }));
+    t.eq('бюджет на 8 названий больше прежних фиксированных 1400', tt.eight, 2360);
+    t.eq('на 12 названий', tt.twelve, 3240);
+    t.ok('веб-поиск получает надбавку на tool-use блоки', tt.web === tt.eight + 1200);
+    t.eq('без аргумента считает как за 8', tt.def, 2360);
+
+    const pt = await page.evaluate(p => ({
+      full: parseTitles(p.full).length,
+      cut: parseTitles(p.cut).map(t => t.title),
+      empty: parseTitles(p.empty).length,
+      junk: parseTitles('не json вовсе').length,
+      hooks: parseTitles(p.cut).every(t => !!t.hook),
+    }), tPayload);
+    t.eq('целый список названий разобран', pt.full, 8);
+    t.eq('из оборванного взяты дописанные', JSON.stringify(pt.cut), '["Название 1","Название 2","Название 3"]');
+    t.ok('крючки при этом не потеряны', pt.hooks);
+    t.eq('пустой ответ — пустой список, без исключения', pt.empty, 0);
+    t.eq('мусор — тоже пустой список', pt.junk, 0);
+
+    const tflow = await page.evaluate(async p => {
+      const run = async reply => {
+        window.__toasts = []; window.__jlog = [];
+        const origToast = window.toast, origJ = window.jlog;
+        window.toast = m => { window.__toasts.push(String(m)); };
+        window.jlog = (ev, chain, data) => { window.__jlog.push({ ev, data }); return origJ ? origJ(ev, chain, data) : undefined; };
+        window.callAI = async (messages, opts = {}) => { opts.onTruncated?.('max_tokens'); return reply; };
+        state.form = JSON.parse(JSON.stringify({ ...DEF_FORM, category: 'game', gameName: 'Doom', gamePlatforms: ['PS5'], count: 3 }));
+        state.titleStep = null; state.error = null;
+        await doGenTitlesOnly();
+        const r = {
+          n: state.titleStep?.titles.length || 0,
+          ids: state.titleStep?.titles.map(t => t.id) || [],
+          lens: state.titleStep?.titles.map(t => t.len) || [],
+          err: state.error,
+          toasts: window.__toasts.slice(),
+          logged: window.__jlog.find(x => x.ev === 'generated')?.data || null,
+          maxTokens: null,
+        };
+        window.toast = origToast; window.jlog = origJ;
+        return r;
+      };
+      return { cut: await run(p.cut), empty: await run(p.empty) };
+    }, tPayload);
+
+    t.eq('оборванный шаг заголовков даёт то, что пришло', tflow.cut.n, 3);
+    t.ok('шаг не свалился в ошибку', !tflow.cut.err, 'ошибка: ' + tflow.cut.err);
+    t.eq('нумерация названий подряд', JSON.stringify(tflow.cut.ids), '[1,2,3]');
+    t.ok('длина названий посчитана', tflow.cut.lens.every(l => l > 0));
+    t.ok('продавцу сказали, сколько названий пришло',
+      tflow.cut.toasts.some(m => /3 из 8/.test(m)), 'тосты: ' + JSON.stringify(tflow.cut.toasts));
+    t.ok('обрыв виден в журнале на пути «titles»', tflow.cut.logged?.truncated === true);
+    t.ok('пустой ответ — понятная ошибка, а не про JSON',
+      /оборвал/i.test(tflow.empty.err || '') && !/JSON/i.test(tflow.empty.err || ''),
+      'получено: ' + tflow.empty.err);
+
+    const alt = await page.evaluate(async p => {
+      window.callAI = async (messages, opts = {}) => { opts.onTruncated?.('max_tokens'); return window.__reply; };
+      window.__reply = p.full.replace(/"titles"/, '"variants"'); // для основного набора
+      state.form = JSON.parse(JSON.stringify({ ...DEF_FORM, category: 'game', gameName: 'Doom', gamePlatforms: ['PS5'] }));
+      state.results = [{ id: 1, title: 'т', description: 'д', _category: 'game' }];
+      window.__reply = p.cut;
+      await doGenAltTitles(1);
+      return { n: (state.altTitles[1] || []).length, lens: (state.altTitles[1] || []).map(t => t.len) };
+    }, tPayload);
+    t.eq('↻×5: из оборванного ответа взяты дописанные названия', alt.n, 3);
+    t.ok('и длины у них посчитаны', alt.lens.every(l => l > 0));
+
+    // Пустой ответ выше спровоцирован нарочно, и приложение штатно пишет его
+    // в консоль — ждём отсутствия всего ОСТАЛЬНОГО.
+    const unexpected = consoleErrors.filter(m => !/оборвал/i.test(m));
+    t.ok('в консоли нет ничего, кроме нарочно спровоцированной ошибки',
+      unexpected.length === 0, unexpected.join('\n'));
   } finally {
     await ctx.close();
   }

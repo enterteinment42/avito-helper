@@ -2251,14 +2251,39 @@ function extractJSON(text) {
 // запрос приняла и модель со скромным пределом выхода.
 function genTokens(n) { return Math.min(8000, 1000 + (Number(n) || 3) * 1600); }
 
+// Бюджет шага «сначала заголовки» — своя формула: заголовков просят до 12, каждый
+// с крючком, и прежние фиксированные 1400 обрывали ответ на полуслове («Unexpected
+// end of JSON input» у игр). При веб-поиске бюджет вдобавок делится с tool-use
+// блоками, которые модель генерирует до финального текста (F5).
+function titleTokens(n, webSearch) {
+  return Math.min(8000, 600 + (Number(n) || 8) * 220 + (webSearch ? 1200 : 0));
+}
+
+// Разбор ответа со списком заголовков — терпимый к обрыву, как parseVariants:
+// из недописанного JSON берём заголовки, которые модель успела закрыть.
+function parseTitles(text) {
+  let list = null;
+  try {
+    list = JSON.parse(extractJSON(text))?.titles;
+  } catch(e) {
+    list = salvageArray(text, 'titles');
+  }
+  if (!Array.isArray(list)) return [];
+  return list
+    .map(t => ({ title: String(t?.title || ''), hook: String(t?.hook || '') }))
+    .filter(t => t.title);
+}
+
 // Спасение целых вариантов из оборванного ответа. Идём по массиву variants
 // вручную, следя за строками и экранированием, и парсим каждый объект отдельно:
 // недописанный последний просто не распарсится и будет пропущен. Генерация
 // платная — терять весь ответ из-за хвоста, который модель не успела дописать,
 // неправильно; заодно страхует от обрыва по любой будущей причине.
-function salvageVariants(text) {
+function salvageVariants(text) { return salvageArray(text, 'variants'); }
+
+function salvageArray(text, field) {
   const raw = extractJSON(text);
-  const key = raw.indexOf('"variants"');
+  const key = raw.indexOf(`"${field}"`);
   if (key === -1) return [];
   const start = raw.indexOf('[', key);
   if (start === -1) return [];
@@ -2873,16 +2898,24 @@ async function doGenTitlesOnly() {
   try {
     const webSearch = state.form.isPreorder && state.form.category === 'game';
     const n = Math.max(8, Math.min(12, (state.form.count || 5) * 2));
-    const text = await callAI([{ role: 'user', content: buildTitlesMsg(n) }], { webSearch, category: state.form.category, max_tokens: webSearch ? 2200 : 1400 });
-    const data = JSON.parse(extractJSON(text));
-    const titles = (data.titles || [])
-      .map((t, i) => ({ id: i + 1, title: t.title || '', hook: t.hook || '', len: [...(t.title || '')].length }))
-      .filter(t => t.title);
-    if (!titles.length) throw new Error('AI не вернул названия');
+    let truncated = false;
+    const text = await callAI([{ role: 'user', content: buildTitlesMsg(n) }], {
+      webSearch, category: state.form.category,
+      max_tokens: titleTokens(n, webSearch), onTruncated: () => { truncated = true; },
+    });
+    const titles = parseTitles(text)
+      .map((t, i) => ({ id: i + 1, title: t.title, hook: t.hook, len: [...t.title].length }));
+    if (!titles.length) {
+      throw new Error(truncated
+        ? 'Ответ модели оборвался — ни одного названия разобрать не удалось. Повторите попытку.'
+        : 'AI не вернул названия');
+    }
+    if (truncated) toast(`⚠️ Ответ оборвался — названий пришло ${titles.length} из ${n}.`);
     state.titleStep = { titles, selected: {}, form: JSON.parse(JSON.stringify(state.form)), _chain: jChain };
     jlog('generated', jChain, {
       path: 'titles', category: state.form.category, product: currentProductName(state.form),
       latencyMs: Date.now() - jT0, titles: titles.map(t => t.title),
+      ...(truncated ? { truncated: true } : {}),
     });
   } catch(e) {
     state.error = e.message;
@@ -2987,14 +3020,16 @@ async function doGenAltTitles(id) {
     const snapForm = state.resultsForm || state.form; // F12: webSearch из того же снимка, что и промпт (buildMsg выше)
     const webSearch = snapForm.isPreorder && snapForm.category === 'game';
     // F5: при webSearch сама генерация вспомогательных tool-use блоков ест бюджет
-    // до финального текста — 600 обрезало 5 заголовков; 2000 — тот же запас, что в doRephrase
+    // до финального текста — 600 обрезало 5 заголовков; теперь бюджет считает
+    // titleTokens (он же учитывает надбавку на веб-поиск).
     let truncated = false;
     const text = await callAI([{ role: 'user', content: msg }], {
-      webSearch, category: snapForm.category, max_tokens: webSearch ? 2000 : 600,
+      webSearch, category: snapForm.category, max_tokens: titleTokens(5, webSearch),
       onTruncated: () => { truncated = true; },
     });
-    const data = JSON.parse(extractJSON(text));
-    state.altTitles[id] = (data.titles || []).map(t => ({ ...t, len: [...(t.title||'')].length }));
+    const alt = parseTitles(text).map(t => ({ ...t, len: [...t.title].length }));
+    if (!alt.length) throw new Error(truncated ? 'Ответ модели оборвался — названий не разобрать' : 'AI не вернул названия');
+    state.altTitles[id] = alt;
     jlog('generated', v?._chain || null, {
       path: 'alt_titles', baseTitle: v?.title || '', titles: state.altTitles[id].map(t => t.title),
       ...(truncated ? { truncated: true } : {}),
