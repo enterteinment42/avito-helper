@@ -38,7 +38,7 @@ const gen = page => page.evaluate(async () => {
   await doStagedPhoto();
   const st = state.vision.staged;
   return {
-    img: st.img ? { head: st.img.dataUrl.slice(0, 40), scene: st.img.scene } : null,
+    img: st.img ? { head: st.img.dataUrl.slice(0, 40), scene: st.img.scene, quality: st.img.quality } : null,
     error: st.error, count: st.count, loading: st.loading,
     req: window.__req[0] || null,
     logged: window.__jlog.map(x => ({ ev: x.ev, data: x.data })),
@@ -105,8 +105,14 @@ export async function runStaged(browser, base, t) {
     await stubFetch(page, { status: 200, json: { data: [{ b64_json: 'QUJD', media_type: 'image/png' }] } });
     const okRun = await gen(page);
     t.ok('запрос ушёл на /api/image', /\/api\/image$/.test(okRun.req.url), okRun.req && okRun.req.url);
-    t.eq('соотношение сторон вертикальное', okRun.req.body.aspect_ratios, '3:4');
-    t.eq('качество высокое', okRun.req.body.qualities, 'high');
+    // Имена в ЕДИНСТВЕННОМ числе: множественные вендор молча выбрасывал и отдавал
+    // квадрат дефолтного качества (замер 13.09). Проверяем и то, что старых имён
+    // в теле больше нет — иначе сервер ответит своим 400.
+    t.eq('соотношение сторон вертикальное', okRun.req.body.aspect_ratio, '3:4');
+    t.eq('качество по умолчанию черновое', okRun.req.body.quality, 'medium');
+    t.ok('множественных имён в теле нет',
+      okRun.req.body.aspect_ratios === undefined && okRun.req.body.qualities === undefined,
+      JSON.stringify([okRun.req.body.aspect_ratios, okRun.req.body.qualities]));
     t.eq('исходное фото передано одним референсом', okRun.req.body.input_references.length, 1);
     t.eq('в форме, которую ждёт вендор', okRun.req.body.input_references[0].type, 'image_url');
     t.eq('и это именно наше фото', okRun.req.body.input_references[0].image_url.url, PNG_1x1);
@@ -124,6 +130,49 @@ export async function runStaged(browser, base, t) {
     t.eq('со сценой', ev && ev.data.scene, 'studio');
     t.eq('и соотношением сторон', ev && ev.data.aspect, '3:4');
     t.eq('и номером попытки', ev && ev.data.attempt, 1);
+    t.eq('и качеством', ev && ev.data.quality, 'medium');
+    // Без phase генерацию от скачивания пришлось бы отличать по ОТСУТСТВИЮ поля
+    t.eq('фаза названа явно', ev && ev.data.phase, 'generate');
+
+    // ── Качество: черновик по умолчанию, финал по кнопке ────
+    const qUI = await page.evaluate(() => ({
+      chips: (stagedCardHTML().match(/data-act="staged-quality"/g) || []).length,
+      on: (stagedCardHTML().match(/class="chip on" data-act="staged-quality"/g) || []).length,
+      draftFirst: STAGED_QUALITIES[0].id,
+    }));
+    t.eq('чипов качества два', qUI.chips, 2);
+    t.eq('ровно одно выбрано', qUI.on, 1);
+    t.eq('по умолчанию — черновик', qUI.draftFirst, 'medium');
+    await stubFetch(page, { status: 200, json: { data: [{ b64_json: 'QUJD', media_type: 'image/png' }] } });
+    const hiRun = await page.evaluate(async () => {
+      state.vision.staged.quality = 'high';
+      await doStagedPhoto();
+      return {
+        sent: window.__req[0].body.quality,
+        stamped: state.vision.staged.img.quality,
+        ev: (window.__jlog.find(x => x.ev === 'staged') || {}).data,
+      };
+    });
+    t.eq('выбор финала уходит на сервер', hiRun.sent, 'high');
+    t.eq('и штампуется на картинке', hiRun.stamped, 'high');
+    t.eq('и попадает в журнал', hiRun.ev && hiRun.ev.quality, 'high');
+
+    // ── Атрибуция журнала: снимок ДО await ──────────────────
+    // Форма во время генерации не заблокирована, а генерация идёт до минуты:
+    // если читать категорию на завершении, в журнал уедет не та, по которой
+    // строился промпт, и разбор «что работает» будет считать по чужой категории.
+    await stubFetch(page, { status: 200, json: { data: [{ b64_json: 'QUJD', media_type: 'image/png' }] } });
+    const attrib = await page.evaluate(async () => {
+      state.form.category = 'phys';
+      state.form.physName = 'Xbox Series X';
+      const p = doStagedPhoto();              // не ждём: имитируем правку формы «во время»
+      state.form.category = 'game';
+      state.form.gameName = 'совсем другая игра';
+      await p;
+      return (window.__jlog.find(x => x.ev === 'staged') || {}).data;
+    });
+    t.eq('в журнале категория на момент запроса', attrib && attrib.category, 'phys');
+    t.eq('и товар на момент запроса', attrib && attrib.product, 'Xbox Series X');
     const uiAfter = await page.evaluate(() => ({
       covers: stagedCardHTML().includes('staged-covers'),
       dl: stagedCardHTML().includes('staged-download'),
@@ -141,6 +190,9 @@ export async function runStaged(browser, base, t) {
       return {
         b64:   run({ data: [{ b64_json: 'QQ==', media_type: 'image/jpeg' }] }),
         noMt:  run({ data: [{ b64_json: 'QQ==' }] }),
+        webp:  run({ data: [{ b64_json: 'QQ==', media_type: 'image/webp' }] }),
+        evil:  run({ data: [{ b64_json: 'QQ==', media_type: 'image/png"><img src=x onerror=alert(1)>' }] }),
+        weird: run({ data: [{ b64_json: 'QQ==', media_type: 'text/html' }] }),
         url:   run({ data: [{ url: 'https://x/y.png' }] }),
         imgUrl: run({ data: [{ image_url: { url: 'https://x/z.png' } }] }),
         chat:  run({ choices: [{ message: { images: [{ image_url: { url: 'https://x/c.png' } }] } }] }),
@@ -151,9 +203,19 @@ export async function runStaged(browser, base, t) {
     });
     t.eq('b64_json + media_type', shapes.b64.v, 'data:image/jpeg;base64,QQ==');
     t.eq('без media_type подставляется png', shapes.noMt.v, 'data:image/png;base64,QQ==');
-    t.eq('прямая ссылка', shapes.url.v, 'https://x/y.png');
-    t.eq('вложенный image_url', shapes.imgUrl.v, 'https://x/z.png');
-    t.eq('форма chat-completions', shapes.chat.v, 'https://x/c.png');
+    t.eq('webp — тоже свой', shapes.webp.v, 'data:image/webp;base64,QQ==');
+    // media_type — строка ОТ ВЕНДОРА, а результат идёт в <img src="..."> без esc:
+    // без белого списка «image/png"><img onerror=…>» стало бы разметкой
+    t.ok('разметка в media_type не проходит', !/onerror/.test(shapes.evil.v), shapes.evil.v);
+    t.eq('и подменяется безопасным png', shapes.evil.v, 'data:image/png;base64,QQ==');
+    t.eq('неизображение тоже не проходит', shapes.weird.v, 'data:image/png;base64,QQ==');
+    // Удалённых URL этот маршрут не отдаёт (замер 13.09: четыре модели, все b64).
+    // Принять такой URL значило бы испортить канвас обложки: cross-origin картинка
+    // делает toDataURL() недоступным, и скачивание JPEG молча падает.
+    t.eq('прямая ссылка не принимается', shapes.url.ok, false);
+    t.eq('вложенный image_url не принимается', shapes.imgUrl.ok, false);
+    t.eq('форма chat-completions не принимается', shapes.chat.ok, false);
+    t.ok('в отказе видно, что пришло', /url/.test(shapes.url.v), shapes.url.v);
     t.eq('пустой data — ошибка', shapes.empty.ok, false);
     // Главное: при промахе видно, ЧТО пришло — иначе первая живая проба даст
     // «не получилось» без зацепок, уже после списания за генерацию

@@ -692,6 +692,15 @@ const STAGED_SCENES = [
   { id: 'hands',  label: '🤲 В руках',       p: 'в руках человека на нейтральном размытом фоне комнаты, кадр по грудь, лицо не видно' },
 ];
 
+// Качество — главный рычаг цены, сильнее выбора модели: замер 13.09 на одном и том
+// же фото дал $0.023 за medium против $0.060 за high (сравнение моделей при этом
+// уложилось в вилку 0.016…0.060). Черновик стоит первым и стоит по умолчанию:
+// сцену подбирают несколькими попытками, и платить за них по финальной ставке незачем.
+const STAGED_QUALITIES = [
+  { id: 'medium', label: '✏️ Черновик', hint: 'подобрать сцену, ~$0.02' },
+  { id: 'high',   label: '💎 Финал',    hint: 'кадр в объявление, ~$0.06' },
+];
+
 // Чистое состояние карточки распознавания и интерьера. Одно место на всех:
 // раньше набор полей дублировался в инициализации state и в visionClear(), и
 // поле, добавленное только в одну из копий, роняло бы карточку после «убрать фото».
@@ -709,6 +718,7 @@ function freshVision() {
       loading: false, error: '',
       img: null,                       // { dataUrl, scene } — последняя сгенерированная картинка
       scene: STAGED_SCENES[0].id,      // выбранная сцена
+      quality: STAGED_QUALITIES[0].id, // черновик/финал — рычаг цены, см. STAGED_QUALITIES
       extra: '',                       // уточнение сцены словами
       count: 0,                        // сколько раз генерировали (для имени файла)
     },
@@ -1914,7 +1924,7 @@ const J_UI_ACTS = new Set([
   'cv-igdb-fetch','cv-igdb-game-fetch','cv-mask-toggle','cv-to-toggle','cv-ig-toggle','cv-ig-fill',
   'db-export','db-add','db-final','ref-add','ref-tricks','ref-preview','ref-voice','conv-photo',
   'vision-recognize','vision-price','vision-apply-price','vision-covers','vision-undo','vision-pick',
-  'staged-gen','staged-covers','staged-download','staged-scene',
+  'staged-gen','staged-covers','staged-download','staged-scene','staged-quality',
 ]);
 
 // Повторный клик по кнопке, чья операция УЖЕ идёт, — это нетерпение, а не
@@ -3993,18 +4003,27 @@ function stagedPrompt() {
 // Поэтому разбираем терпимо — все правдоподобные формы, — а при полном промахе
 // показываем, ЧТО реально пришло: иначе первая живая проба даст «не получилось»
 // без единой зацепки, уже после списания за генерацию.
+// Типы, которые нам не врут: всё, что браузер честно нарисует в <img>. media_type
+// приходит ОТ ВЕНДОРА и попадает внутрь data:-URL, а тот — в разметку карточки,
+// поэтому список закрытый. Строка вида `image/png"><img onerror=...` иначе стала бы
+// разметкой: значение подставляется в src, а не текстом.
+const STAGED_MEDIA_TYPES = ['image/png', 'image/jpeg', 'image/webp'];
+
 function stagedExtractImage(d) {
   const first = (d && Array.isArray(d.data) && d.data[0]) || null;
-  if (first) {
-    if (first.b64_json) return `data:${first.media_type || 'image/png'};base64,${first.b64_json}`;
-    if (typeof first.url === 'string' && first.url) return first.url;
-    if (first.image_url && typeof first.image_url.url === 'string') return first.image_url.url;
+  // Принимаем ТОЛЬКО base64 — единственную форму, которой отвечает этот маршрут.
+  // Замер 13.09 (четыре модели, включая три чужих) не дал ни одного url: все
+  // вернули b64_json + media_type. Прежние ветки с удалённым URL были написаны
+  // «на всякий случай» и стоили двух находок код-ревью: чужой http-адрес,
+  // попав в канвас обложки, портит его безвозвратно (tainted canvas — скачивание
+  // JPEG после этого молча падает). Нет ветки — нет и находок.
+  if (first && first.b64_json) {
+    const mt = STAGED_MEDIA_TYPES.includes(first.media_type) ? first.media_type : 'image/png';
+    return `data:${mt};base64,${first.b64_json}`;
   }
-  // Chat-completions-подобная форма, если вендор ответит ею
-  const msgImg = d?.choices?.[0]?.message?.images?.[0];
-  if (msgImg?.image_url?.url) return msgImg.image_url.url;
   const keys = d && typeof d === 'object' ? Object.keys(d).slice(0, 8).join(', ') : typeof d;
-  throw new Error(`Картинки нет в ответе (получено: ${keys})`);
+  const inner = first && typeof first === 'object' ? ` / ${Object.keys(first).slice(0, 6).join(', ')}` : '';
+  throw new Error(`Картинки нет в ответе (получено: ${keys}${inner})`);
 }
 
 async function doStagedPhoto() {
@@ -4014,16 +4033,26 @@ async function doStagedPhoto() {
   st.loading = true; st.error = '';
   reForm();
   const jT0 = Date.now();
+  // Снимок всего, что уйдёт в промпт и в журнал, — ДО await. Форма во время
+  // генерации не заблокирована (а идти она может минуту), и переключённая
+  // категория иначе уехала бы в журнал как та, по которой строился промпт.
   const scene = st.scene;
+  const quality = st.quality;
+  const jCategory = state.form.category;
+  const jProduct = currentProductName(state.form);
   try {
     const r = await fetch(PROXY_IMAGE, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + getProxyToken() },
       body: JSON.stringify({
         prompt: stagedPrompt(),
+        // Форма референса — единственная, которую принимает вендор; см. комментарий
+        // к /api/image в poigraem-backend. Имена ниже — в ЕДИНСТВЕННОМ числе:
+        // множественные вендор молча выбрасывал, и кадр приходил квадратом
+        // дефолтного качества (замер 13.09).
         input_references: [{ type: 'image_url', image_url: { url: v.dataUrl } }],
-        aspect_ratios: STAGED_ASPECT,
-        qualities: 'high',
+        aspect_ratio: STAGED_ASPECT,
+        quality,
       }),
     });
     if (!r.ok) {
@@ -4037,12 +4066,12 @@ async function doStagedPhoto() {
         : `Картинка ${r.status}: ${body.slice(0, 300)}`);
     }
     const dataUrl = stagedExtractImage(await r.json());
-    st.img = { dataUrl, scene };
+    st.img = { dataUrl, scene, quality };
     st.count++;
     jlog('staged', null, {
-      ok: true, scene, aspect: STAGED_ASPECT,
+      ok: true, phase: 'generate', scene, quality, aspect: STAGED_ASPECT,
       extra: st.extra.trim().slice(0, 200),
-      category: state.form.category, product: currentProductName(state.form),
+      category: jCategory, product: jProduct,
       attempt: st.count, latencyMs: Date.now() - jT0,
     });
     toast('Картинка готова — проверьте, что товар не перерисован');
@@ -4081,9 +4110,12 @@ function stagedDownload() {
   if (!st.img) return;
   const a = document.createElement('a');
   a.href = st.img.dataUrl;
-  a.download = `staged-${st.img.scene}-${st.count}.png`;
+  // Расширение — по факту типа: медиатип приходит от вендора и у части моделей
+  // это jpeg, а файл с чужим расширением Авито и просмотрщики принимают криво.
+  const mt = (st.img.dataUrl.match(/^data:(image\/[a-z]+)/) || [])[1] || 'image/png';
+  a.download = `staged-${st.img.scene}-${st.count}.${mt.split('/')[1].replace('jpeg', 'jpg')}`;
   a.click();
-  jlog('staged', null, { ok: true, phase: 'download', scene: st.img.scene, attempt: st.count });
+  jlog('staged', null, { ok: true, phase: 'download', scene: st.img.scene, quality: st.img.quality, attempt: st.count });
 }
 
 function stagedCardHTML() {
@@ -4097,6 +4129,9 @@ function stagedCardHTML() {
       ${STAGED_SCENES.map(s => `<button class="chip ${st.scene === s.id ? 'on' : ''}" data-act="staged-scene" data-k="${s.id}" ${busy ? 'disabled' : ''}>${esc(s.label)}</button>`).join('')}
     </div>
     <input type="text" data-act="staged-extra" placeholder="своими словами: что ещё в кадре (необязательно)" value="${esc(st.extra)}" ${busy ? 'disabled' : ''}>
+    <div class="vision-ask-opts">
+      ${STAGED_QUALITIES.map(q => `<button class="chip ${st.quality === q.id ? 'on' : ''}" data-act="staged-quality" data-k="${q.id}" title="${esc(q.hint)}" ${busy ? 'disabled' : ''}>${esc(q.label)}</button>`).join('')}
+    </div>
     <div class="vision-btns">
       <button class="vision-btn vision-btn-main" data-act="staged-gen" ${busy ? 'disabled' : ''}>
         ${st.loading ? '⏳ Рисую сцену…' : st.img ? '↻ Ещё вариант' : '🏠 Поставить в интерьер'}
@@ -4108,7 +4143,7 @@ function stagedCardHTML() {
     ${st.img ? `
     <div class="staged-out">
       <img src="${st.img.dataUrl}" alt="товар в интерьере">
-      <div class="vision-hint">Сцена «${esc(stagedScene(st.img.scene).label)}», ${STAGED_ASPECT}. ⚠ Сверьте с исходным фото: модель, цвет, надписи и комплектация должны совпадать — иначе объявление введёт покупателя в заблуждение.</div>
+      <div class="vision-hint">Сцена «${esc(stagedScene(st.img.scene).label)}», ${STAGED_ASPECT}, ${esc((STAGED_QUALITIES.find(q => q.id === st.img.quality) || {}).label || st.img.quality || '')}. ⚠ Сверьте с исходным фото: модель, цвет, надписи и комплектация должны совпадать — иначе объявление введёт покупателя в заблуждение.</div>
     </div>` : ''}
   </div>`;
 }
@@ -8609,6 +8644,9 @@ document.addEventListener('click', e => {
     case 'staged-download':    stagedDownload(); break;
     case 'staged-scene':
       if (!visionBusy()) { state.vision.staged.scene = el.dataset.k; reForm(); }
+      break;
+    case 'staged-quality':
+      if (!visionBusy()) { state.vision.staged.quality = el.dataset.k; reForm(); }
       break;
 
     case 'title-pick': {
