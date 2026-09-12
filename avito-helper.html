@@ -2151,6 +2151,14 @@ function getProxyToken() {
   return t;
 }
 
+// Обрыв по лимиту достижим не только в генерации объявлений: распознавание по фото
+// и поиск цены идут с размышлением, а оно тратится из того же бюджета. Совет
+// «уменьшите число вариантов» указывал бы там на органы управления, которых в той
+// карточке нет, — конкретную подсказку даёт вызывающий, общий текст по умолчанию.
+function truncMsg(opts) {
+  return 'Ответ модели не уместился в лимит' + (opts.truncHint ? ` — ${opts.truncHint}` : '. Повторите запрос.');
+}
+
 async function callAI(messages, opts = {}) {
   const provider = opts.provider || state.settings.provider;
   const model    = opts.model    || state.settings.model;
@@ -2186,7 +2194,15 @@ async function callAI(messages, opts = {}) {
       throw new Error(`Claude ${r.status}: ${await r.text()}`);
     }
     const d = await r.json();
-    return d.content?.filter(b => b.type === 'text').map(b => b.text).join('\n') || '';
+    const out = d.content?.filter(b => b.type === 'text').map(b => b.text).join('\n') || '';
+    // Обрыв по лимиту приходит как обычный 200 с недописанным текстом. Без этой
+    // проверки он всплывал позже загадочной ошибкой разбора JSON, а настоящая
+    // причина («не поместилось») нигде не называлась.
+    if (d.stop_reason === 'max_tokens') {
+      if (!out.trim()) throw new Error(truncMsg(opts));
+      opts.onTruncated?.('max_tokens');
+    }
+    return out;
   }
 
   if (provider === 'openrouter') {
@@ -2205,7 +2221,12 @@ async function callAI(messages, opts = {}) {
       throw new Error(`OpenRouter ${r.status}: ${await r.text()}`);
     }
     const d = await r.json();
-    return d.choices?.[0]?.message?.content || '';
+    const out = d.choices?.[0]?.message?.content || '';
+    if (d.choices?.[0]?.finish_reason === 'length') { // у OpenRouter обрыв по лимиту зовётся так
+      if (!out.trim()) throw new Error(truncMsg(opts));
+      opts.onTruncated?.('max_tokens');
+    }
+    return out;
   }
 
   throw new Error('Неизвестный провайдер: ' + provider);
@@ -2221,8 +2242,69 @@ function extractJSON(text) {
   return (first !== -1 && last > first) ? raw.slice(first, last + 1) : raw;
 }
 
+// Сколько выхода просить под N вариантов объявления. Фиксированные 4000 обрывали
+// генерацию в середине 2-3 варианта: описания выросли после перехода few-shot на
+// полные эталоны (до 1720 знаков — модель подражает длине образцов), а extractJSON
+// потом срезал недописанный хвост по последней «}», и наружу выходила загадочная
+// ошибка JSON вместо честного «не поместилось». Лимит — только верхняя граница,
+// платим за фактический выход, поэтому берём с запасом. Потолок 8000 — чтобы
+// запрос приняла и модель со скромным пределом выхода.
+function genTokens(n) { return Math.min(8000, 1000 + (Number(n) || 3) * 1600); }
+
+// Спасение целых вариантов из оборванного ответа. Идём по массиву variants
+// вручную, следя за строками и экранированием, и парсим каждый объект отдельно:
+// недописанный последний просто не распарсится и будет пропущен. Генерация
+// платная — терять весь ответ из-за хвоста, который модель не успела дописать,
+// неправильно; заодно страхует от обрыва по любой будущей причине.
+function salvageVariants(text) {
+  const raw = extractJSON(text);
+  const key = raw.indexOf('"variants"');
+  if (key === -1) return [];
+  const start = raw.indexOf('[', key);
+  if (start === -1) return [];
+  const out = [];
+  let depth = 0, from = -1, inStr = false, esc = false;
+  for (let i = start + 1; i < raw.length; i++) {
+    const ch = raw[i];
+    if (inStr) {
+      if (esc) esc = false;
+      else if (ch === '\\') esc = true;
+      else if (ch === '"') inStr = false;
+      continue;
+    }
+    if (ch === '"') { inStr = true; continue; }
+    if (ch === '{') { if (depth === 0) from = i; depth++; continue; }
+    if (ch === '}') {
+      depth--;
+      if (depth <= 0) {
+        if (from !== -1) { try { out.push(JSON.parse(raw.slice(from, i + 1))); } catch(e) {} }
+        from = -1;
+        if (depth < 0) break; // закрылся внешний объект — массив кончился
+      }
+      continue;
+    }
+    if (ch === ']' && depth === 0) break;
+  }
+  return out;
+}
+
 function parseVariants(text) {
-  const data = JSON.parse(extractJSON(text));
+  let data = null;
+  try {
+    data = JSON.parse(extractJSON(text));
+  } catch(e) {
+    // Ответ оборван или испорчен — берём то, что модель успела дописать целиком.
+    const saved = salvageVariants(text);
+    if (!saved.length) throw new Error('Ответ модели оборван — не удалось разобрать ни одного варианта. Повторите генерацию.');
+    // _srcId — номер, который дала сама модель. Дыра в спасённом наборе бывает и
+    // в СЕРЕДИНЕ (испорчен второй вариант, третий цел), а воронка заголовков
+    // раскладывает выбранные названия по порядку — по индексу она приклеила бы
+    // название №2 к описанию №3. Сквозной id перенумеровываем как обычно (на нём
+    // держатся действия карточек), исходный сохраняем отдельно.
+    const list = saved.map((v, i) => ({ ...v, _srcId: v.id, id: i + 1 }));
+    list._salvaged = true; // вызывающий предупредит, что набор неполный
+    return list;
+  }
   if (!Array.isArray(data?.variants)) throw new Error('Нет поля variants в ответе');
   return data.variants.map((v, i) => ({ ...v, id: i + 1 }));
 }
@@ -2577,6 +2659,17 @@ function findResultRef(id) {
   return { arr: null, idx: -1 };
 }
 
+// Набор оказался неполным (ответ оборвался, часть вариантов спасена) — говорим
+// об этом вслух: молча отдать 2 варианта вместо 3 значит соврать про размер набора.
+function warnIfPartial(list, want, truncated) {
+  // _salvaged значит лишь «строгий разбор не прошёл» — набор при этом мог прийти
+  // целиком (например, модель дописала прозу с «}» после JSON, и extractJSON
+  // захватил её). Предупреждаем только когда вариантов реально меньше заказанного.
+  if (!want || list.length >= want) return;
+  if (!list._salvaged && !truncated) return;
+  toast(`⚠️ Ответ модели оборвался — получено ${list.length} из ${want}. Остальные догенерируйте отдельно.`);
+}
+
 async function doGenerate() {
   if (state.loading) return;
   const miss = validateForm();
@@ -2591,8 +2684,18 @@ async function doGenerate() {
   const jT0 = Date.now();
   try {
     const webSearch = state.form.isPreorder && state.form.category === 'game';
-    const text = await callAI([{ role: 'user', content: buildMsg() }], { webSearch, category: state.form.category });
+    let truncated = false;
+    // Кнопки количества во время генерации не заблокированы: сколько вариантов
+    // заказывали, надо запомнить ДО await, иначе предупреждение сравнит с числом,
+    // которое человек переключил уже после отправки запроса.
+    const want = state.form.count;
+    const text = await callAI([{ role: 'user', content: buildMsg() }], {
+      webSearch, category: state.form.category,
+      max_tokens: genTokens(want), onTruncated: () => { truncated = true; },
+      truncHint: 'уменьшите число вариантов или длину доп. указаний',
+    });
     state.results = parseVariants(text);
+    warnIfPartial(state.results, want, truncated);
     // F4: снимок формы + штамп товара/категории на каждый вариант — чтобы действия
     // карточки (Размещено/Сканер/Экспорт/↻×5) не читали форму, переключённую позже
     state.resultsForm = JSON.parse(JSON.stringify(state.form));
@@ -2608,6 +2711,7 @@ async function doGenerate() {
       provider: state.settings.provider, model: state.settings.provider === 'claude' ? state.settings.model : state.settings.orModel,
       style: state.form.style, notes: state.form.notes || '', webSearch,
       latencyMs: Date.now() - jT0, variants: jVariants(state.results),
+      ...(truncated ? { truncated: true } : {}), // обрыв по лимиту — видно при разборе журнала
     });
   } catch(e) {
     state.error = e.message;
@@ -2631,9 +2735,15 @@ async function doGenerateMore() {
     const snapForm = state.resultsForm || state.form; // F4: та же форма, что породила основной набор
     const excl = resultsPool().map(v => v.title);
     const webSearch = snapForm.isPreorder && snapForm.category === 'game';
-    const text = await callAI([{ role: 'user', content: buildMsg(snapForm.count, excl, snapForm) }], { webSearch, category: snapForm.category });
+    let truncated = false;
+    const want = snapForm.count; // до await: снимка может не быть, и тогда это живая форма
+    const text = await callAI([{ role: 'user', content: buildMsg(want, excl, snapForm) }], {
+      webSearch, category: snapForm.category,
+      max_tokens: genTokens(want), onTruncated: () => { truncated = true; },
+    });
     const fresh = parseVariants(text);
     if (!fresh.length) throw new Error('AI не вернул варианты');
+    warnIfPartial(fresh, want, truncated);
     const product  = state.results[0]?._product  || currentProductName(snapForm);
     const category = state.results[0]?._category || snapForm.category;
     // Bug #11: parseVariants нумерует ответ заново с 1, поэтому «Ещё варианты»
@@ -2652,6 +2762,7 @@ async function doGenerateMore() {
     jlog('generated', jChain, {
       path: 'more', category, product, excluded: excl.length,
       latencyMs: Date.now() - jT0, variants: jVariants(fresh),
+      ...(truncated ? { truncated: true } : {}),
     });
   } catch(e) {
     toast('Ошибка: ' + e.message);
@@ -2681,12 +2792,15 @@ async function doBatchGenerate() {
   try {
     const webSearch = state.form.isPreorder && state.form.category === 'game';
     const variants = [];
-    let chunkFails = 0;
+    let chunkFails = 0, truncated = false;
     for (const chunk of chunks) {
       try {
         const msg = buildMsg(chunk.length, variants.map(v => v.title));
-        const text = await callAI([{ role: 'user', content: msg }],
-          { webSearch, category: state.form.category, max_tokens: Math.min(8000, 800 + chunk.length * 1200) });
+        const text = await callAI([{ role: 'user', content: msg }], {
+          webSearch, category: state.form.category, max_tokens: genTokens(chunk.length),
+          onTruncated: () => { truncated = true; },
+          truncHint: 'уменьшите число регионов в пакете',
+        });
         variants.push(...parseVariants(text));
       } catch(e) {
         console.error('Пакет: чанк не удался', e);
@@ -2714,6 +2828,7 @@ async function doBatchGenerate() {
       path: 'batch', category: state.form.category, product: currentProductName(state.form),
       provider: state.settings.provider, model: state.settings.provider === 'claude' ? state.settings.model : state.settings.orModel,
       regions, chunkFails, latencyMs: Date.now() - jT0,
+      ...(truncated ? { truncated: true } : {}), // хотя бы один чанк не уместился в лимит
       variants: state.batchResults.map(it => ({ region: it.region, ...(it.variant ? { title: it.variant.title || '', description: it.variant.description || '', scan: jScanLevel(it.variant) } : { empty: true }) })),
     });
   } catch(e) {
@@ -2803,18 +2918,30 @@ ${list}
 Для каждого напиши полное описание — разное по структуре и подаче цены между вариантами (см. правила описаний в системном промпте).${learnedBlock(f)}
 Верни строго JSON без markdown-обёртки:
 {"variants":[{"id":1,"title":"(как в списке, без изменений)","title_length":число,"description":"...","style":"...","price_format":"...","hook":"...","structure":"..."}]}`;
-    const text = await callAI([{ role: 'user', content: msg }], { webSearch, category: f.category, max_tokens: Math.min(8000, 800 + chosen.length * 1200) });
+    let truncated = false;
+    const text = await callAI([{ role: 'user', content: msg }], {
+      webSearch, category: f.category, max_tokens: genTokens(chosen.length),
+      onTruncated: () => { truncated = true; },
+      truncHint: 'выберите меньше названий за один раз',
+    });
     const variants = parseVariants(text);
     if (!variants.length) throw new Error('AI не вернул описания');
     // Название продавцом уже выбрано — принудительно прописываем его поверх ответа AI
     // (промпт просит не менять, но гарантию даёт только клиент). Порядок AI держит,
     // маппим по индексу; если AI вернул меньше описаний, чем выбрано, — берём сколько есть.
-    const n = Math.min(variants.length, chosen.length);
-    const results = variants.slice(0, n).map((v, i) => ({
-      ...v,
-      title: chosen[i].title,
-      title_length: chosen[i].len,
-    }));
+    // Исключение — СПАСЁННЫЙ набор: там дыра может быть в середине (испорчен второй
+    // вариант, третий цел), и индекс склеил бы название №2 с описанием №3. Берём позицию
+    // из номера, который дала сама модель, а вариант с непонятным или повторным номером
+    // отбрасываем: лучше меньше карточек, чем карточка с чужим названием.
+    const used = new Set();
+    const results = [];
+    variants.forEach((v, i) => {
+      const pos = variants._salvaged ? (Number(v._srcId) || 0) - 1 : i;
+      if (!chosen[pos] || used.has(pos)) return;
+      used.add(pos);
+      results.push({ ...v, title: chosen[pos].title, title_length: chosen[pos].len });
+    });
+    const n = results.length;
     if (n < chosen.length) {
       toast(`⚠️ AI описал ${n} из ${chosen.length} названий. Остальные повторите отдельно.`);
     }
@@ -2832,6 +2959,7 @@ ${list}
       path: 'descriptions', category: f.category, product: currentProductName(f),
       offered: step.titles.length, chosen: chosen.map(t => t.title), // выбор Дениса из предложенных заголовков
       latencyMs: Date.now() - jT0, variants: jVariants(state.results),
+      ...(truncated ? { truncated: true } : {}),
     });
   } catch(e) {
     state.error = e.message;
@@ -2860,11 +2988,16 @@ async function doGenAltTitles(id) {
     const webSearch = snapForm.isPreorder && snapForm.category === 'game';
     // F5: при webSearch сама генерация вспомогательных tool-use блоков ест бюджет
     // до финального текста — 600 обрезало 5 заголовков; 2000 — тот же запас, что в doRephrase
-    const text = await callAI([{ role: 'user', content: msg }], { webSearch, category: snapForm.category, max_tokens: webSearch ? 2000 : 600 });
+    let truncated = false;
+    const text = await callAI([{ role: 'user', content: msg }], {
+      webSearch, category: snapForm.category, max_tokens: webSearch ? 2000 : 600,
+      onTruncated: () => { truncated = true; },
+    });
     const data = JSON.parse(extractJSON(text));
     state.altTitles[id] = (data.titles || []).map(t => ({ ...t, len: [...(t.title||'')].length }));
     jlog('generated', v?._chain || null, {
       path: 'alt_titles', baseTitle: v?.title || '', titles: state.altTitles[id].map(t => t.title),
+      ...(truncated ? { truncated: true } : {}),
     });
   } catch(e) {
     toast('Ошибка: ' + e.message);
@@ -2887,7 +3020,9 @@ async function doRegen(id) {
     const product  = prev._product  || currentProductName(snapForm);
     const excl = resultsPool().filter(v => v.id !== id).map(v => v.title);
     const webSearch = snapForm.isPreorder && category === 'game';
-    const text = await callAI([{ role: 'user', content: buildMsg(1, excl, snapForm) }], { webSearch, category });
+    let truncated = false;
+    const text = await callAI([{ role: 'user', content: buildMsg(1, excl, snapForm) }],
+      { webSearch, category, onTruncated: () => { truncated = true; } });
     const [v] = parseVariants(text);
     const { arr, idx } = findResultRef(id);
     if (arr && idx !== -1 && v) {
@@ -2897,6 +3032,7 @@ async function doRegen(id) {
         category, product,
         before: { title: prev.title || '', description: prev.description || '', scan: jScanLevel(prev) },
         after:  { title: v.title || '', description: v.description || '' },
+        ...(truncated ? { truncated: true } : {}),
       });
       arr[idx] = { ...v, id, _product: product, _category: category, _chain: prev._chain }; // штампы F4 сохраняются
       arr[idx]._scan = checkAds(v.title || '', v.description || '', category); // бейдж под НОВЫЙ текст
@@ -2942,12 +3078,17 @@ ${v.description}
 {"variants": [{"id": 1, "title": "...", "title_length": 0, "description": "...", "style": "...", "price_format": "...", "hook": "...", "structure": "..."}]}`;
 
     const webSearch = state.form.isPreorder && state.form.category === 'game';
-    const text = await callAI([{ role: 'user', content: msg }], { webSearch, category: v._category || state.form.category, max_tokens: 2000 });
+    let truncated = false;
+    const text = await callAI([{ role: 'user', content: msg }], {
+      webSearch, category: v._category || state.form.category,
+      max_tokens: genTokens(1), onTruncated: () => { truncated = true; },
+    });
     const [nv] = parseVariants(text);
     if (!nv) throw new Error('Пустой ответ от AI');
     jlog('generated', v._chain || null, {
       path: 'rephrase', baseTitle: v.title || '',
       variants: [{ title: nv.title || '', description: nv.description || '' }],
+      ...(truncated ? { truncated: true } : {}),
     });
 
     const nLen  = nv.title ? [...nv.title].length : 0;
@@ -4353,7 +4494,9 @@ async function doStartSession() {
         const form = it.form || state.form;
         const webSearch = form.isPreorder && form.category === 'game';
         const jT0 = Date.now();
-        const text = await callAI([{ role: 'user', content: buildMsg(1, [], form) }], { webSearch, category: form.category });
+        let truncated = false;
+        const text = await callAI([{ role: 'user', content: buildMsg(1, [], form) }],
+          { webSearch, category: form.category, onTruncated: () => { truncated = true; } });
         const v = parseVariants(text)[0] || null;
         // Это платные генерации, и раньше они не попадали в журнал вообще: путь «очередь →
         // сессия постинга» выглядел как размещения без единой генерации, а posted уходил
@@ -4368,6 +4511,7 @@ async function doStartSession() {
             path: 'session', category: form.category, product: v._product, region: it.region || null,
             provider: state.settings.provider, model: state.settings.provider === 'claude' ? state.settings.model : state.settings.orModel,
             webSearch, latencyMs: Date.now() - jT0, variants: jVariants([v]),
+            ...(truncated ? { truncated: true } : {}),
           });
         }
         autoVariants[it.id] = v;
