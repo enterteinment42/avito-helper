@@ -4009,6 +4009,15 @@ function stagedPrompt() {
 // разметкой: значение подставляется в src, а не текстом.
 const STAGED_MEDIA_TYPES = ['image/png', 'image/jpeg', 'image/webp'];
 
+// Приводим к сравнимому виду ДО проверки по списку: вендоры пишут тип по-разному
+// («image/jpg» вместо «image/jpeg», регистр, хвост «; charset=binary»), а мимо
+// списка тип молча становится png — и тогда стороннее расширение файла соврёт:
+// stagedDownload берёт его как раз из готового data-URL, и JPEG уехал бы как .png.
+function stagedMediaType(raw) {
+  const mt = String(raw || '').toLowerCase().split(';')[0].trim().replace(/^image\/jpg$/, 'image/jpeg');
+  return STAGED_MEDIA_TYPES.includes(mt) ? mt : 'image/png';
+}
+
 function stagedExtractImage(d) {
   const first = (d && Array.isArray(d.data) && d.data[0]) || null;
   // Принимаем ТОЛЬКО base64 — единственную форму, которой отвечает этот маршрут.
@@ -4018,8 +4027,15 @@ function stagedExtractImage(d) {
   // попав в канвас обложки, портит его безвозвратно (tainted canvas — скачивание
   // JPEG после этого молча падает). Нет ветки — нет и находок.
   if (first && first.b64_json) {
-    const mt = STAGED_MEDIA_TYPES.includes(first.media_type) ? first.media_type : 'image/png';
-    return `data:${mt};base64,${first.b64_json}`;
+    // Сам payload — тоже строка ОТ ВЕНДОРА, и она опаснее media_type: готовый
+    // data-URL подставляется в <img src="..."> карточки, поэтому «A" onerror="…»
+    // вышло бы из атрибута и выполнилось в origin инструмента — том самом, где
+    // в localStorage лежит админ-токен. Пропускаем только алфавит base64.
+    const b64 = String(first.b64_json).replace(/\s+/g, '');
+    if (!b64 || !/^[A-Za-z0-9+/]+={0,2}$/.test(b64)) {
+      throw new Error('Ответ вендора не похож на картинку: b64_json содержит посторонние символы');
+    }
+    return `data:${stagedMediaType(first.media_type)};base64,${b64}`;
   }
   const keys = d && typeof d === 'object' ? Object.keys(d).slice(0, 8).join(', ') : typeof d;
   const inner = first && typeof first === 'object' ? ` / ${Object.keys(first).slice(0, 6).join(', ')}` : '';
@@ -4142,7 +4158,7 @@ function stagedCardHTML() {
     ${st.error ? `<div class="vision-err">⚠ ${esc(st.error)}</div>` : ''}
     ${st.img ? `
     <div class="staged-out">
-      <img src="${st.img.dataUrl}" alt="товар в интерьере">
+      <img src="${esc(st.img.dataUrl)}" alt="товар в интерьере">
       <div class="vision-hint">Сцена «${esc(stagedScene(st.img.scene).label)}», ${STAGED_ASPECT}, ${esc((STAGED_QUALITIES.find(q => q.id === st.img.quality) || {}).label || st.img.quality || '')}. ⚠ Сверьте с исходным фото: модель, цвет, надписи и комплектация должны совпадать — иначе объявление введёт покупателя в заблуждение.</div>
     </div>` : ''}
   </div>`;

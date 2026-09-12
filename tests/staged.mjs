@@ -193,6 +193,12 @@ export async function runStaged(browser, base, t) {
         webp:  run({ data: [{ b64_json: 'QQ==', media_type: 'image/webp' }] }),
         evil:  run({ data: [{ b64_json: 'QQ==', media_type: 'image/png"><img src=x onerror=alert(1)>' }] }),
         weird: run({ data: [{ b64_json: 'QQ==', media_type: 'text/html' }] }),
+        jpg:   run({ data: [{ b64_json: 'QQ==', media_type: 'image/jpg' }] }),
+        upper: run({ data: [{ b64_json: 'QQ==', media_type: 'IMAGE/JPEG' }] }),
+        param: run({ data: [{ b64_json: 'QQ==', media_type: 'image/jpeg; charset=binary' }] }),
+        evilB64: run({ data: [{ b64_json: 'QQ==" onerror="alert(1)', media_type: 'image/png' }] }),
+        tagB64:  run({ data: [{ b64_json: 'QQ=="><script>alert(1)</script>', media_type: 'image/png' }] }),
+        wrapB64: run({ data: [{ b64_json: 'QQ\n==', media_type: 'image/png' }] }),
         url:   run({ data: [{ url: 'https://x/y.png' }] }),
         imgUrl: run({ data: [{ image_url: { url: 'https://x/z.png' } }] }),
         chat:  run({ choices: [{ message: { images: [{ image_url: { url: 'https://x/c.png' } }] } }] }),
@@ -209,6 +215,17 @@ export async function runStaged(browser, base, t) {
     t.ok('разметка в media_type не проходит', !/onerror/.test(shapes.evil.v), shapes.evil.v);
     t.eq('и подменяется безопасным png', shapes.evil.v, 'data:image/png;base64,QQ==');
     t.eq('неизображение тоже не проходит', shapes.weird.v, 'data:image/png;base64,QQ==');
+    // Тип нормализуется ДО списка: иначе законный JPEG молча стал бы png,
+    // а расширение файла при скачивании соврало бы (оно берётся из data-URL)
+    t.eq('image/jpg — это jpeg, а не подмена на png', shapes.jpg.v, 'data:image/jpeg;base64,QQ==');
+    t.eq('регистр не мешает', shapes.upper.v, 'data:image/jpeg;base64,QQ==');
+    t.eq('хвост с параметрами не мешает', shapes.param.v, 'data:image/jpeg;base64,QQ==');
+    // Сам payload опаснее media_type: он идёт в <img src="..."> карточки, и выход
+    // из атрибута выполнил бы код в origin, где лежит админ-токен
+    t.eq('кавычка в b64_json — отказ', shapes.evilB64.ok, false);
+    t.ok('и без неё в тексте ошибки', !/onerror/.test(shapes.evilB64.v), shapes.evilB64.v);
+    t.eq('тег в b64_json — отказ', shapes.tagB64.ok, false);
+    t.eq('перенос строки внутри base64 допустим', shapes.wrapB64.v, 'data:image/png;base64,QQ==');
     // Удалённых URL этот маршрут не отдаёт (замер 13.09: четыре модели, все b64).
     // Принять такой URL значило бы испортить канвас обложки: cross-origin картинка
     // делает toDataURL() недоступным, и скачивание JPEG молча падает.
@@ -217,6 +234,40 @@ export async function runStaged(browser, base, t) {
     t.eq('форма chat-completions не принимается', shapes.chat.ok, false);
     t.ok('в отказе видно, что пришло', /url/.test(shapes.url.v), shapes.url.v);
     t.eq('пустой data — ошибка', shapes.empty.ok, false);
+
+    // Экранирование на самом стоке — вторая линия: даже если враждебная строка
+    // как-то попадёт в st.img (минуя разбор), разметкой она не станет
+    const sink = await page.evaluate(() => {
+      const keep = state.vision.staged.img;
+      state.vision.staged.img = { dataUrl: 'data:image/png;base64,QQ==" onerror="alert(1)', scene: 'shelf', quality: 'medium' };
+      const html = stagedCardHTML();
+      state.vision.staged.img = keep;
+      return html;
+    });
+    t.ok('картинка карточки экранирована', !/onerror="alert/.test(sink), sink.slice(0, 300));
+
+    // Расширение файла — по факту типа: JPEG, сохранённый как .png, Авито и
+    // просмотрщики принимают криво
+    const dlNames = await page.evaluate(() => {
+      const keep = state.vision.staged.img;
+      const names = [];
+      const orig = document.createElement.bind(document);
+      document.createElement = tag => {
+        const el = orig(tag);
+        if (tag === 'a') { el.click = () => names.push(el.download); }
+        return el;
+      };
+      for (const mt of ['image/png', 'image/jpeg', 'image/webp']) {
+        state.vision.staged.img = { dataUrl: `data:${mt};base64,QQ==`, scene: 'desk', quality: 'high' };
+        stagedDownload();
+      }
+      document.createElement = orig;
+      state.vision.staged.img = keep;
+      return names;
+    });
+    t.ok('png сохраняется как .png', /\.png$/.test(dlNames[0]), dlNames[0]);
+    t.ok('jpeg — как .jpg, а не .jpeg и не .png', /\.jpg$/.test(dlNames[1]), dlNames[1]);
+    t.ok('webp — как .webp', /\.webp$/.test(dlNames[2]), dlNames[2]);
     // Главное: при промахе видно, ЧТО пришло — иначе первая живая проба даст
     // «не получилось» без зацепок, уже после списания за генерацию
     t.ok('в ошибке перечислены ключи ответа', /error, id/.test(shapes.junk.v), shapes.junk.v);

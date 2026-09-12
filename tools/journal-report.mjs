@@ -28,6 +28,8 @@ const KNOWN_EVENTS = [
   'cv_download', 'tab_open', 'ui', 'error', 'journal_on', 'journal_off',
   // сессия 2026-09-06 (vision) и 2026-09-07 (чипы, приёмы)
   'vision', 'vision_uncertain', 'vision_pick', 'refs_tricks',
+  // сессия 2026-09-10 (2б, «товар в интерьере»): phase generate | download
+  'staged',
 ];
 
 // Пути генерации — чтобы увидеть, какими воронками реально пользуются
@@ -279,6 +281,23 @@ if (picks.length) {
 }
 if (unc.length && !picks.length) {
   console.log('\n   ⚠️ Вопросы задаются, но выборов нет — чипы показываются и остаются нетронутыми.');
+}
+
+sub('Товар в интерьере (2б)');
+const staged = ev.filter(e => e.event === 'staged');
+const stGen = staged.filter(e => e.phase === 'generate');
+const stDl = staged.filter(e => e.phase === 'download');
+console.log(`   Сгенерировано: ${stGen.length} · скачано: ${stDl.length}`);
+if (stGen.length) {
+  sub('Сцены');
+  table(sorted(count(stGen, e => e.scene || '?')), { total: stGen.length });
+  sub('Качество (рычаг цены: medium ≈ $0.023, high ≈ $0.060 за картинку)');
+  table(sorted(count(stGen, e => e.quality || '?')), { total: stGen.length });
+  // Много генераций и ноль скачиваний = картинки не годятся: смотреть глазами,
+  // а не крутить промпт вслепую. Обратное (скачивают почти всё) — что режим «черновик»
+  // уже достаточен и «финал» можно не оплачивать.
+  console.log(`\n   Дошло до скачивания: ${pct(stDl.length, stGen.length)} генераций`);
+  if (!stDl.length) console.log('   ⚠️ Ни одна картинка не скачана — сцены генерируются и выбрасываются.');
 }
 
 h('8. ОБЛОЖКИ');
