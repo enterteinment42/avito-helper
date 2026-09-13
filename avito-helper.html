@@ -1235,6 +1235,66 @@ function ls(key, def) {
   return typeof def === 'object' && !Array.isArray(def) ? { ...def } : def;
 }
 
+// ══════════════════════════════════════════
+// ЗАПИСЬ СЫРЬЯ БЕЗ ЗАТИРАНИЯ ЧУЖИХ ПРАВОК
+// ══════════════════════════════════════════
+// Инструмент нередко открыт сразу в двух вкладках. `_saveAll` писал каждый ключ
+// целиком, то есть побеждал тот, кто сохранил последним: вкладка, пролежавшая без
+// дела три часа, при первом же действии клала на диск свой устаревший снимок и
+// сносила всё, что за это время завела соседняя. Именно так 12.09.2026 пропала
+// запись Истории с донесённым финалом — без следа в кладбище, потому что её никто
+// не удалял. Поэтому сырьё (История, эталоны, избранное) пишется СЛИЯНИЕМ: перед
+// записью смотрим, что лежит в хранилище, и дописываем к своему набору то, чего в
+// нём нет. Отсев идёт по кладбищу, поэтому осознанно удалённое из хранилища назад
+// не поднимается. Свой набор при этом не фильтруется: состояние этой вкладки —
+// источник истины для неё самой, а чужие удаления приезжают слиянием с сервера.
+// Разбираем хранилище не на каждый save, а только когда строка отличается от той,
+// что эта вкладка записала последней: обычный save остаётся дешёвым.
+// Что эта вкладка записала последней. Заполняется при запуске значениями из
+// хранилища — иначе первое же сохранение считало бы «своё» чужим и подливало бы
+// назад то, что человек только что осознанно заменил (импорт бэкапа с заменой базы).
+const _lsMine = {};
+for (const k of ['avito_db', 'avito_refs', 'avito_favorites']) {
+  const v = lsRaw(k);
+  if (v != null) _lsMine[k] = v;
+}
+function saveMerged(key, mine, kind) {
+  let out = mine || [];
+  const raw = lsRaw(key);
+  if (raw != null && raw !== _lsMine[key]) {
+    try {
+      const stored = JSON.parse(raw);
+      if (Array.isArray(stored)) {
+        const tombAt = new Map(syncTombs().map(t => [t.k, t.at || 0]));
+        const m = syncMatcher(out, kind);
+        const busy = new Set(out.map(x => x._fid ?? x.id));
+        const back = [];
+        let n = 0;
+        for (const x of stored) {
+          if (m.find(x)) continue;                          // эта запись у нас уже есть
+          if (syncKilled(x, kind, tombAt)) continue;        // удалена человеком — не поднимаем
+          // Совпавшие id ломают удаление и правку (они ищут строго по id), а две
+          // вкладки штампуют id из одного Date.now() — поэтому коллизии переназначаем.
+          const f = x._fid != null ? '_fid' : 'id';
+          if (busy.has(x[f])) {
+            let fresh = Date.now() + (++n);
+            while (busy.has(fresh)) fresh = Date.now() + (++n);
+            x[f] = fresh;
+          }
+          busy.add(x[f]);
+          m.add(x);
+          back.push(x);
+        }
+        if (back.length) out = [...out, ...back];
+      }
+    } catch(e) {}
+  }
+  const s = JSON.stringify(out);
+  localStorage.setItem(key, s);
+  _lsMine[key] = s;
+  return out;
+}
+
 function save() {
   try {
     _saveAll();
@@ -1256,11 +1316,13 @@ function _saveAll() {
     localStorage.setItem('avito_results',  JSON.stringify(state.results));
     localStorage.setItem('avito_extra_results', JSON.stringify(state.extraResults));
     localStorage.setItem('avito_results_form', JSON.stringify(state.resultsForm ?? null)); // F12: снимок формы для ↻/↻×5 после F5
-    localStorage.setItem('avito_favorites',JSON.stringify(state.favorites));
     localStorage.setItem('avito_catalogs',  JSON.stringify(state.catalogs));
     localStorage.setItem('avito_cats',      JSON.stringify(state.catsCfg));
-    localStorage.setItem('avito_db',        JSON.stringify(state.db));
-    localStorage.setItem('avito_refs',      JSON.stringify(state.refs));
+    // Три набора сырья — единственное невосполнимое, поэтому они пишутся слиянием
+    // с тем, что уже лежит в хранилище (см. saveMerged), а не поверх него.
+    state.favorites = saveMerged('avito_favorites', state.favorites, SYNC_KIND.fav);
+    state.db        = saveMerged('avito_db',        state.db,        SYNC_KIND.db);
+    state.refs      = saveMerged('avito_refs',      state.refs,      SYNC_KIND.ref);
     localStorage.setItem('avito_queue',     JSON.stringify(state.postQueue));
     localStorage.setItem('avito_presets',   JSON.stringify(state.presets));
     // F10: пакет по регионам переживает F5 (был только в памяти — случайное обновление сжигало токены)
@@ -1279,9 +1341,17 @@ function _saveAll() {
 // Слияние списков, пришедших извне (импорт файла и синхронизация с сервером —
 // одна и та же задача). Сравниваем по СОДЕРЖИМОМУ: id это Date.now() того
 // устройства, где запись создали, у чужой базы он ничего не значит.
-function mergeNewOnes(incoming, have, key) {
-  const seen = new Set((have || []).map(key));
-  return (incoming || []).filter(x => { const k = key(x); if (seen.has(k)) return false; seen.add(k); return true; });
+// Новыми считаются те входящие, для которых не нашлось «той же самой» записи
+// (правила сопоставления — в syncMatcher: личность важнее содержимого).
+function mergeNewOnes(incoming, have, kind) {
+  const m = syncMatcher(have, kind);
+  const out = [];
+  for (const x of (incoming || [])) {
+    if (m.find(x)) continue;
+    m.add(x);
+    out.push(x);
+  }
+  return out;
 }
 
 // А вот сами id при слиянии двух баз совпасть МОГУТ — и тогда удаление, которое
@@ -1359,9 +1429,86 @@ const syncFavKey = f => ['fav', (f.title || '').trim(), (f.description || '').tr
 // регион — меняется и ключ, то есть личность записи, и прежняя версия возвращалась
 // с сервера ОТДЕЛЬНОЙ строкой. Поэтому новые записи несут неизменный _uid, а
 // старые (заведённые до этой правки) продолжают дедуплицироваться по содержимому.
-const syncDbKey  = r => r && r._uid
-  ? 'db#' + r._uid
-  : ['db', r?.product || '', r?.region || '', (r?.title || '').trim(), r?.date || ''].join('|');
+const dbContentKey = r => ['db', r?.product || '', r?.region || '', (r?.title || '').trim(), r?.date || ''].join('|');
+const syncDbKey  = r => r && r._uid ? 'db#' + r._uid : dbContentKey(r);
+
+// У записи ДВА РАЗНЫХ СОРТА ключей, и смешивать их нельзя.
+//   id — личность: постоянный _uid. Он уникален даже у записей-близнецов.
+//   fb — запасной, по содержимому. Им опознаётся ТА ЖЕ запись в копии, снятой до
+//        появления _uid (на сервере или в соседней вкладке). `_ck0` — снимок этого
+//        ключа на момент миграции: без него правка ✎ уводила текущий ключ в
+//        сторону, и прежняя копия возвращалась отдельной строкой-двойником.
+// Почему разделение принципиально: «одно объявление в нескольких регионах» —
+// штатный сценарий, и повторное «✓ Размещено» сознательно создаёт вторую запись
+// (у неё свой _uid, но товар, регион, название и дата могут совпасть до знака —
+// дата хранится с точностью до дня). Если считать такие записи одной, слияние
+// молча выбросит вторую, а её финал припишет первой. Поэтому запасной ключ
+// работает только там, где сильного нет: запись С _uid сопоставляется по _uid, и
+// лишь если такой не нашёлся — с записями БЕЗ _uid, которые ещё не мигрировали.
+const SYNC_KIND = {
+  ref: { id: () => [],  fb: r => [syncRefKey(r)] },
+  fav: { id: () => [],  fb: f => [syncFavKey(f)] },
+  db:  {
+    id: r => (r && r._uid) ? ['db#' + r._uid] : [],
+    fb: r => {
+      const ks = [];
+      if (r && r._ck0) ks.push(r._ck0);
+      const ck = dbContentKey(r);
+      if (!ks.includes(ck)) ks.push(ck);
+      return ks;
+    },
+  },
+};
+
+// Сопоставитель: find(x) отдаёт «ту же самую» запись из набора или null.
+function syncMatcher(list, k) {
+  const byId = new Map(), byFb = new Map(), byFbWeak = new Map();
+  const add = x => {
+    const id = k.id(x);
+    for (const q of id) if (!byId.has(q)) byId.set(q, x);
+    for (const q of k.fb(x)) {
+      if (!byFb.has(q)) byFb.set(q, x);
+      if (!id.length && !byFbWeak.has(q)) byFbWeak.set(q, x);
+    }
+  };
+  for (const x of list || []) add(x);
+  const find = x => {
+    const id = k.id(x);
+    if (id.length) {
+      return id.map(q => byId.get(q)).find(Boolean)
+          || k.fb(x).map(q => byFbWeak.get(q)).find(Boolean) || null;
+    }
+    return k.fb(x).map(q => byFb.get(q)).find(Boolean) || null;
+  };
+  return { find, add };
+}
+
+// Надгробия записи, разложенные по сорту ключа: по личности и по содержимому.
+function syncTombHit(x, k, tombAt) {
+  let idAt = -1, fbAt = -1;
+  const keys = [];
+  for (const q of k.id(x)) { const v = tombAt.get(q); if (v != null) { keys.push(q); if (v > idAt) idAt = v; } }
+  for (const q of k.fb(x)) { const v = tombAt.get(q); if (v != null) { keys.push(q); if (v > fbAt) fbAt = v; } }
+  return { idAt, fbAt, keys };
+}
+
+// Выбрасывать ли запись как удалённую. `revived` (необязателен) собирает ключи,
+// с которых метка снимается: запись, заведённая ПОЗЖЕ удаления, воскрешает ключ.
+function syncKilled(x, k, tombAt, revived) {
+  const { idAt, fbAt, keys } = syncTombHit(x, k, tombAt);
+  if (idAt < 0 && fbAt < 0) return false;
+  const born = syncBornAt(x);
+  const revive = () => { if (revived) for (const q of keys) revived.add(q); return false; };
+  // Удалили именно ЭТУ запись — уважаем всегда, иначе строку нельзя было бы убрать.
+  if (idAt >= 0) return born > idAt ? revive() : true;
+  // Осталось только надгробие по содержимому. Такие метки — наследие прежней схемы,
+  // где близнецы делили один ключ на всех: именно по ним 12.09.2026 удаление пустого
+  // дубля унесло полноценную запись с финалом. ПРЕДОХРАНИТЕЛЬ НА СЫРЬЁ: донесённый
+  // финал по слабому ключу не выбрасываем — цена ошибки несимметрична, лишняя строка
+  // видна и удаляется вручную, а стёртый финал не восстановить ничем.
+  if (x && x.finalDesc) return false;
+  return born > fbAt ? revive() : true;
+}
 // Личность записи, не зависящая от её полей. Случайный хвост — потому что две
 // записи, созданные в одну миллисекунду на двух устройствах, получили бы один id.
 function newUid() { return Date.now().toString(36) + Math.random().toString(36).slice(2, 8); }
@@ -1545,13 +1692,7 @@ async function syncPullVoice() {
     // Запись, заведённая ПОЗЖЕ удаления, метку снимает: иначе заново добавленный
     // эталон (или восстановленный из корзины) молча исчезал бы при каждом запуске.
     const revived = new Set();
-    const killed = (x, keyFn) => {
-      const k = keyFn(x);
-      const at = tombAt.get(k);
-      if (at == null) return false;
-      if (syncBornAt(x) > at) { revived.add(k); return false; }
-      return true;
-    };
+    const killed = (x, kind) => syncKilled(x, kind, tombAt, revived);
     // Корзину сливаем — из неё возвращают ошибочно удалённое
     const trashHave = new Set(syncTrash().map(x => x.key + '|' + x.at));
     const trashAdd = arr(d.trash).filter(x => x && !trashHave.has(x.key + '|' + x.at));
@@ -1559,13 +1700,13 @@ async function syncPullVoice() {
 
     const before = JSON.stringify([(state.refs || []).length, (state.favorites || []).length, (state.db || []).length]);
     // Сначала выбрасываем удалённое где-то ещё, потом добавляем недостающее
-    state.refs      = (state.refs || []).filter(x => !killed(x, syncRefKey));
-    state.favorites = (state.favorites || []).filter(x => !killed(x, syncFavKey));
-    state.db        = (state.db || []).filter(x => !killed(x, syncDbKey));
+    state.refs      = (state.refs || []).filter(x => !killed(x, SYNC_KIND.ref));
+    state.favorites = (state.favorites || []).filter(x => !killed(x, SYNC_KIND.fav));
+    state.db        = (state.db || []).filter(x => !killed(x, SYNC_KIND.db));
 
-    const addRefs = mergeNewOnes(arr(d.refs).filter(x => !killed(x, syncRefKey)), state.refs, syncRefKey);
-    const addFavs = mergeNewOnes(arr(d.favorites).filter(x => !killed(x, syncFavKey)), state.favorites, syncFavKey);
-    const addDb   = mergeNewOnes(arr(d.db).filter(x => !killed(x, syncDbKey)), state.db, syncDbKey);
+    const addRefs = mergeNewOnes(arr(d.refs).filter(x => !killed(x, SYNC_KIND.ref)), state.refs, SYNC_KIND.ref);
+    const addFavs = mergeNewOnes(arr(d.favorites).filter(x => !killed(x, SYNC_KIND.fav)), state.favorites, SYNC_KIND.fav);
+    const addDb   = mergeNewOnes(arr(d.db).filter(x => !killed(x, SYNC_KIND.db)), state.db, SYNC_KIND.db);
     // Переименовываем только совпавшие id. Ссылки очереди тут НЕ чиним: входящих
     // позиций очереди в этом документе нет, а локальные указывают на локальное же
     // избранное — правка увела бы их на чужой текст.
@@ -1581,9 +1722,12 @@ async function syncPullVoice() {
     // уже известную: ключ записи Истории от финала не меняется. Без этого финал,
     // донесённый на телефоне, не доезжал бы до компьютера — а это самое ценное сырьё.
     let finalsMerged = 0;
-    const byKey = new Map(state.db.map(r => [syncDbKey(r), r]));
+    // Ищем «ту же самую» запись теми же правилами, что и при слиянии: по личности,
+    // а к содержимому сводим только копию, снятую до появления _uid. Иначе финал
+    // второй публикации того же объявления приписался бы первой.
+    const localDb = syncMatcher(state.db, SYNC_KIND.db);
     for (const inc of arr(d.db)) {
-      const local = byKey.get(syncDbKey(inc));
+      const local = localDb.find(inc);
       if (!local || !inc.finalDesc || local.finalDesc) continue;
       local.finalTitle = inc.finalTitle; local.finalDesc = inc.finalDesc;
       local.editShare = inc.editShare;
@@ -7809,6 +7953,10 @@ function bindDbTab() {
           toast(`Слияние: добавлено ${added.length} из ${data.length}${addedNote ? `, ${addedNote}` : ''} (пропущено дублей: ${data.length - added.length})`);
         } else {
           state.db = data;
+          // Замена базы — явное намерение, подтверждённое двумя вопросами. Метим
+          // хранилище своим, иначе saveMerged увидел бы в нём «чужое» и подлил бы
+          // заменённые записи обратно, обессмыслив оба подтверждения.
+          _lsMine['avito_db'] = lsRaw('avito_db');
           mergeLists(); applyCfg(); save();
           toast(`База заменена: ${data.length} записей${addedNote ? `, ${addedNote}` : ''}`);
         }
@@ -9075,14 +9223,12 @@ document.addEventListener('click', e => {
       const idx = state.db.findIndex(r => r.id === state.dbEditId);
       if (idx !== -1) {
         const rec = state.db[idx];
-        // Запись, заведённая до появления _uid, опознаётся по содержимому — правка
-        // товара или региона меняет её ключ, и прежняя версия вернулась бы с
-        // сервера отдельной строкой. Гасим старую личность меткой удаления (в
-        // корзину не кладём: это правка, а не удаление) и выдаём постоянный _uid.
-        if (!rec._uid) {
-          syncTomb(syncDbKey(rec));
-          rec._uid = newUid();
-        }
+        // _uid теперь есть у всех записей (миграция при запуске), поэтому правка
+        // товара или региона личность записи не меняет и гасить ничего не нужно.
+        // Прежняя ветка ставила надгробие по ключу-содержимому — а он у записей,
+        // созданных повторным нажатием «✓ Размещено», общий на несколько строк,
+        // и такое надгробие убивало соседние записи вместе с их финалами.
+        if (!rec._uid) { rec._ck0 = dbContentKey(rec); rec._uid = newUid(); }
         state.db[idx] = { ...rec, product: f2.product.trim(), region: f2.region.trim(), status: f2.status, note: f2.note.trim() };
       }
       state.dbEditId = null;
@@ -9093,9 +9239,16 @@ document.addEventListener('click', e => {
       state.dbForm = { product: '', region: 'Москва', status: 'active', note: '' };
       renderDb(); break;
     case 'db-del': {
-      if (!confirm('Удалить запись?')) break;
       const delId = +el.dataset.id;
       const goneRec = state.db.find(r => r.id === delId);
+      // Запись с донесённым финалом — невосполнимое сырьё, и по виду строки этого
+      // не понять. Раньше диалог спрашивал одинаково про пустую и про полную
+      // запись, и владелец, вычищая непонятные дубли, сносил вместе с ними пары
+      // «бот → правка». Теперь про финал говорим прямо и отдельной строкой.
+      const warn = goneRec && goneRec.finalDesc
+        ? `⚠️ В записи сохранён ФИНАЛЬНЫЙ текст с Авито (${goneRec.finalDesc.length} знаков) — это сырьё для обучения, восстановить его будет нечем.\n\nУдалить запись «${goneRec.product} · ${goneRec.region}»?`
+        : 'Удалить запись?';
+      if (!confirm(warn)) break;
       // Запись Истории может нести финальный текст — сырьё голоса, поэтому она
       // уходит в корзину так же, как эталон
       if (goneRec) syncTomb(syncDbKey(goneRec), goneRec, 'db');
@@ -9423,6 +9576,19 @@ document.addEventListener('input', e => {
 // ══════════════════════════════════════════
 // INIT
 // ══════════════════════════════════════════
+
+// Постоянный _uid каждой записи Истории. Пока личность записи считалась по
+// содержимому (товар|регион|название|дата), повторные нажатия «✓ Размещено» давали
+// записи-близнецы с ОДНИМ ключом на всех — и удаление пустого дубля уносило вместе
+// с ним полноценную запись с донесённым финалом, молча и мимо корзины. С постоянным
+// _uid близнецы развязаны: удаление одного не касается остальных. Запасной ключ по
+// содержимому остаётся в syncDbKeys — им опознаются копии, уехавшие на сервер до
+// миграции, иначе они вернулись бы отдельными строками-двойниками.
+try {
+  let migrated = 0;
+  for (const r of state.db || []) if (r && !r._uid) { r._ck0 = dbContentKey(r); r._uid = newUid(); migrated++; }
+  if (migrated) save();
+} catch(e) { console.error('migrate uid:', e); }
 
 render();
 

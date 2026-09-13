@@ -177,6 +177,27 @@ export async function runBackup(browser, base, t) {
     await ctx.close();
   }
 
+  // ── Замена базы, когда мигрировать нечего ───────────────
+  // Запись в хранилище уже несёт _uid, поэтому миграция при запуске ничего не
+  // сохраняет. Без отдельной пометки хранилища saveMerged считал бы прежнюю базу
+  // «чужой» и подливал бы её обратно — замена превращалась бы в слияние, а оба
+  // подтверждения («заменить» и «точно заменить») теряли бы смысл.
+  {
+    const { ctx, page } = await openApp(browser, base + '/avito-helper.html', {
+      storage: { avito_db: [{ id: 99, _uid: 'uOld', product: 'Старое', region: 'Омск' }], avito_refs: [] },
+    });
+    await importFile(page, 'v3.json', payload, [false, true, false]);
+    const r = await page.evaluate(() => ({
+      db: state.db.length,
+      stored: JSON.parse(localStorage.getItem('avito_db')).length,
+      oldGone: !state.db.some(x => x._uid === 'uOld'),
+    }));
+    t.eq('база заменена и без миграции', r.db, 1);
+    t.eq('в хранилище тоже одна запись', r.stored, 1);
+    t.ok('прежняя запись не подлита обратно', r.oldGone);
+    await ctx.close();
+  }
+
   // ── Коллизия id при слиянии двух устройств ──────────────
   // Запись с другого устройства может иметь тот же Date.now()-id. Удаление ищет
   // строго по id — без переименования одно нажатие × снесло бы обе записи.

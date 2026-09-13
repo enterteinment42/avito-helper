@@ -350,4 +350,223 @@ export async function runHistory(browser, base, t) {
     t.ok('консоль чистая', consoleErrors.length === 0, consoleErrors.join('\n'));
     await ctx.close();
   }
+
+  // ── Затирание из соседней вкладки ───────────────────────
+  // Живой дефект 12.09.2026: инструмент был открыт в двух вкладках, вкладка,
+  // пролежавшая три часа без дела, при первом же действии записала хранилище своим
+  // устаревшим снимком и снесла запись с донесённым финалом (Claude Pro | Пермь).
+  // Следа не осталось: её никто не удалял, надгробия нет. Теперь сырьё пишется
+  // слиянием — см. saveMerged.
+  {
+    const { ctx, page, consoleErrors } = await openApp(browser, base + '/avito-helper.html');
+    const r = await page.evaluate(async () => {
+      const out = {};
+      const mk = (uid, product, region) => ({ id: Date.now() - 100000, _uid: uid, product, region,
+        title: 'Заголовок ' + region, description: 'Бот', status: 'active', note: '', date: '12.09.2026' });
+
+      // Эта вкладка знает только про одну запись
+      state.db = [mk('uA', 'Claude Pro', 'Сыктывкар')];
+      save();
+
+      // Соседняя вкладка завела вторую запись и сама записала хранилище
+      const other = { ...mk('uB', 'Claude Pro', 'Пермь'), finalDesc: 'Финал из соседней вкладки', editShare: 0.54 };
+      localStorage.setItem('avito_db', JSON.stringify([...JSON.parse(localStorage.getItem('avito_db')), other]));
+
+      // ...а наша вкладка спустя время просто сохраняет своё состояние
+      save();
+      const stored = JSON.parse(localStorage.getItem('avito_db'));
+      out.stored = stored.length;
+      out.permAlive = stored.some(x => x.region === 'Пермь' && x.finalDesc === 'Финал из соседней вкладки');
+      out.inState = state.db.length;
+
+      // Но осознанно удалённое из хранилища не воскресает
+      const gone = mk('uC', 'EA Play', 'Казань');
+      syncTomb('db#uC', gone, 'db');
+      localStorage.setItem('avito_db', JSON.stringify([...JSON.parse(localStorage.getItem('avito_db')), gone]));
+      save();
+      out.tombKept = !JSON.parse(localStorage.getItem('avito_db')).some(x => x._uid === 'uC');
+      return out;
+    });
+
+    t.eq('запись соседней вкладки не затёрта', r.stored, 2);
+    t.ok('её финальный текст уцелел', r.permAlive);
+    t.eq('и подтянулся в память этой вкладки', r.inState, 2);
+    t.ok('осознанно удалённое обратно не всплывает', r.tombKept);
+    t.ok('консоль чистая', consoleErrors.length === 0, consoleErrors.join('\n'));
+    await ctx.close();
+  }
+
+  // ── Предохранитель на сырьё при слиянии ─────────────────
+  // Повторные нажатия «✓ Размещено» давали записи-близнецы с ОДНИМ ключом по
+  // содержимому. Удаление пустого дубля ставило надгробие на этот общий ключ, и
+  // слияние уносило вместе с ним полноценную запись с финалом — молча, мимо корзины.
+  {
+    const { ctx, page, consoleErrors } = await openApp(browser, base + '/avito-helper.html');
+    await stubNet(page);
+    const r = await page.evaluate(async () => {
+      const out = {};
+      const b = { product: "Marvel's Wolverine", region: 'Сыктывкар', title: 'Росомаха PS5',
+        description: 'Бот', status: 'active', note: '', date: '12.09.2026' };
+      state.db = [
+        { ...b, id: 1000, _uid: 'uFin', finalDesc: 'Финал, переписанный руками', editShare: 0.34 },
+        { ...b, id: 1001, _uid: 'uTwin' },   // пустой близнец: тот же товар, регион, название, дата
+      ];
+      // Человек удалил пустого близнеца. Плюс кладём надгробие по СОДЕРЖИМОМУ —
+      // такие остались в кладбище от прежней схемы ключей.
+      syncTomb('db#uTwin', state.db[1], 'db');
+      syncTomb(['db', b.product, b.region, b.title, b.date].join('|'), null, 'db');
+      window.__srv['voice'] = { updated: new Date().toISOString(),
+        data: { refs: [], favorites: [], db: [], deleted: syncTombs(), trash: [] } };
+      await syncPullVoice();
+      out.finalAlive = state.db.some(x => x._uid === 'uFin' && x.finalDesc);
+      out.twinGone   = !state.db.some(x => x._uid === 'uTwin');
+      return out;
+    });
+
+    t.ok('запись с донесённым финалом слияние не выбрасывает', r.finalAlive);
+    t.ok('а пустой удалённый близнец уходит', r.twinGone);
+    t.ok('консоль чистая', consoleErrors.length === 0, consoleErrors.join('\n'));
+    await ctx.close();
+  }
+
+  // ── Миграция старых записей на постоянный _uid ──────────
+  {
+    const { ctx, page, consoleErrors } = await openApp(browser, base + '/avito-helper.html');
+    await page.evaluate(() => {
+      // Две записи, заведённые до появления _uid: один товар, регион, название и дата
+      const old = (id, extra) => ({ id, product: 'Claude Pro', region: 'Сыктывкар', title: 'Старая запись',
+        description: 'Бот', status: 'active', note: '', date: '10.09.2026', ...extra });
+      localStorage.setItem('avito_db', JSON.stringify([old(111), old(222, { finalDesc: 'Финал руками', editShare: 0.85 })]));
+    });
+    await page.reload();
+    const m = await page.evaluate(() => ({
+      count: state.db.length,
+      allStamped: state.db.every(x => x._uid && x._ck0),
+      uids: new Set(state.db.map(x => x._uid)).size,
+      keysDiffer: SYNC_KIND.db.id(state.db[0])[0] !== SYNC_KIND.db.id(state.db[1])[0],
+      ckSame: state.db[0]._ck0 === state.db[1]._ck0,
+      finalKept: state.db.some(x => x.finalDesc === 'Финал руками'),
+    }));
+
+    t.eq('обе старые записи на месте', m.count, 2);
+    t.ok('каждая получила _uid и снимок прежнего ключа', m.allStamped);
+    t.eq('личности разные', m.uids, 2);
+    t.ok('ключи синхронизации у близнецов больше не совпадают', m.keysDiffer);
+    t.ok('но прежний общий ключ сохранён — по нему опознаются копии с сервера', m.ckSame);
+    t.ok('финал при миграции не пострадал', m.finalKept);
+    t.ok('консоль чистая', consoleErrors.length === 0, consoleErrors.join('\n'));
+    await ctx.close();
+  }
+
+  // ── Близнецы с разными _uid — РАЗНЫЕ записи ─────────────
+  // «Одно объявление в нескольких регионах» — штатный сценарий, и повторное
+  // «✓ Размещено» сознательно заводит вторую запись. Товар, регион, название и дата
+  // у неё могут совпасть до знака (дата с точностью до дня), поэтому сведение по
+  // содержимому молча теряло бы вторую, а её финал приписывало первой.
+  {
+    const { ctx, page, consoleErrors } = await openApp(browser, base + '/avito-helper.html');
+    await stubNet(page);
+    const r = await page.evaluate(async () => {
+      const out = {};
+      const twin = (uid, extra) => ({ id: uid === 'uOne' ? 5001 : 5002, _uid: uid,
+        product: 'PS Plus Extra', region: 'Киров', title: 'Один заголовок', description: 'Бот',
+        status: 'active', note: '', date: '12.09.2026', ...extra });
+
+      // Соседняя вкладка завела второго близнеца и записала хранилище
+      state.db = [twin('uOne')];
+      save();
+      localStorage.setItem('avito_db', JSON.stringify([...JSON.parse(localStorage.getItem('avito_db')),
+        twin('uTwo', { finalDesc: 'Финал ВТОРОЙ публикации' })]));
+      save();
+      const stored = JSON.parse(localStorage.getItem('avito_db'));
+      out.bothStored = stored.length === 2 && new Set(stored.map(x => x._uid)).size === 2;
+      out.firstClean = !stored.find(x => x._uid === 'uOne').finalDesc;
+      out.secondKeeps = stored.find(x => x._uid === 'uTwo')?.finalDesc === 'Финал ВТОРОЙ публикации';
+
+      // То же самое на слиянии с сервером: близнец оттуда не должен схлопнуться
+      state.db = [twin('uOne')];
+      window.__srv['voice'] = { updated: new Date().toISOString(),
+        data: { refs: [], favorites: [], db: [twin('uTwo', { finalDesc: 'Финал ВТОРОЙ публикации' })], deleted: [], trash: [] } };
+      await syncPullVoice();
+      out.pulledBoth = state.db.length === 2;
+      out.finalOnRight = !state.db.find(x => x._uid === 'uOne').finalDesc
+        && state.db.find(x => x._uid === 'uTwo')?.finalDesc === 'Финал ВТОРОЙ публикации';
+      out.idsDiffer = new Set(state.db.map(x => x.id)).size === 2;
+      return out;
+    });
+
+    t.ok('запись соседней вкладки не схлопнулась с близнецом', r.bothStored);
+    t.ok('финал второй публикации не приписан первой', r.firstClean);
+    t.ok('и остался при своей записи', r.secondKeeps);
+    t.ok('с сервера близнец приезжает отдельной записью', r.pulledBoth);
+    t.ok('финал достаётся именно своей записи', r.finalOnRight);
+    t.ok('id у них разные — удаление не снесёт обе', r.idsDiffer);
+    t.ok('консоль чистая', consoleErrors.length === 0, consoleErrors.join('\n'));
+    await ctx.close();
+  }
+
+  // ── Удаление уважается, замена базы — тоже ──────────────
+  {
+    const { ctx, page, consoleErrors } = await openApp(browser, base + '/avito-helper.html');
+    await stubNet(page);
+    const r = await page.evaluate(async () => {
+      const out = {};
+      const rec = { id: 6001, _uid: 'uDel', product: 'Claude Pro', region: 'Пермь', title: 'Заголовок',
+        description: 'Бот', status: 'active', note: '', date: '12.09.2026',
+        finalDesc: 'Финал, который человек всё же решил удалить', editShare: 0.5 };
+
+      // Человек удалил запись с финалом осознанно — с сервера она вернуться не должна,
+      // иначе строку невозможно убрать вовсе.
+      state.db = [];
+      syncTomb('db#uDel', rec, 'db');
+      window.__srv['voice'] = { updated: new Date().toISOString(),
+        data: { refs: [], favorites: [], db: [rec], deleted: syncTombs(), trash: [] } };
+      await syncPullVoice();
+      out.stayedDeleted = !state.db.some(x => x._uid === 'uDel');
+
+      // А из хранилища соседней вкладки — тоже не поднимается
+      localStorage.setItem('avito_db', JSON.stringify([rec]));
+      state.db = [];
+      save();
+      out.notRevivedFromStorage = !JSON.parse(localStorage.getItem('avito_db')).some(x => x._uid === 'uDel');
+      return out;
+    });
+
+    t.ok('осознанно удалённая запись с финалом не возвращается с сервера', r.stayedDeleted);
+    t.ok('и не поднимается из хранилища', r.notRevivedFromStorage);
+    t.ok('консоль чистая', consoleErrors.length === 0, consoleErrors.join('\n'));
+    await ctx.close();
+  }
+
+  // ── Удаление записи с финалом предупреждает ─────────────
+  {
+    const { ctx, page, consoleErrors } = await openApp(browser, base + '/avito-helper.html');
+    const r = await page.evaluate(() => {
+      const out = {};
+      const mk = extra => ({ id: 7, _uid: 'u7', product: 'PS Plus Extra', region: 'Киров', title: 'Заголовок',
+        description: 'Бот', status: 'active', note: '', date: '12.09.2026', ...extra });
+
+      state.db = [mk({ finalDesc: 'Финал, переписанный руками', editShare: 0.61 })];
+      state.tab = 'database'; render();
+      let asked = '';
+      window.confirm = msg => { asked = String(msg); return false; };
+      document.querySelector('[data-act="db-del"]').click();
+      out.warned = /ФИНАЛЬНЫЙ текст/.test(asked) && /61|знак/.test(asked);
+      out.refusalKeeps = state.db.length === 1;
+
+      // У записи без финала вопрос остаётся коротким
+      state.db = [mk({})];
+      render();
+      asked = '';
+      document.querySelector('[data-act="db-del"]').click();
+      out.plain = asked === 'Удалить запись?';
+      return out;
+    });
+
+    t.ok('удаление записи с финалом предупреждает о сырье', r.warned);
+    t.ok('отказ ничего не удаляет', r.refusalKeeps);
+    t.ok('у пустой записи вопрос прежний', r.plain);
+    t.ok('консоль чистая', consoleErrors.length === 0, consoleErrors.join('\n'));
+    await ctx.close();
+  }
 }
