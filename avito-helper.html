@@ -1099,6 +1099,113 @@ const STATUS_LABELS = { active:'Активно', paused:'Пауза', removed:'�
 const STATUS_CLS    = { active:'ok',      paused:'warn',  removed:'muted' };
 
 // ══════════════════════════════════════════
+// АККАУНТЫ И РОТАЦИЯ (История)
+// Объявление на Авито выдыхается: площадка опускает старое. Ротация — это не
+// новая генерация, а прокрутка уже работающего текста; см. rotPrompt().
+// ══════════════════════════════════════════
+
+const DEF_ACCOUNTS = [{ id: 'a1', name: 'Основной' }];
+
+// Список аккаунтов. Пустой или битый список в настройках не должен обезличивать
+// записи: тогда отдаём заводской, иначе accName() вернул бы «удалён» для всех.
+// Отсев ДО проверки длины: список из одних битых записей (импорт настроек,
+// правка localStorage руками) иначе давал пустой массив, и accList()[0].id
+// ронял и «✓ Размещено», и открытие панели ротации.
+function accList() {
+  const a = Array.isArray(state.settings?.accounts) ? state.settings.accounts : [];
+  const ok = a.filter(x => x && x.id);
+  return ok.length ? ok : DEF_ACCOUNTS;
+}
+function accFirstId() { return accList()[0].id; }
+// Аккаунт записи. У записей до этой версии поля нет — считаем их первым
+// аккаунтом (миграция проставит явно, но чтение не должно её дожидаться).
+function accOf(r) { return (r && r.account) || accFirstId(); }
+function accName(id) {
+  const a = accList().find(x => x.id === id);
+  return a ? a.name : (id ? 'удалён' : accList()[0].name);
+}
+// Существующий аккаунт или первый. Удалённый профиль мог остаться выбранным в
+// черновике формы — тогда селект показывает «Основной», а запись ушла бы с
+// меткой «удалён»: то есть форма обещала одно, а записала другое.
+function accPick(id) {
+  return id && accList().some(a => a.id === id) ? id : accFirstId();
+}
+// Аккаунт для новой записи из генератора. Спрашивать при каждом «✓ Размещено»
+// значит рвать темп сессии постинга, поэтому берём последний выбранный в форме
+// Истории (а изначально — первый): почти весь поток идёт с одного профиля.
+function accActive() {
+  return accPick(state.dbForm && state.dbForm.account);
+}
+
+// Дата публикации: обычно момент нажатия «✓ Размещено» (он же id записи), но
+// её можно поправить — отметить размещение задним числом или наоборот.
+function rotPostedAt(r) { return (r && Number(r.postedAt)) || (r && r.id) || 0; }
+function rotDaysFor(r) {
+  const own = r && Number(r.rotDays);
+  if (own > 0) return own;
+  const g = Number(state.settings?.rotDays);
+  return g > 0 ? g : DEF_SETTINGS.rotDays;
+}
+const DAY_MS = 86400000;
+function rotAgeDays(r, now = Date.now()) {
+  const at = rotPostedAt(r);
+  return at ? Math.floor((now - at) / DAY_MS) : 0;
+}
+// Ротация касается только живых объявлений: снятое и поставленное на паузу
+// обновлять незачем, а запись с rotOff владелец отметил как «не трогать».
+function rotWatched(r) { return !!r && r.status === 'active' && !r.rotOff; }
+function rotDue(r, now = Date.now()) {
+  return rotWatched(r) && rotAgeDays(r, now) >= rotDaysFor(r);
+}
+function rotDueList(now = Date.now()) { return (state.db || []).filter(r => rotDue(r, now)); }
+
+// Текст, который реально висит на Авито: донесённый финал важнее бот-версии —
+// крутить надо то, что опубликовано, иначе ротация вернёт правки владельца назад.
+function rotLiveText(r) {
+  return {
+    title: (r && (r.finalTitle || r.title)) || '',
+    desc:  (r && (r.finalDesc  || r.description)) || '',
+  };
+}
+
+// Дата публикации в поле <input type="date"> и обратно. Час берём полуденный:
+// полночь при отрицательном смещении пояса уезжает на сутки назад, и объявление
+// «старело» бы на день быстрее, чем висит на самом деле.
+function rotTsToInput(ts) {
+  if (!ts) return '';
+  const d = new Date(ts);
+  if (isNaN(d)) return '';
+  const p = n => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+function rotInputToTs(s) {
+  if (!s) return 0;
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(s).trim());
+  if (!m) return 0;
+  const d = new Date(+m[1], +m[2] - 1, +m[3], 12, 0, 0);
+  return isNaN(d) ? 0 : d.getTime();
+}
+
+// Положить текст объявления в эталоны. Повторный вызов с тем же текстом ничего
+// не делает: тот же текст двумя строками ушёл бы в промпт дважды и перевесил бы
+// остальной корпус — та же ошибка, что была с бот-близнецом из избранного.
+function addRefFromText(title, desc, source = 'mine', category = null) {
+  const t = (title || '').trim(), d = (desc || '').trim();
+  if (!t && !d) return false;
+  // Категорию задаёт человек (в форме Истории есть селект). Молчаливый фолбэк на
+  // текущую категорию генератора клал бы объявление второго аккаунта в чужой
+  // раздел корпуса — тихий перекос few-shot в самом невосполнимом.
+  const cat = category || 'other';
+  const same = (state.refs || []).some(r =>
+    (r.title || '').trim() === t && (r.desc || '').trim() === d);
+  if (same) return false;
+  state.refs.push({ id: Date.now(), source, category: cat, title: t, desc: d,
+                    date: new Date().toLocaleDateString('ru') });
+  jlog('reference_added', null, { source, category: cat, title: t, description: d, via: 'db' });
+  return true;
+}
+
+// ══════════════════════════════════════════
 // STATE
 // ══════════════════════════════════════════
 
@@ -1109,6 +1216,19 @@ const DEF_SETTINGS = {
   customSys: '',
   pageName:  'Страница 1',
   regions:   [...REGIONS],
+  // Ротация: через сколько дней объявление считается выдохшимся. Число общее, но
+  // у любой записи может быть своё (r.rotDays) или отключение вовсе (r.rotOff).
+  rotDays:   14,
+  // Аккаунты Авито — список, а не два зашитых: у владельца их два, но завтра
+  // может быть третий, а в экспортной сборке для чужой ниши — сколько угодно.
+  // ⚠️ Список отвязывается от заводского при инициализации state.settings —
+  // ls() сливает поверхностно, и без этого переименование правило бы сам
+  // DEF_SETTINGS (тогда syncSettingsWorth перестал бы отличать правку от дефолта).
+  accounts:  DEF_ACCOUNTS.map(a => ({ ...a })),
+  // Исключать ли прежние названия при ротации по ВСЕМ аккаунтам. По умолчанию нет:
+  // повтор названия запрещён внутри одного аккаунта, а между своими профилями
+  // владелец повторяет сознательно — мы только помечаем совпадение.
+  rotXAcc:   false,
 };
 
 const DEF_FORM = {
@@ -1154,6 +1274,10 @@ const state = {
   settings: (() => {
     const s = ls('avito_settings', DEF_SETTINGS);
     if (MODEL_MIGRATION[s.model]) s.model = MODEL_MIGRATION[s.model]; // перенос со снятых моделей
+    // Отвязываем список аккаунтов от заводского: ls() копирует только верхний
+    // уровень, поэтому у настроек старше этой версии s.accounts — ТОТ ЖЕ массив,
+    // что в DEF_SETTINGS, а переименование правит его по месту.
+    s.accounts = (Array.isArray(s.accounts) ? s.accounts : DEF_ACCOUNTS).map(a => ({ ...a }));
     return s;
   })(),
   form:     ls('avito_form',     DEF_FORM),
@@ -1184,13 +1308,24 @@ const state = {
   catDraft:   null,
   db:       ls('avito_db', []),
   refs:     ls('avito_refs', []), // эталоны: объявления без инструмента + чужие удачные (журнал самообучения)
-  dbForm:   { product: '', region: 'Москва', status: 'active', note: '' },
+  // Черновик формы Истории. Текст объявления тут нужен для записей, заведённых
+  // РУКАМИ (второй аккаунт, объявление правилось без генератора): без текста
+  // запись не участвует ни в проверке дублей, ни в ротации — то есть половина
+  // работы владельца оставалась бы вне учёта.
+  dbForm:   { product: '', region: 'Москва', status: 'active', note: '',
+              account: '', title: '', desc: '', toRefs: true, postedAt: '', refCat: '' },
   // Черновик эталона живёт в state, а не только в DOM: карточка эталонов лежит внутри
   // вкладки Истории, а та перерисовывается целиком на КАЖДЫЙ символ в фильтре по товару
   // (и на добавление/удаление записи) — вставленный длинный текст иначе молча пропадал.
   refForm:  { source: 'mine', category: 'gaming_sub', title: '', desc: '' },
   dbEditId: null,
-  dbFilter: { product: '', status: '' },
+  dbFilter: { product: '', status: '', account: '', due: false },
+  // Ротация: замок по записи (вкладка Истории перерисовывается целиком, общий
+  // флаг гасил бы чужие строки) и последний результат — он живёт в state, потому
+  // что фильтр по товару перерисовывает вкладку на каждый символ.
+  rotBusy:  new Set(),
+  rotResult: null,   // { recId, mode, title, desc, dupAcc }
+  rotPanel: null,    // id записи, у которой открыта панель ротации
   conveyorMode: false,
   conveyorIdx: 0,
   batchMode: false,
@@ -1728,7 +1863,22 @@ async function syncPullVoice() {
     const localDb = syncMatcher(state.db, SYNC_KIND.db);
     for (const inc of arr(d.db)) {
       const local = localDb.find(inc);
-      if (!local || !inc.finalDesc || local.finalDesc) continue;
+      if (!local) continue;
+      // Поля учёта (аккаунт, дата публикации, свой срок ротации) подтягиваем в
+      // уже известную запись, если локально их ещё нет: устройство, где запись
+      // завели раньше этой версии, иначе навсегда осталось бы без них.
+      // У аккаунта «нет» значит «не выбирали руками» (метка _accAuto от миграции):
+      // после неё поле заполнено у всех записей, и проверка на пустоту не сработала
+      // бы никогда — публикация со второго профиля осталась бы на первом навсегда.
+      if (inc.account && !inc._accAuto && (!local.account || local._accAuto) && local.account !== inc.account) {
+        local.account = inc.account; delete local._accAuto; finalsMerged++;
+      }
+      if (!local.postedAt && inc.postedAt) { local.postedAt = inc.postedAt; finalsMerged++; }
+      // «Своего срока нет» и «срок сняли» — разные вещи: снятие пишет 0/false, и
+      // тогда входящее старое значение уже не воскресит выключенную ротацию.
+      if (local.rotDays == null && inc.rotDays != null) { local.rotDays = inc.rotDays; finalsMerged++; }
+      if (local.rotOff == null && inc.rotOff != null) { local.rotOff = inc.rotOff; finalsMerged++; }
+      if (!inc.finalDesc || local.finalDesc) continue;
       local.finalTitle = inc.finalTitle; local.finalDesc = inc.finalDesc;
       local.editShare = inc.editShare;
       if (!local._category && inc._category) local._category = inc._category;
@@ -2067,6 +2217,7 @@ const J_UI_ACTS = new Set([
   'cv-download','cv-gen-vars','cv-gen-collage-vars','cv-dl-all-game','cv-dl-all-collage',
   'cv-igdb-fetch','cv-igdb-game-fetch','cv-mask-toggle','cv-to-toggle','cv-ig-toggle','cv-ig-fill',
   'db-export','db-add','db-final','ref-add','ref-tricks','ref-preview','ref-voice','conv-photo',
+  'db-rotate','db-rot-panel','db-rot-posted','db-show-due',
   'vision-recognize','vision-price','vision-apply-price','vision-covers','vision-undo','vision-pick',
   'staged-gen','staged-covers','staged-download','staged-scene','staged-quality',
 ]);
@@ -2083,6 +2234,13 @@ function jActBusy(act, el) {
         const fid = el && el.getAttribute('data-fid');
         const vid = el && el.getAttribute('data-vid');
         return state.rephBusy.has(fid ? `reph-f${fid}` : `reph-${vid}`);
+      }
+      case 'db-rotate': {
+        // Замок ротации — по паре «запись + степень»: панель остаётся на экране,
+        // и нетерпеливый второй тап иначе оплатился бы дважды.
+        const id = el && el.getAttribute('data-id');
+        const md = (el && el.getAttribute('data-mode')) === 'mid' ? 'mid' : 'light';
+        return state.rotBusy.has(`${id}:${md}`);
       }
       case 'gen': case 'gen-titles': case 'titles-next':  return state.loading;
       case 'gen-more':                                    return state.loading || state.extraLoading;
@@ -2111,6 +2269,17 @@ function jCopied(el) {
       // Перефраз живёт только в DOM-боксе, в state его нет
       v = document.getElementById(el.dataset.jreph)?._rephResult || null;
       extra.fromRephrase = true;
+    } else if (el.dataset.jrot !== undefined) {
+      // Ротация: текста нет ни в results, ни в избранном — он живёт в state.rotResult
+      // до размещения. Без этой ветки копия уходила бы в журнал обезличенной
+      // (chain/product/category = null), а `copied` — главный сигнал выбора.
+      const rec = state.db.find(r => r.id === +el.dataset.jrot);
+      const res = state.rotResult;
+      if (rec && res && res.recId === rec.id && !res.error) {
+        v = { title: res.title, description: res.desc, _chain: rec._chain || null,
+              _product: rec.product || null, _category: rec._category || null, _scan: res.scan };
+        extra.fromRotate = res.mode;
+      }
     } else if (el.dataset.jfid !== undefined) {
       v = state.favorites.find(f => f._fid === +el.dataset.jfid);
       extra.fromFav = true; // копия из избранного — не из свежего набора
@@ -3333,6 +3502,136 @@ ${v.description}
     box.innerHTML = `<div style="padding:8px 12px;color:var(--err);font-size:13px">✗ ${esc(e.message)}</div>`;
   } finally {
     state.rephBusy.delete(boxId); // и при ошибке тоже — иначе кнопка залипнет навсегда
+  }
+}
+
+// ══════════════════════════════════════════
+// РОТАЦИЯ ОБЪЯВЛЕНИЯ (История)
+// Третья, самая слабая степень переписывания — между «ничего» и «↺ Перефраз».
+// Объявление работает, просто выдохлось по возрасту: скелет и факты остаются,
+// прокручиваются только формы написания, порядок и заголовок. Перефраз (mid)
+// наоборот требует СТРУКТУРНО другого текста — поэтому это два разных промпта,
+// а не один с процентом.
+// ══════════════════════════════════════════
+
+// Названия, которые уже заняты и повториться не должны. Внутри одного аккаунта
+// повтор — прямой путь к бану за дубли; между своими профилями владелец
+// повторяет сознательно, поэтому по умолчанию чужой аккаунт только помечается
+// (см. rotXAcc и dupAcc в doRotate).
+function rotUsedTitles(rec, crossAcc = false) {
+  const prod = (rec.product || '').trim().toLowerCase();
+  const acc  = accOf(rec);
+  const out = [];
+  for (const r of state.db || []) {
+    if ((r.product || '').trim().toLowerCase() !== prod) continue;
+    if (!crossAcc && accOf(r) !== acc) continue;
+    for (const t of [r.finalTitle, r.title]) if (t && !out.includes(t)) out.push(t);
+  }
+  return out;
+}
+
+function rotPrompt(mode, live, used) {
+  const exclude = used.length
+    ? `\n\nЭТИ НАЗВАНИЯ УЖЕ ЗАНЯТЫ — повторять их ЗАПРЕЩЕНО (дубль на площадке):\n${used.map(t => `- ${t}`).join('\n')}`
+    : '';
+  if (mode === 'mid') {
+    return `Перепиши это объявление для Авито СТРУКТУРНО ДРУГИМ — как будто писал другой продавец:
+- Другой порядок блоков описания
+- Другой крючок в названии
+- Другая подача цены (была помесячная — сделай общую, и наоборот); для игры цену в описании не упоминать
+- Другой тон (деловой ↔ живой)
+- Факты (что входит, сроки, состояние, комплектация) НЕ менять и НЕ выдумывать
+- Название строго до 50 символов
+
+Исходное название: «${live.title}»
+Исходное описание:
+${live.desc}${exclude}
+
+Верни ОДИН вариант в JSON:
+{"variants": [{"id": 1, "title": "...", "title_length": 0, "description": "...", "style": "...", "price_format": "...", "hook": "...", "structure": "..."}]}`;
+  }
+  return `Это объявление уже висит на Авито и работает. Его надо ПРОКРУТИТЬ против дублей, а не переписать: тот же текст, но узнаваемо другой для площадки.
+
+ЧТО МЕНЯТЬ (примерно треть слов, не больше):
+- Название — новое, по-другому собранное: другой крючок или другая форма написания товара
+- Формы написания в теле: «Red Dead Redemption 2» ↔ «RDR 2» ↔ «рдр2», «PS+ Extra» ↔ «ПС Плюс Экстра», «PS4/PS5» ↔ «пс4 пс5»
+- Порядок перечислений: список игр, фич, преимуществ — переставить, часть заменить синонимичными формами
+- Эмодзи: другой набор и другая плотность
+- Две-три фразы сказать другими словами
+
+ЧТО ОСТАВИТЬ КАК ЕСТЬ:
+- Структуру: порядок блоков, где что стоит
+- Все факты: цены, сроки, состояние, комплектацию, платформы, гарантию
+- Тон и длину: не делай текст длиннее или рекламнее исходного
+- Обязательные фразы, если они есть в исходнике
+- Личные куски продавца (почему обращаться к нему, чем он отличается) — их можно слегка переформулировать, но НЕ выбрасывать и не заменять своими
+
+Название строго до 50 символов.
+
+Исходное название: «${live.title}»
+Исходное описание:
+${live.desc}${exclude}
+
+Верни ОДИН вариант в JSON:
+{"variants": [{"id": 1, "title": "...", "title_length": 0, "description": "...", "style": "...", "price_format": "...", "hook": "...", "structure": "..."}]}`;
+}
+
+async function doRotate(recId, mode) {
+  const busyKey = `${recId}:${mode}`;
+  if (state.rotBusy.has(busyKey)) return;
+  const rec = (state.db || []).find(r => r.id === recId);
+  if (!rec) return;
+
+  const live = rotLiveText(rec);
+  // Запись без текста ротировать нечего — так выглядят строки, заведённые до
+  // появления текстовых полей, и ручные записи, внесённые без объявления.
+  if (!live.title && !live.desc) {
+    toast('В записи нет текста объявления — внесите его кнопкой ✎');
+    return;
+  }
+
+  state.rotBusy.add(busyKey);
+  state.rotResult = null;
+  state.rotPanel = recId;
+  renderDb();
+
+  try {
+    const crossAcc = !!state.settings.rotXAcc;
+    const used = rotUsedTitles(rec, crossAcc);
+    let truncated = false;
+    const text = await callAI([{ role: 'user', content: rotPrompt(mode, live, used) }], {
+      category: rec._category || state.form.category,
+      max_tokens: genTokens(1), onTruncated: () => { truncated = true; },
+    });
+    const [nv] = parseVariants(text);
+    if (!nv) throw new Error('Пустой ответ от AI');
+
+    // Совпадение с названием на ДРУГОМ аккаунте не запрещено (решение владельца),
+    // но показать его надо: два своих профиля площадка может связать.
+    const otherAcc = crossAcc ? [] : rotUsedTitles(rec, true).filter(t => !used.includes(t));
+    const dupAcc = !!(nv.title && otherAcc.includes(nv.title));
+
+    state.rotResult = {
+      recId, mode, title: nv.title || '', desc: nv.description || '', dupAcc,
+      scan: checkAds(nv.title || '', nv.description || '', rec._category || state.form.category),
+    };
+    jlog('generated', rec._chain || null, {
+      path: mode === 'mid' ? 'rotate_mid' : 'rotate',
+      product: rec.product || null, category: rec._category || null,
+      baseTitle: live.title, excluded: used.length,
+      variants: [{ title: nv.title || '', description: nv.description || '' }],
+      ...(truncated ? { truncated: true } : {}),
+    });
+    jlog('rotate', rec._chain || null, {
+      mode, product: rec.product || null, region: rec.region || null,
+      account: accOf(rec), ageDays: rotAgeDays(rec), fromFinal: !!rec.finalDesc,
+    });
+  } catch(e) {
+    state.rotResult = { recId, mode, error: String(e.message || e).slice(0, 300) };
+    jlog('error', null, { stage: 'rotate', message: String(e.message || '').slice(0, 300) });
+  } finally {
+    state.rotBusy.delete(busyKey);
+    renderDb();
   }
 }
 
@@ -5150,7 +5449,39 @@ function settingsTabHTML() {
         <div>
           <button class="btn-gen" id="page-name-save" style="width:auto;padding:9px 22px">Сохранить</button>
         </div>
-        <div style="font-size:12px;color:var(--muted)">Отображается в шапке базы. При работе с двух аккаунтов — у каждого браузерного профиля своё название.</div>
+        <div style="font-size:12px;color:var(--muted)">Отображается в шапке базы.</div>
+      </div>
+    </div>
+    <div class="card" style="margin-bottom:16px">
+      <div class="card-title">Аккаунты Авито и ротация</div>
+      <div class="form-body">
+        <div style="font-size:12px;color:var(--muted);margin-bottom:4px">
+          Объявления в Истории помечаются аккаунтом — так учитываются размещения со всех профилей, включая те, что ты делаешь без генератора.
+          Эталоны, избранное, категории и каталоги у аккаунтов ОБЩИЕ.
+        </div>
+        <div style="display:flex;flex-direction:column;gap:7px">
+          ${accList().map((a, i) => {
+            const cnt = (state.db || []).filter(r => accOf(r) === a.id).length;
+            return `<div style="display:flex;gap:8px;align-items:center">
+              <input type="text" value="${esc(a.name)}" data-acc-name="${esc(a.id)}" placeholder="Название аккаунта" style="max-width:260px">
+              <span style="font-size:12px;color:var(--muted);white-space:nowrap">${cnt} объявл.</span>
+              <div style="flex:1"></div>
+              ${accList().length > 1 ? `<button class="btn-icon" data-act="acc-del" data-id="${esc(a.id)}" title="Удалить аккаунт" style="color:var(--warn)">×</button>` : ''}
+            </div>`;
+          }).join('')}
+        </div>
+        <div><button class="btn-add" data-act="acc-add">+ Аккаунт</button></div>
+        <hr class="div">
+        <div class="field" style="max-width:320px">
+          <label>Напоминать о ротации через, дней</label>
+          <input type="number" min="1" max="365" id="rot-days" value="${esc(String(state.settings.rotDays || DEF_SETTINGS.rotDays))}">
+        </div>
+        <div style="font-size:12px;color:var(--muted)">Общий порог. У отдельной записи можно задать свой срок или выключить ротацию — в её панели 🔁.</div>
+        <label style="display:flex;gap:7px;align-items:center;font-size:13px;cursor:pointer">
+          <input type="checkbox" id="rot-xacc"${state.settings.rotXAcc ? ' checked' : ''}>
+          <span>Не повторять названия и между аккаунтами</span>
+        </label>
+        <div style="font-size:12px;color:var(--muted)">Внутри одного аккаунта повтор названия запрещён всегда — это дубль. Между своими профилями по умолчанию разрешён, совпадение просто помечается при ротации.</div>
       </div>
     </div>
     <div class="card" style="margin-bottom:16px">
@@ -5485,6 +5816,25 @@ function bindSettingsTab() {
     const val = (document.getElementById('page-name')?.value || '').trim() || 'Страница 1';
     state.settings.pageName = val; save();
     toast('Название сохранено');
+  });
+  // Аккаунты: переименование сохраняется по месту, id не меняется — иначе записи
+  // Истории остались бы привязаны к несуществующему аккаунту.
+  document.querySelectorAll('[data-acc-name]').forEach(inp => {
+    inp.addEventListener('change', e => {
+      const id = e.target.dataset.accName;
+      const a = (state.settings.accounts || []).find(x => x.id === id);
+      if (!a) return;
+      a.name = (e.target.value || '').trim() || a.id;
+      save(); render();
+    });
+  });
+  document.getElementById('rot-days')?.addEventListener('change', e => {
+    const v = parseInt(e.target.value, 10);
+    state.settings.rotDays = v > 0 ? v : DEF_SETTINGS.rotDays;
+    save(); toast(`Порог ротации: ${state.settings.rotDays} дн`);
+  });
+  document.getElementById('rot-xacc')?.addEventListener('change', e => {
+    state.settings.rotXAcc = e.target.checked; save();
   });
   document.getElementById('cat-sub-sel')?.addEventListener('change', e => {
     state.catEditSub = e.target.value; render();
@@ -7515,31 +7865,134 @@ function dbHintHTML(product) {
   return `<span class="used">Уже: ${used.join(', ')}</span> &middot; <span class="free">Свободны: ${freeCount}</span>`;
 }
 
+// Сводка «пора обновить» — над формой, чтобы попадаться на глаза при заходе в
+// Историю. Пустая (ничего не выдохлось) не рисуется вовсе: постоянная плашка с
+// нулём быстро перестаёт читаться.
+function dueCardHTML(due, now) {
+  if (!due.length) return '';
+  const accs = accList();
+  const byAcc = accs.length > 1
+    ? accs.map(a => { const n = due.filter(r => accOf(r) === a.id).length; return n ? `${esc(a.name)}: ${n}` : ''; }).filter(Boolean).join(' · ')
+    : '';
+  const oldest = due.reduce((m, r) => Math.max(m, rotAgeDays(r, now)), 0);
+  return `<div class="card" style="margin-bottom:16px;border-color:var(--warn)">
+    <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+      <span style="font-size:15px;font-weight:600">🔁 Пора обновить: ${due.length}</span>
+      <span style="font-size:12px;color:var(--muted)">самое старое висит ${oldest} дн${byAcc ? ' · ' + byAcc : ''}</span>
+      <div style="flex:1"></div>
+      <button class="btn-sm" data-act="db-show-due">Показать только их</button>
+    </div>
+    <div style="font-size:12px;color:var(--muted);margin-top:8px">Порог — ${state.settings.rotDays || DEF_SETTINGS.rotDays} дн (меняется в ⚙ Настройках; у отдельной записи можно задать свой или выключить ротацию).</div>
+  </div>`;
+}
+
+// Панель ротации под строкой Истории: срок, две степени переписывания и результат.
+function rotPanelHTML(r, now) {
+  const live = rotLiveText(r);
+  const res  = state.rotResult && state.rotResult.recId === r.id ? state.rotResult : null;
+  const busyLight = state.rotBusy.has(`${r.id}:light`);
+  const busyMid   = state.rotBusy.has(`${r.id}:mid`);
+  const busy = busyLight || busyMid;
+  const noText = !live.title && !live.desc;
+
+  const resHTML = () => {
+    if (busy) return `<div style="padding:10px 2px;color:var(--muted);font-size:13px">⏳ ${busyMid ? 'Переписываю' : 'Прокручиваю'}…</div>`;
+    if (!res) return '';
+    if (res.error) return `<div style="padding:8px 2px;color:var(--err);font-size:13px">✗ ${esc(res.error)}</div>`;
+    const len = [...(res.title || '')].length;
+    const tAttr = (res.title || '').replace(/&/g,'&amp;').replace(/"/g, '&quot;');
+    const dAttr = (res.desc  || '').replace(/&/g,'&amp;').replace(/"/g, '&quot;').replace(/\n/g, '&#10;');
+    return `<div style="border:1px solid var(--border2);border-radius:10px;padding:12px;margin-top:10px;background:var(--card2)">
+      <div style="font-size:11px;color:var(--teal-h);font-weight:600;margin-bottom:8px;letter-spacing:.3px">${res.mode === 'mid' ? '↺ ПЕРЕФРАЗ' : '🔁 РОТАЦИЯ'} ${scanBadgeHTML({ _scan: res.scan })}</div>
+      ${res.dupAcc ? `<div style="font-size:12px;color:var(--accent-h);margin-bottom:8px">⚠️ Такое название уже стоит на другом твоём аккаунте — внутри одного профиля это был бы дубль, между профилями решай сам.</div>` : ''}
+      <div style="display:flex;align-items:baseline;gap:8px;margin-bottom:6px">
+        <span style="font-size:14px;font-weight:600">${esc(res.title || '')}</span>
+        ${tlenHTML(len)}
+      </div>
+      <div style="font-size:13px;color:var(--text2);white-space:pre-wrap;margin:8px 0">${esc(res.desc || '')}</div>
+      <div class="copy-row">
+        <button class="btn-copy" data-act="copy" data-text="${tAttr}" data-j="title" data-jrot="${r.id}">📋 Название</button>
+        <button class="btn-copy" data-act="copy" data-text="${dAttr}" data-j="desc" data-jrot="${r.id}">📋 Описание</button>
+        <button class="btn-copy" data-act="copy-both" data-t="${tAttr}" data-d="${dAttr}" data-j="both" data-jrot="${r.id}">📋 Всё</button>
+        <button class="btn-copy" data-act="db-rot-posted" data-id="${r.id}" style="color:var(--ok)">✓ Разместил</button>
+      </div>
+      <div style="font-size:11px;color:var(--muted);margin-top:8px">«✓ Разместил» заведёт новую запись с этим текстом, а эту переведёт в «Снято». Прежний текст останется в ней.</div>
+    </div>`;
+  };
+
+  return `<div style="border:1px solid var(--border2);border-radius:10px;padding:12px;background:var(--card)">
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+      <button class="btn-sm" data-act="db-rotate" data-id="${r.id}" data-mode="light"${busy || noText ? ' disabled' : ''}
+        title="Тот же текст, прокручены формы написания, порядок и эмодзи; заголовок новый">🔁 Лёгкая</button>
+      <button class="btn-sm" data-act="db-rotate" data-id="${r.id}" data-mode="mid"${busy || noText ? ' disabled' : ''}
+        title="Структурно другое объявление: другой порядок блоков, тон и подача цены. Факты сохраняются">↺ Средняя</button>
+      <div style="flex:1"></div>
+      <label style="display:flex;gap:6px;align-items:center;font-size:12px;color:var(--muted);white-space:nowrap">
+        напомнить через
+        <input type="number" min="1" max="365" value="${r.rotDays || ''}" placeholder="${state.settings.rotDays || DEF_SETTINGS.rotDays}"
+          data-rot-days="${r.id}" style="width:64px;padding:3px 6px" title="Свой срок для этой записи. Пусто — общий из настроек">
+        дн
+      </label>
+      <label style="display:flex;gap:6px;align-items:center;font-size:12px;color:var(--muted);cursor:pointer;white-space:nowrap">
+        <input type="checkbox" data-rot-off="${r.id}"${r.rotOff ? ' checked' : ''}>
+        не ротировать
+      </label>
+      <button class="btn-icon" data-act="db-rot-close" title="Закрыть">×</button>
+    </div>
+    ${noText
+      ? `<div style="font-size:12px;color:var(--muted);margin-top:10px">В записи нет текста объявления — внесите его кнопкой ✎, и ротация заработает.</div>`
+      : `<div style="font-size:11px;color:var(--muted);margin-top:8px">Крутим ${r.finalDesc ? '<b>финальный текст с Авито</b>' : 'текст из записи'} · висит ${rotAgeDays(r, now)} дн · исключаем ${rotUsedTitles(r, !!state.settings.rotXAcc).length} прежних назв.</div>`}
+    ${resHTML()}
+  </div>`;
+}
+
 function dbTabHTML() {
   const f       = state.dbForm;
   const isEdit  = state.dbEditId !== null;
   const fProd   = state.dbFilter.product.toLowerCase();
   const fStatus = state.dbFilter.status;
+  const fAcc    = state.dbFilter.account;
+  const fDue    = !!state.dbFilter.due;
+  const now     = Date.now();
+  const accs    = accList();
+  const multiAcc = accs.length > 1;
   const filtered = state.db.filter(r => {
     if (fProd   && !r.product.toLowerCase().includes(fProd)) return false;
     if (fStatus && r.status !== fStatus) return false;
+    if (fAcc    && accOf(r) !== fAcc) return false;
+    if (fDue    && !rotDue(r, now)) return false;
     return true;
   });
   const rows  = [...filtered].sort((a, b) => b.id - a.id);
   const prods = dbUniqueProducts();
+  const due   = rotDueList(now);
+
+  // Возраст объявления: пока ротация не нужна — тихая серая подпись, после
+  // порога — заметная. Числа в подсказке, чтобы строка не разрасталась.
+  const ageHTML = r => {
+    if (!rotWatched(r)) return '';
+    const age = rotAgeDays(r, now), lim = rotDaysFor(r), left = lim - age;
+    const cls = left <= 0 ? 'color:var(--warn);font-weight:600' : left <= 2 ? 'color:var(--accent-h)' : 'color:var(--muted)';
+    const tip = left <= 0
+      ? `Висит ${age} дн при пороге ${lim} — пора обновить`
+      : `Висит ${age} дн, напомню через ${left}`;
+    return ` <span style="${cls};font-size:11px;white-space:nowrap" title="${esc(tip)}">🔁 ${age}д</span>`;
+  };
 
   const rowHTML = r => `<tr data-db-id="${r.id}"${state.dbEditId === r.id ? ' class="db-row-edit"' : ''}>
-    <td class="db-product">${esc(r.product)}${r.title ? ` <span title="${esc(r.title + '\n\n' + (r.description||''))}" style="cursor:help;color:var(--teal-h)">📝</span>` : ''}</td>
+    <td class="db-product">${esc(r.product)}${r.title || r.description ? ` <span title="${esc((r.title || '') + '\n\n' + (r.description||''))}" style="cursor:help;color:var(--teal-h)">📝</span>` : ''}${ageHTML(r)}</td>
     <td>${esc(r.region)}</td>
+    ${multiAcc ? `<td style="font-size:12px;color:var(--muted);white-space:nowrap">${esc(accName(accOf(r)))}</td>` : ''}
     <td><span class="status-badge ${STATUS_CLS[r.status] || 'muted'}">${STATUS_LABELS[r.status] || r.status}</span></td>
     <td class="db-note" title="${esc(r.note || '')}">${esc(r.note || '—')}</td>
-    <td style="color:var(--muted);font-size:12px;white-space:nowrap;font-family:var(--fm)">${new Date(r.id).toLocaleDateString('ru-RU',{day:'2-digit',month:'2-digit',year:'2-digit'})}</td>
+    <td style="color:var(--muted);font-size:12px;white-space:nowrap;font-family:var(--fm)">${new Date(rotPostedAt(r)).toLocaleDateString('ru-RU',{day:'2-digit',month:'2-digit',year:'2-digit'})}</td>
     <td style="white-space:nowrap">
+      <button class="btn-sm" data-act="db-rot-panel" data-id="${r.id}" title="Ротация: прокрутить текст против дублей" style="margin-right:4px;${rotDue(r, now) ? 'color:var(--warn);border-color:var(--warn)' : ''}">🔁</button>
       ${(r.title || r.description) ? `<button class="btn-sm" data-act="db-final" data-id="${r.id}" title="${r.editShare != null ? `Финал сохранён — изменено ~${Math.round(r.editShare*100)}% описания. Обновить?` : 'Вставить финальный текст, как он ушёл на Авито (для журнала самообучения)'}" style="margin-right:4px;${r.editShare != null ? 'color:var(--ok);border-color:var(--ok)' : ''}">${r.editShare != null ? `✓ ${Math.round(r.editShare*100)}%` : '📥 финал'}</button>` : ''}
       <button class="btn-sm" data-act="db-edit" data-id="${r.id}" title="Редактировать">✎</button>
       <button class="btn-sm" data-act="db-del"  data-id="${r.id}" title="Удалить" style="margin-left:4px">×</button>
     </td>
-  </tr>`;
+  </tr>${state.rotPanel === r.id ? `<tr><td colspan="${multiAcc ? 7 : 6}" style="padding:0 10px 12px">${rotPanelHTML(r, now)}</td></tr>` : ''}`;
 
   return `<div class="db-wrap">
     <div class="db-toolbar">
@@ -7552,7 +8005,9 @@ function dbTabHTML() {
       💾 <b>Бэкап</b> сохраняет всё накопленное: историю, эталоны (${(state.refs || []).length}), избранное (${(state.favorites || []).length}), пресеты, очередь и настройки с категориями.
       Всё это живёт только в этом браузере — чистка данных сайта стирает его целиком, а на другом устройстве его нет. Делай бэкап после каждой большой порции сырья и держи файл вне компьютера (облако/почта). Токен в файл не попадает.
     </div>
-    <div style="font-size:12px;color:var(--muted);margin:-8px 0 14px">📝 = сохранён текст объявления — участвует в проверке на дубли (кнопка 🔎 Дубли). Заполняется автоматически кнопками «✓ Размещено» и «✓ Готово» в сессии постинга.</div>
+    <div style="font-size:12px;color:var(--muted);margin:-8px 0 14px">📝 = сохранён текст объявления — участвует в проверке на дубли (кнопка 🔎 Дубли) и в ротации. Заполняется кнопками «✓ Размещено» и «✓ Готово», а для объявлений, размещённых без генератора, — полем «Текст объявления» ниже.</div>
+
+    ${dueCardHTML(due, now)}
 
     <div class="card" style="margin-bottom:16px">
       <div class="card-title">${isEdit ? '✎ Редактировать запись' : '+ Добавить объявление'}</div>
@@ -7568,17 +8023,56 @@ function dbTabHTML() {
           <input type="text" id="db-f-region" value="${esc(f.region)}" placeholder="Москва" list="db-reg-list">
           <datalist id="db-reg-list">${(state.settings.regions || REGIONS).map(r => `<option value="${r}">`).join('')}</datalist>
         </div>
+        ${multiAcc ? `<div class="field" style="min-width:150px">
+          <label>Аккаунт</label>
+          <select id="db-f-account">
+            ${accs.map(a => `<option value="${esc(a.id)}"${(f.account || accFirstId()) === a.id ? ' selected' : ''}>${esc(a.name)}</option>`).join('')}
+          </select>
+        </div>` : ''}
         <div class="field" style="min-width:130px">
           <label>Статус</label>
           <select id="db-f-status">
             ${Object.entries(STATUS_LABELS).map(([v,l]) => `<option value="${v}"${f.status === v ? ' selected' : ''}>${l}</option>`).join('')}
           </select>
         </div>
+        <div class="field" style="min-width:150px">
+          <label>Дата публикации</label>
+          <input type="date" id="db-f-posted" value="${esc(f.postedAt || '')}">
+        </div>
         <div class="field" style="flex:3;min-width:200px">
           <label>Заметка (необязательно)</label>
           <input type="text" id="db-f-note" value="${esc(f.note)}" placeholder="Вариант 2, коллаж 3, цена снижена…">
         </div>
       </div>
+
+      <details class="db-text-block"${(f.title || f.desc) ? ' open' : ''} style="margin-top:10px">
+        <summary style="cursor:pointer;font-size:13px;color:var(--teal-h);user-select:none">📝 Текст объявления${(f.title || f.desc) ? '' : ' (для размещённых без генератора)'}</summary>
+        <div style="margin-top:10px">
+          <div class="field">
+            <label>Название <span class="tlen ${[...(f.title||'')].length > 50 ? 'over' : [...(f.title||'')].length >= 45 ? 'warn' : 'ok'}">${[...(f.title||'')].length}/50</span></label>
+            <input type="text" id="db-f-title" value="${esc(f.title)}" placeholder="Как объявление называется на Авито">
+          </div>
+          <div class="field" style="margin-top:8px">
+            <label>Описание</label>
+            <textarea id="db-f-desc" rows="5" placeholder="Текст объявления целиком — как он висит на Авито">${esc(f.desc)}</textarea>
+          </div>
+          <div style="display:flex;gap:12px;align-items:flex-end;flex-wrap:wrap;margin-top:8px">
+            <label style="display:flex;gap:7px;align-items:center;font-size:13px;cursor:pointer">
+              <input type="checkbox" id="db-f-torefs"${f.toRefs ? ' checked' : ''}>
+              <span>✍ Заодно положить в эталоны — это твой текст, он учит генератор твоему голосу</span>
+            </label>
+            <div class="field" style="min-width:170px;margin:0">
+              <label>Категория эталона</label>
+              <select id="db-f-refcat">
+                ${CATS.map(c => `<option value="${esc(c.id)}"${(f.refCat || state.form.category) === c.id ? ' selected' : ''}>${esc(c.label)}</option>`).join('')}
+                <option value="other"${f.refCat === 'other' ? ' selected' : ''}>Другое</option>
+              </select>
+            </div>
+          </div>
+          <div style="font-size:11px;color:var(--muted);margin-top:6px">У записи Истории категории нет, а эталону она нужна: по ней подбираются примеры твоего голоса. По умолчанию — та, что выбрана в генераторе; поправь, если объявление из другой.</div>
+        </div>
+      </details>
+
       <div style="display:flex;gap:8px;margin-top:12px;align-items:center">
         <button class="btn-gen" data-act="${isEdit ? 'db-save' : 'db-add'}" style="width:auto;padding:9px 22px">
           ${isEdit ? '✓ Сохранить' : '+ Добавить'}
@@ -7593,6 +8087,14 @@ function dbTabHTML() {
         <option value=""${!fStatus ? ' selected' : ''}>Все статусы</option>
         ${Object.entries(STATUS_LABELS).map(([v,l]) => `<option value="${v}"${fStatus === v ? ' selected' : ''}>${l}</option>`).join('')}
       </select>
+      ${multiAcc ? `<select id="db-filter-account">
+        <option value=""${!fAcc ? ' selected' : ''}>Все аккаунты</option>
+        ${accs.map(a => `<option value="${esc(a.id)}"${fAcc === a.id ? ' selected' : ''}>${esc(a.name)}</option>`).join('')}
+      </select>` : ''}
+      <label style="display:flex;gap:6px;align-items:center;font-size:13px;cursor:pointer;white-space:nowrap">
+        <input type="checkbox" id="db-filter-due"${fDue ? ' checked' : ''}>
+        <span>🔁 только «пора обновить»</span>
+      </label>
       <span style="font-size:13px;color:var(--muted)">${filtered.length} из ${state.db.length}</span>
     </div>
 
@@ -7602,7 +8104,7 @@ function dbTabHTML() {
         ? `<div class="card"><div class="empty-state"><div class="ico">🔍</div><div>Ничего не найдено по фильтру</div></div></div>`
         : `<div class="card"><div class="db-table-wrap">
             <table class="db-table">
-              <thead><tr><th>Товар</th><th>Регион</th><th>Статус</th><th>Заметка</th><th>Дата</th><th></th></tr></thead>
+              <thead><tr><th>Товар</th><th>Регион</th>${multiAcc ? '<th>Аккаунт</th>' : ''}<th>Статус</th><th>Заметка</th><th>Дата</th><th></th></tr></thead>
               <tbody>${rows.map(rowHTML).join('')}</tbody>
             </table>
           </div></div>`
@@ -7974,8 +8476,49 @@ function bindDbTab() {
   document.getElementById('db-f-region')?.addEventListener('input',  e => { state.dbForm.region = e.target.value; });
   document.getElementById('db-f-note')?.addEventListener('input',    e => { state.dbForm.note = e.target.value; });
   document.getElementById('db-f-status')?.addEventListener('change', e => { state.dbForm.status = e.target.value; });
+  document.getElementById('db-f-account')?.addEventListener('change', e => { state.dbForm.account = e.target.value; });
+  document.getElementById('db-f-posted')?.addEventListener('change', e => { state.dbForm.postedAt = e.target.value; });
+  // Текст объявления в черновике state, а не только в DOM: вкладка Истории
+  // перерисовывается на каждый символ фильтра, и вставленное описание иначе
+  // пропало бы — та же ловушка, что была с черновиком эталона.
+  document.getElementById('db-f-title')?.addEventListener('input', e => {
+    state.dbForm.title = e.target.value;
+    const lab = e.target.closest('.field')?.querySelector('.tlen');
+    if (lab) {
+      const n = [...e.target.value].length;
+      lab.textContent = `${n}/50`;
+      lab.className = 'tlen ' + (n > 50 ? 'over' : n >= 45 ? 'warn' : 'ok');
+    }
+  });
+  document.getElementById('db-f-desc')?.addEventListener('input',   e => { state.dbForm.desc = e.target.value; });
+  document.getElementById('db-f-torefs')?.addEventListener('change', e => { state.dbForm.toRefs = e.target.checked; });
+  document.getElementById('db-f-refcat')?.addEventListener('change', e => { state.dbForm.refCat = e.target.value; });
   document.getElementById('db-filter-product')?.addEventListener('input',  e => { state.dbFilter.product = e.target.value; renderDb(); });
   document.getElementById('db-filter-status')?.addEventListener('change',  e => { state.dbFilter.status = e.target.value; renderDb(); });
+  document.getElementById('db-filter-account')?.addEventListener('change', e => { state.dbFilter.account = e.target.value; renderDb(); });
+  document.getElementById('db-filter-due')?.addEventListener('change',     e => { state.dbFilter.due = e.target.checked; renderDb(); });
+  // Срок и выключатель ротации правятся прямо в панели записи
+  document.querySelectorAll('[data-rot-days]').forEach(inp => {
+    inp.addEventListener('change', e => {
+      const rec = state.db.find(r => r.id === +e.target.dataset.rotDays);
+      if (!rec) return;
+      const v = parseInt(e.target.value, 10);
+      // Очищенное поле пишем нулём, а не удаляем: удаление неотличимо от «срок
+      // не задавали», и слияние с соседнего устройства вернуло бы прежнее число.
+      rec.rotDays = v > 0 ? v : 0;   // 0 = общий порог из настроек
+      save(); renderDb();
+    });
+  });
+  document.querySelectorAll('[data-rot-off]').forEach(inp => {
+    inp.addEventListener('change', e => {
+      const rec = state.db.find(r => r.id === +e.target.dataset.rotOff);
+      if (!rec) return;
+      // Снятая галочка — это false, а не отсутствие поля: иначе соседнее
+      // устройство вернуло бы своё true и объявление снова выпало бы из напоминаний.
+      rec.rotOff = !!e.target.checked;
+      save(); renderDb();
+    });
+  });
   bindRefsCard();
 }
 
@@ -8978,6 +9521,7 @@ document.addEventListener('click', e => {
         state.db.push({
           id: Date.now(), _uid: newUid(), product: item.product, region: item.region,
           title: item.variant?.title || '', description: item.variant?.description || '',
+          account: accActive(),
           status: 'active', note: '', date: new Date().toLocaleDateString('ru'),
           _chain: item.variant?._chain || null,
           // Категория нужна финальному тексту: он идёт в примеры генерации, а правила
@@ -9205,15 +9749,41 @@ document.addEventListener('click', e => {
     case 'db-add': {
       const f = state.dbForm;
       if (!f.product.trim() || !f.region.trim()) { toast('Укажите товар и регион'); break; }
-      state.db.push({ id: Date.now(), _uid: newUid(), product: f.product.trim(), region: f.region.trim(), status: f.status || 'active', note: f.note.trim() });
-      state.dbForm = { product: f.product.trim(), region: f.region.trim(), status: 'active', note: '' };
-      save(); renderDb(); break;
+      const at = rotInputToTs(f.postedAt);
+      const title = (f.title || '').trim(), desc = (f.desc || '').trim();
+      const rec = {
+        id: Date.now(), _uid: newUid(),
+        product: f.product.trim(), region: f.region.trim(),
+        status: f.status || 'active', note: f.note.trim(),
+        account: accPick(f.account),
+      };
+      if (at) rec.postedAt = at;
+      // Текст вносят для объявлений, размещённых без генератора. Он ложится в те
+      // же поля, что и у сгенерированных: тогда запись одинаково участвует в
+      // проверке дублей и в ротации, независимо от того, как она появилась.
+      if (title || desc) { rec.title = title; rec.description = desc; }
+      state.db.push(rec);
+      let refAdded = false;
+      if ((title || desc) && f.toRefs) refAdded = addRefFromText(title, desc, 'mine', f.refCat);
+      state.dbForm = { product: f.product.trim(), region: f.region.trim(), status: 'active', note: '',
+                       account: rec.account, title: '', desc: '', toRefs: f.toRefs, postedAt: '',
+                       refCat: f.refCat || '' };
+      save(); renderDb();
+      if (title || desc) toast(refAdded ? 'Записано, текст ушёл и в эталоны' : 'Записано');
+      break;
     }
     case 'db-edit': {
       const rec = state.db.find(r => r.id === +el.dataset.id);
       if (!rec) break;
       state.dbEditId = rec.id;
-      state.dbForm = { product: rec.product, region: rec.region, status: rec.status, note: rec.note || '' };
+      state.dbForm = {
+        product: rec.product, region: rec.region, status: rec.status, note: rec.note || '',
+        account: accOf(rec), title: rec.title || '', desc: rec.description || '',
+        // При правке существующей записи галочка снята: текст в ней, скорее всего,
+        // уже учтён, а молчаливое добавление в эталоны при каждом сохранении
+        // засыпало бы сырьё близнецами.
+        toRefs: false, postedAt: rotTsToInput(rotPostedAt(rec)), refCat: rec._category || '',
+      };
       renderDb(); break;
     }
     case 'db-save': {
@@ -9229,15 +9799,75 @@ document.addEventListener('click', e => {
         // созданных повторным нажатием «✓ Размещено», общий на несколько строк,
         // и такое надгробие убивало соседние записи вместе с их финалами.
         if (!rec._uid) { rec._ck0 = dbContentKey(rec); rec._uid = newUid(); }
-        state.db[idx] = { ...rec, product: f2.product.trim(), region: f2.region.trim(), status: f2.status, note: f2.note.trim() };
+        const t2 = (f2.title || '').trim(), d2 = (f2.desc || '').trim();
+        const upd = { ...rec, product: f2.product.trim(), region: f2.region.trim(), status: f2.status,
+                      note: f2.note.trim(), account: accPick(f2.account || accOf(rec)) };
+        // Аккаунт выбран руками — метка автопростановки снимается, и такой выбор
+        // побеждает при слиянии с другого устройства (см. блок finalsMerged).
+        delete upd._accAuto;
+        const at2 = rotInputToTs(f2.postedAt);
+        if (at2) upd.postedAt = at2;
+        // Пустое поле текста НЕ стирает сохранённый текст: у записи он мог
+        // появиться из генератора, а форма правки открывается и ради статуса.
+        // Поля проверяются ПО ОТДЕЛЬНОСТИ: при общей проверке очистка одного
+        // описания затирала его пустой строкой, а вместе с ним — базу, от которой
+        // считается доля правок донесённого финала, и участие в проверке дублей.
+        if (t2) upd.title = t2;
+        if (d2) upd.description = d2;
+        state.db[idx] = upd;
+        if ((t2 || d2) && f2.toRefs) addRefFromText(t2, d2, 'mine', f2.refCat || rec._category);
       }
       state.dbEditId = null;
+      state.dbForm = { ...state.dbForm, title: '', desc: '', toRefs: true, postedAt: '', refCat: '' };
       save(); renderDb(); break;
     }
     case 'db-cancel':
       state.dbEditId = null;
-      state.dbForm = { product: '', region: 'Москва', status: 'active', note: '' };
+      state.dbForm = { product: '', region: 'Москва', status: 'active', note: '',
+                       account: accFirstId(), title: '', desc: '', toRefs: true, postedAt: '', refCat: '' };
       renderDb(); break;
+
+    case 'db-show-due':
+      state.dbFilter.due = true;
+      renderDb(); break;
+    case 'db-rot-panel': {
+      const rid = +el.dataset.id;
+      // Повторное нажатие закрывает панель. Результат НЕ выбрасываем: он оплачен,
+      // а показывается всё равно только в своей записи (rotPanelHTML сверяет recId).
+      // Раньше заглянуть в соседнее объявление значило потерять готовый текст.
+      state.rotPanel = state.rotPanel === rid ? null : rid;
+      renderDb(); break;
+    }
+    case 'db-rot-close':
+      state.rotPanel = null; state.rotResult = null;
+      renderDb(); break;
+    case 'db-rotate':
+      doRotate(+el.dataset.id, el.dataset.mode === 'mid' ? 'mid' : 'light'); break;
+    case 'db-rot-posted': {
+      const rid = +el.dataset.id;
+      const src = state.db.find(r => r.id === rid);
+      const res = state.rotResult;
+      if (!src || !res || res.recId !== rid || res.error) break;
+      if (!confirm(`Завести новую запись с прокрученным текстом и перевести прежнюю в «Снято»?\n\n${res.title}`)) break;
+      const fresh = {
+        id: Date.now(), _uid: newUid(),
+        product: src.product, region: src.region, account: accOf(src),
+        title: res.title, description: res.desc,
+        status: 'active', note: src.note || '',
+        _category: src._category || null, _chain: src._chain || null,
+        _rotFrom: src._uid || null,        // связь с предшественником — для разбора журнала
+      };
+      state.db.push(fresh);
+      src.status = 'removed';
+      state.rotResult = null; state.rotPanel = fresh.id;
+      save(); renderDb();
+      jlog('posted', fresh._chain, {
+        product: fresh.product, category: fresh._category, region: fresh.region,
+        title: fresh.title, rotated: res.mode, account: fresh.account,
+      });
+      showFinalDialog(fresh.id);
+      break;
+    }
     case 'db-del': {
       const delId = +el.dataset.id;
       const goneRec = state.db.find(r => r.id === delId);
@@ -9253,8 +9883,37 @@ document.addEventListener('click', e => {
       // уходит в корзину так же, как эталон
       if (goneRec) syncTomb(syncDbKey(goneRec), goneRec, 'db');
       state.db = state.db.filter(r => r.id !== delId);
-      if (state.dbEditId === delId) { state.dbEditId = null; state.dbForm = { product: '', region: 'Москва', status: 'active', note: '' }; }
+      if (state.dbEditId === delId) {
+        state.dbEditId = null;
+        state.dbForm = { product: '', region: 'Москва', status: 'active', note: '',
+                         account: accFirstId(), title: '', desc: '', toRefs: true, postedAt: '', refCat: '' };
+      }
+      if (state.rotPanel === delId) { state.rotPanel = null; state.rotResult = null; }
       save(); renderDb(); break;
+    }
+    case 'acc-add': {
+      const list = accList();
+      // id никогда не переиспользуем: записи ссылаются на него, а вернувшийся
+      // номер молча перевесил бы старые объявления на новый аккаунт.
+      const id = 'a' + (Date.now() % 1e7);
+      state.settings.accounts = [...list, { id, name: `Аккаунт ${list.length + 1}` }];
+      save(); render(); break;
+    }
+    case 'acc-del': {
+      const id = el.dataset.id;
+      const list = accList();
+      if (list.length <= 1) { toast('Должен остаться хотя бы один аккаунт'); break; }
+      const used = (state.db || []).filter(r => accOf(r) === id).length;
+      const a = list.find(x => x.id === id);
+      if (!confirm(used
+        ? `На аккаунте «${a ? a.name : id}» числится объявлений: ${used}. Сами записи останутся, но будут помечены как «удалён».\n\nУдалить аккаунт?`
+        : `Удалить аккаунт «${a ? a.name : id}»?`)) break;
+      state.settings.accounts = list.filter(x => x.id !== id);
+      if (state.dbFilter.account === id) state.dbFilter.account = '';
+      // Черновик формы тоже: иначе следующая запись ушла бы на удалённый профиль,
+      // хотя селект показывает первый.
+      if (state.dbForm.account === id) state.dbForm.account = '';
+      save(); render(); break;
     }
     case 'region-del': {
       const val = el.dataset.val;
@@ -9357,6 +10016,7 @@ document.addEventListener('click', e => {
         id: recId, _uid: newUid(),
         product: v._product || currentProductName(state.form), region: region.trim(),  // F4: товар из варианта
         title: v.title || '', description: v.description || '',
+        account: accActive(),
         status: 'active', note: '', date: new Date().toLocaleDateString('ru'),
         _chain: v._chain || null, // журнал: чтобы «донос финала» лёг в ту же цепочку
         // Категория берётся ТОЛЬКО из штампа варианта. Живая форма как фолбэк опасна:
@@ -9410,6 +10070,7 @@ document.addEventListener('click', e => {
         id: recId, _uid: newUid(),
         product: item.variant._product || currentProductName(state.form), region: item.region,  // F4: товар из варианта
         title: item.variant.title || '', description: item.variant.description || '',
+        account: accActive(),
         status: 'active', note: '', date: new Date().toLocaleDateString('ru'),
         _chain: item.variant._chain || null,
         _category: item.variant._category || null,
@@ -9589,6 +10250,22 @@ try {
   for (const r of state.db || []) if (r && !r._uid) { r._ck0 = dbContentKey(r); r._uid = newUid(); migrated++; }
   if (migrated) save();
 } catch(e) { console.error('migrate uid:', e); }
+
+// Аккаунт записи. До появления этого поля все размещения шли с одного профиля,
+// поэтому старые записи честно относятся к первому аккаунту. Проставляем явно:
+// иначе переименование первого аккаунта молча перевесило бы всю прошлую историю
+// на другой профиль (accOf берёт первый по списку, а не по имени).
+try {
+  let accMigrated = 0;
+  const first = accFirstId();
+  // `_accAuto` — метка «аккаунт не выбирали, его проставила миграция». Без неё
+  // ветка переноса аккаунта в слиянии была бы мертва: миграция успевает
+  // проставить поле ВСЕМ записям до первого pull, и входящее «эта публикация со
+  // второго профиля» уже некуда было бы принять. Явный выбор метку снимает и
+  // всегда побеждает автоматический.
+  for (const r of state.db || []) if (r && !r.account) { r.account = first; r._accAuto = true; accMigrated++; }
+  if (accMigrated) save();
+} catch(e) { console.error('migrate account:', e); }
 
 render();
 

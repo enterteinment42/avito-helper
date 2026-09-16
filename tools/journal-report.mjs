@@ -30,10 +30,13 @@ const KNOWN_EVENTS = [
   'vision', 'vision_uncertain', 'vision_pick', 'refs_tricks',
   // сессия 2026-09-10 (2б, «товар в интерьере»): phase generate | download
   'staged',
+  // сессия 2026-09-16: ротация выдохшегося объявления (mode light | mid)
+  'rotate',
 ];
 
 // Пути генерации — чтобы увидеть, какими воронками реально пользуются
-const GEN_PATHS = ['main', 'batch', 'titles', 'descriptions', 'more', 'alt_titles', 'rephrase', 'session'];
+const GEN_PATHS = ['main', 'batch', 'titles', 'descriptions', 'more', 'alt_titles', 'rephrase', 'session',
+  'rotate', 'rotate_mid'];
 
 // ─── чтение ──────────────────────────────────────────────────────────────────
 
