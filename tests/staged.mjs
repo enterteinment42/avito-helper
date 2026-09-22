@@ -68,7 +68,7 @@ export async function runStaged(browser, base, t) {
       on: (stagedCardHTML().match(/class="chip on" data-act="staged-scene"/g) || []).length,
       genBtn: stagedCardHTML().includes('🏠 Поставить в интерьер'),
       noCovers: !stagedCardHTML().includes('staged-covers'),
-      scenes: STAGED_SCENES.length,
+      scenes: SCENES.length,
     }));
     t.ok('с фото карточка встроена в форму', shown.inForm);
     t.eq('чипов сцен — по числу сцен', shown.chips, shown.scenes);
@@ -93,7 +93,20 @@ export async function runStaged(browser, base, t) {
     t.ok('запрещено заменять похожим', /Ничего не «улучшай» и не заменяй похожим/.test(prompt.bare));
     t.ok('запрещено добавлять комплектацию', /Комплектацию не добавляй/.test(prompt.bare));
     t.ok('запрещены надписи, водяные знаки и ценники', /Никаких надписей, водяных знаков, логотипов магазинов, ценников/.test(prompt.bare));
-    t.ok('требуется фотореалистичность', /Фотореалистично/.test(prompt.bare));
+    // Отстройка владельца от конкурентов держится на том, что его объявления не
+    // выглядят машинными — фото в этом смысле такой же носитель, как текст.
+    t.ok('комнатная сцена требует обычного фото, а не картинки из нейросети',
+      /КАК ОБЫЧНОЕ ФОТО, А НЕ КАК КАРТИНКА ИЗ НЕЙРОСЕТИ/.test(prompt.bare));
+    t.ok('и разрешает бытовые мелочи', /лёгкая пыль, неидеальный порядок/.test(prompt.bare));
+    t.ok('и запрещает рендер, CGI и рекламный глянец',
+      /3D-графика, CGI/.test(prompt.bare) && /глянцевый рекламный рендер/.test(prompt.bare));
+    t.ok('и требует общего освещения товара и фона', /не должен выглядеть вклеенным/.test(prompt.bare));
+    t.ok('студийная сцена получает свой блок достоверности',
+      /ЧЕСТНАЯ ПРЕДМЕТНАЯ СЪЁМКА/.test(prompt.studio));
+    t.ok('и не требует от студии бытового беспорядка', !/неидеальный порядок/.test(prompt.studio));
+    t.ok('но CGI запрещает и там', /3D-рендер, CGI/.test(prompt.studio));
+    t.ok('блок достоверности отделён пустой строкой, а не приклеен к списку',
+      /\n\nСНИМОК ДОЛЖЕН/.test(prompt.bare) && /\n\nЭТО ЧЕСТНАЯ/.test(prompt.studio));
     t.ok('сцена попала в промпт', /на деревянной полке стеллажа/.test(prompt.bare));
     t.ok('название товара дано как подсказка, а не как задание',
       /На фото: PlayStation 5 Slim\. Это подсказка — все детали бери с фото/.test(prompt.bare), prompt.bare);
@@ -378,6 +391,212 @@ export async function runStaged(browser, base, t) {
     t.eq('нарочные ошибки действительно залогированы', consoleErrors.length - unexpected.length, 3);
     t.ok('других ошибок в консоли нет', unexpected.length === 0, unexpected.join('\n'));
   } finally {
+    await ctx.close();
+  }
+
+  await runScenes(browser, base, t);
+}
+
+// ── Сцены как данные: набор, компоновка списка, редактор ─────────────────────
+async function runScenes(browser, base, t) {
+  t.section('staged/сцены — набор, «частые сверху», редактор');
+
+  // ── Набор и группы ──────────────────────────────────────
+  {
+    const { ctx, page, consoleErrors } = await openApp(browser, base + '/avito-helper.html');
+    const r = await page.evaluate(() => ({
+      count: SCENES.length,
+      groups: SCENE_GROUPS.map(g => [g.id, SCENES.filter(s => (s.group || 'any') === g.id).length]),
+      ids: SCENES.map(s => s.id),
+      cleanIds: SCENES.filter(s => s.clean).map(s => s.id),
+      allHaveText: SCENES.every(s => s.p && s.p.length > 10),
+      uniqueIds: new Set(SCENES.map(s => s.id)).size === SCENES.length,
+      first: sceneFirstId(),
+      unknown: sceneById('нет-такой').id,   // выбор мог указывать на удалённую сцену
+    }));
+
+    t.ok('сцен стало заметно больше пяти', r.count >= 16, 'сцен: ' + r.count);
+    t.ok('у каждой сцены есть текст для запроса', r.allHaveText === true);
+    t.ok('идентификаторы уникальны', r.uniqueIds === true);
+    t.ok('прежние сцены на месте', ['shelf', 'desk', 'living', 'studio', 'hands'].every(id => r.ids.includes(id)));
+    t.ok('добавлены сцены под технику', ['setup', 'unbox', 'travel'].every(id => r.ids.includes(id)));
+    t.ok('под хобби и коллекции', ['table', 'display', 'workbench'].every(id => r.ids.includes(id)));
+    t.ok('под музыкальные инструменты', ['stand', 'homestudio', 'rehearsal', 'case'].every(id => r.ids.includes(id)));
+    t.ok('каждая группа непустая', r.groups.every(([, n]) => n > 0), JSON.stringify(r.groups));
+    t.ok('ровный фон помечен у студийных сцен', ['studio', 'white', 'flat'].every(id => r.cleanIds.includes(id)));
+    t.ok('и не помечен у комнатных', !r.cleanIds.includes('desk') && !r.cleanIds.includes('shelf'));
+    t.ok('неизвестный id не роняет выбор', r.unknown === r.first);
+    t.ok('консоль чистая', consoleErrors.length === 0, consoleErrors.join('\n'));
+    await ctx.close();
+  }
+
+  // ── Компоновка: частые сверху ───────────────────────────
+  {
+    const { ctx, page, consoleErrors } = await openApp(browser, base + '/avito-helper.html');
+    const r = await page.evaluate(url => {
+      state.vision.dataUrl = url;
+      const out = {};
+      const html0 = stagedCardHTML();
+      out.allChips = (html0.match(/data-act="staged-scene"/g) || []).length;
+      out.hasMore = /staged-more/.test(html0);
+      out.topCount = (html0.split('<details')[0].match(/data-act="staged-scene"/g) || []).length;
+      out.groupTitles = (html0.match(/staged-group/g) || []).length;
+
+      // Использованная сцена поднимается наверх и запоминается между запусками
+      sceneUsed('rehearsal');
+      const html1 = stagedCardHTML();
+      out.afterUse = (html1.split('<details')[0].match(/data-k="rehearsal"/g) || []).length;
+      out.saved = JSON.parse(localStorage.getItem('avito_scene_recent') || '[]')[0];
+      // ⚠️ Список НЕ в настройках: иначе первая же генерация делала бы настройки
+      // «своими», и пустой телефон затирал бы категории и пресеты на сервере.
+      out.notInSettings = state.settings.sceneRecent === undefined;
+      out.settingsStillDefault = syncSettingsWorth({ settings: state.settings });
+
+      // Выбранная сейчас сцена всегда наверху, даже если ею ещё не пользовались
+      state.vision.staged.scene = 'case';
+      const html2 = stagedCardHTML();
+      out.selectedTop = (html2.split('<details')[0].match(/data-k="case"/g) || []).length;
+      out.selectedOnce = (html2.match(/data-k="case"/g) || []).length;
+      out.onChips = (html2.match(/class="chip on" data-act="staged-scene"/g) || []).length;
+      return out;
+    }, 'data:image/png;base64,QUJD');
+
+    t.eq('в разметке доступны все сцены', r.allChips, 18);
+    t.ok('остальные спрятаны под «Ещё сцены»', r.hasMore === true);
+    t.ok('наверху немного кнопок', r.topCount > 0 && r.topCount <= 6, 'сверху: ' + r.topCount);
+    t.ok('внутри «Ещё сцены» есть подзаголовки групп', r.groupTitles >= 3);
+    t.eq('использованная сцена уходит наверх', r.afterUse, 1);
+    t.eq('и запоминается между запусками', r.saved, 'rehearsal');
+    t.ok('но не попадает в синхронизируемые настройки', r.notInSettings === true);
+    t.ok('и не делает пустые настройки «своими»', r.settingsStillDefault === false);
+    t.eq('выбранная сцена показана наверху', r.selectedTop, 1);
+    t.eq('и ровно один раз во всём списке', r.selectedOnce, 1);
+    t.eq('выбрана ровно одна', r.onChips, 1);
+    t.ok('консоль чистая', consoleErrors.length === 0, consoleErrors.join('\n'));
+    await ctx.close();
+  }
+
+  // ── Редактор сцен ───────────────────────────────────────
+  {
+    const { ctx, page, consoleErrors } = await openApp(browser, base + '/avito-helper.html');
+    const r = await page.evaluate(() => {
+      const out = {};
+      window.confirm = () => true;
+      state.tab = 'settings'; render();
+
+      // «Добавил — передумал» не должно оставлять невидимую пустую сцену
+      document.querySelector('[data-act="scene-add"]').click();
+      document.querySelector('[data-act="scene-cancel"]').click();
+      out.cancelled = { custom: state.scenesCfg.custom.length, count: SCENES.length };
+
+      // Своя сцена
+      document.querySelector('[data-act="scene-add"]').click();
+      document.getElementById('scene-f-label').value = '🚲 У подъезда';
+      document.getElementById('scene-f-p').value = 'у подъезда жилого дома на асфальте, дневной свет';
+      document.getElementById('scene-f-group').value = 'any';
+      document.querySelector('[data-act="scene-save"]').click();
+      const mine = SCENES.find(s => s.label === '🚲 У подъезда');
+      out.custom = { exists: !!mine, inPrompt: false, count: SCENES.length };
+      state.vision.staged.scene = mine.id;
+      out.custom.inPrompt = stagedPrompt().includes('у подъезда жилого дома');
+
+      // Пустой текст не сохраняется — это был бы запрос «покажи товар .»
+      document.querySelector(`[data-act="scene-edit"][data-id="${mine.id}"]`).click();
+      document.getElementById('scene-f-p').value = '   ';
+      document.querySelector('[data-act="scene-save"]').click();
+      out.emptyRejected = SCENES.find(s => s.id === mine.id).p.includes('у подъезда');
+
+      // Правка заводской хранится патчем-отличием
+      document.querySelector('[data-act="scene-cancel"]').click();
+      document.querySelector('[data-act="scene-edit"][data-id="desk"]').click();
+      document.getElementById('scene-f-p').value = 'на столе рядом с ноутбуком';
+      document.querySelector('[data-act="scene-save"]').click();
+      out.patched = { text: sceneById('desk').p, patchKeys: Object.keys(state.scenesCfg.builtin) };
+
+      // «Вернуть заводскую» убирает патч
+      document.querySelector('[data-act="scene-edit"][data-id="desk"]').click();
+      document.querySelector('[data-act="scene-reset"]').click();
+      out.reset = { text: sceneById('desk').p, patch: state.scenesCfg.builtin.desk };
+
+      // Скрытие заводской и защита выбранной сцены
+      state.vision.staged.scene = 'shelf';
+      document.querySelector('[data-act="scene-del"][data-id="shelf"]').click();
+      out.hidden = { gone: !SCENES.some(s => s.id === 'shelf'), selected: state.vision.staged.scene !== 'shelf',
+                     flag: state.scenesCfg.builtin.shelf?.hidden };
+
+      // Последнюю сцену убрать нельзя: иначе выбирать было бы нечего
+      state.scenesCfg = { builtin: {}, custom: [] };
+      for (const s of BUILTIN_SCENES.slice(1)) {
+        state.scenesCfg.builtin[s.id] = { hidden: true };
+      }
+      rebuildScenes(); render();
+      const lastId = SCENES[0].id;
+      document.querySelector(`[data-act="scene-del"][data-id="${lastId}"]`).click();
+      out.lastKept = { count: SCENES.length, stillThere: SCENES.some(s => s.id === lastId) };
+
+      // Сброс возвращает всё
+      document.querySelector('[data-act="scenes-reset"]').click();
+      out.afterReset = { count: SCENES.length, shelfBack: SCENES.some(s => s.id === 'shelf'),
+                         custom: state.scenesCfg.custom.length };
+      return out;
+    });
+
+    t.eq('отменённая сцена не оседает в наборе', r.cancelled.custom, 0);
+    t.eq('и не занимает место в списке', r.cancelled.count, 18);
+    t.eq('последнюю сцену удалить не дают', r.lastKept.count, 1);
+    t.ok('она остаётся на месте', r.lastKept.stillThere === true);
+    t.ok('своя сцена заводится', r.custom.exists === true);
+    t.eq('и попадает в список', r.custom.count, 19);
+    t.ok('её текст уходит в запрос', r.custom.inPrompt === true);
+    t.ok('пустой текст сцены не сохраняется', r.emptyRejected === true);
+    t.eq('правка заводской применяется', r.patched.text, 'на столе рядом с ноутбуком');
+    t.ok('и хранится патчем-отличием', r.patched.patchKeys.includes('desk'));
+    t.ok('«вернуть заводскую» восстанавливает текст', /монитором и клавиатурой/.test(r.reset.text));
+    t.ok('и убирает патч', r.reset.patch === undefined);
+    t.ok('заводскую можно скрыть', r.hidden.gone === true);
+    t.ok('скрытие помечается флагом, а не стирает сцену', r.hidden.flag === true);
+    t.ok('скрытая сцена не остаётся выбранной', r.hidden.selected === true);
+    t.eq('общий сброс возвращает заводской набор', r.afterReset.count, 18);
+    t.ok('включая скрытую', r.afterReset.shelfBack === true);
+    t.eq('и убирает свои сцены', r.afterReset.custom, 0);
+    t.ok('консоль чистая', consoleErrors.length === 0, consoleErrors.join('\n'));
+    await ctx.close();
+  }
+
+  // ── Сцены переживают перезапуск и уезжают в бэкап ────────
+  {
+    const { ctx, page, consoleErrors } = await openApp(browser, base + '/avito-helper.html', {
+      storage: {
+        avito_scenes: { builtin: { studio: { label: '💡 Моя студия' }, hands: { hidden: true } },
+                        custom: [{ id: 'sc1', label: '🏕 На природе', p: 'на траве в парке, дневной свет', group: 'any' }] },
+      },
+    });
+    const r = await page.evaluate(() => ({
+      renamed: sceneById('studio').label,
+      hiddenGone: !SCENES.some(s => s.id === 'hands'),
+      // Набор мог приехать из файла или с сервера и скрыть выбранную сцену:
+      // тогда ни один чип не подсвечен, а генерация молча ушла бы по первой.
+      selectionFixed: (() => {
+        state.vision.staged.scene = 'hands';
+        rebuildScenes();
+        return state.vision.staged.scene !== 'hands' && stagedScenes().some(s => s.id === state.vision.staged.scene);
+      })(),
+      customThere: SCENES.some(s => s.id === 'sc1'),
+      count: SCENES.length,
+      inBackup: !!backupPayload().scenes,
+      backupCustom: backupPayload().scenes.custom.length,
+      worth: syncSettingsWorth({ scenes: state.scenesCfg }),
+    }));
+
+    t.eq('правка заводской сцены пережила перезапуск', r.renamed, '💡 Моя студия');
+    t.ok('скрытая сцена не вернулась', r.hiddenGone === true);
+    t.ok('выбор переводится на живую сцену при пересборке набора', r.selectionFixed === true);
+    t.ok('своя сцена на месте', r.customThere === true);
+    t.eq('итоговый набор пересобран верно', r.count, 18);
+    t.ok('сцены входят в бэкап', r.inBackup === true);
+    t.eq('вместе со своими', r.backupCustom, 1);
+    t.ok('правка сцен считается своей настройкой и уезжает на сервер', r.worth === true);
+    t.ok('консоль чистая', consoleErrors.length === 0, consoleErrors.join('\n'));
     await ctx.close();
   }
 }

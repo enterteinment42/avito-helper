@@ -436,6 +436,13 @@
     .vision-ask-row { display: flex; flex-direction: column; gap: 5px; }
     .vision-ask-label { font-size: 12px; color: var(--text2); }
     .vision-ask-opts { display: flex; flex-wrap: wrap; gap: 6px; }
+    /* Список сцен: частые сверху, остальные — под раскрывающейся строкой с подзаголовками */
+    .staged-more { margin-top: 2px; }
+    .staged-more > summary { cursor: pointer; user-select: none; font-size: 12px; color: var(--teal-h); padding: 3px 0; list-style: none; }
+    .staged-more > summary::-webkit-details-marker { display: none; }
+    .staged-more > summary::before { content: '▾ '; }
+    .staged-more[open] > summary::before { content: '▴ '; }
+    .staged-group { font-size: 11px; color: var(--muted); letter-spacing: .3px; margin: 8px 0 4px; }
     .vision-row { display: flex; align-items: flex-start; gap: 10px; flex-wrap: wrap; }
     .vision-pick { display: flex; align-items: center; justify-content: center; width: 74px; height: 74px; flex: none; border-radius: var(--rs); border: 2px dashed var(--border2); background: var(--card3); color: var(--muted); font-size: 20px; cursor: pointer; overflow: hidden; transition: all .15s; }
     .vision-pick:hover { border-color: var(--teal); color: var(--teal); }
@@ -684,13 +691,157 @@ const PROXY_IMAGE       = 'https://api.poigraem.shop/api/image';
 // что state инициализируется дефолтной сценой раньше по файлу.
 // `p` — то, что уходит в промпт: обстановка, а НЕ описание товара. Товар модель
 // обязана перенести с фото как есть (см. stagedPrompt).
-const STAGED_SCENES = [
-  { id: 'shelf',  label: '📚 На полке',      p: 'на деревянной полке стеллажа в жилой комнате, рядом несколько книг и небольшое растение' },
-  { id: 'desk',   label: '🖥 На столе',      p: 'на письменном столе рядом с монитором и клавиатурой, тёплый настольный свет' },
-  { id: 'living', label: '🛋 В гостиной',    p: 'в гостиной под телевизором на низкой тумбе, вечерний свет из окна' },
-  { id: 'studio', label: '💡 Студийный фон', p: 'на однотонном светло-сером студийном фоне, мягкий рассеянный свет, лёгкая тень под предметом' },
-  { id: 'hands',  label: '🤲 В руках',       p: 'в руках человека на нейтральном размытом фоне комнаты, кадр по грудь, лицо не видно' },
+// Группы сцен — только для читаемости списка: в промпт группа НЕ уходит, товар
+// модель берёт с фото. Поэтому «музыкальную» сцену никто не мешает выбрать для
+// геймпада, если так лучше смотрится.
+const SCENE_GROUPS = [
+  { id: 'any',   label: 'Везде' },
+  { id: 'tech',  label: 'Техника и гаджеты' },
+  { id: 'hobby', label: 'Хобби и коллекции' },
+  { id: 'music', label: 'Музыкальные инструменты' },
 ];
+
+// clean: true — предметная съёмка на ровном фоне. У таких сцен свой блок правил
+// реализма: требовать «бытовой беспорядок и пыль» на студийном фоне значит
+// противоречить самой сцене (см. REALISM_ROOM / REALISM_CLEAN).
+const BUILTIN_SCENES = [
+  // Везде
+  { id: 'studio', label: '💡 Студия',      group: 'any', clean: true, p: 'на однотонном светло-сером студийном фоне, мягкий рассеянный свет, лёгкая тень под предметом' },
+  { id: 'white',  label: '⬜ Белый фон',   group: 'any', clean: true, p: 'на ровном белом фоне, как в каталоге магазина, равномерный свет, мягкая тень под предметом' },
+  { id: 'flat',   label: '📸 Кадр сверху', group: 'any', clean: true, p: 'вид строго сверху на однотонной матовой поверхности, ровный дневной свет, предмет в центре кадра' },
+  { id: 'hands',  label: '🤲 В руках',     group: 'any', p: 'в руках человека на нейтральном размытом фоне комнаты, кадр по грудь, лицо не видно' },
+  // Техника и гаджеты
+  { id: 'desk',   label: '🖥 На столе',    group: 'tech', p: 'на письменном столе рядом с монитором и клавиатурой, тёплый настольный свет' },
+  { id: 'living', label: '🛋 В гостиной',  group: 'tech', p: 'в гостиной под телевизором на низкой тумбе, вечерний свет из окна' },
+  { id: 'shelf',  label: '📚 На полке',    group: 'tech', p: 'на деревянной полке стеллажа в жилой комнате, рядом несколько книг и небольшое растение' },
+  { id: 'setup',  label: '🎮 Игровой сетап', group: 'tech', p: 'в игровом уголке с приглушённым светом и мягкой цветной подсветкой на стене, вечер' },
+  { id: 'unbox',  label: '📦 Распаковка',  group: 'tech', p: 'на столе рядом с открытой коробкой и тем, что лежит в ней на фото, дневной свет' },
+  { id: 'travel', label: '🎒 В дороге',    group: 'tech', p: 'рядом с раскрытой сумкой или рюкзаком на столе, как перед поездкой, дневной свет' },
+  // Хобби и коллекции
+  { id: 'table',  label: '🎲 Игровой стол', group: 'hobby', p: 'на большом столе среди разложенной настольной игры, тёплый свет лампы над столом' },
+  { id: 'display', label: '🗄 Витрина',    group: 'hobby', p: 'на застеклённой полке-витрине среди других предметов коллекции, подсветка полки' },
+  { id: 'window', label: '🪟 Подоконник',  group: 'hobby', p: 'на широком подоконнике при дневном свете, за окном размытая городская улица' },
+  { id: 'workbench', label: '🧰 Верстак',  group: 'hobby', p: 'на рабочем столе-верстаке среди инструментов, боковой свет рабочей лампы' },
+  // Музыкальные инструменты
+  { id: 'stand',  label: '🎸 На стойке',   group: 'music', p: 'на инструментальной стойке в жилой комнате, рядом угол дивана, дневной свет из окна' },
+  { id: 'homestudio', label: '🎙 Домашняя студия', group: 'music', p: 'в домашней студии рядом с микрофоном на стойке и наушниками, приглушённый свет' },
+  { id: 'rehearsal', label: '🪑 Репетиционная', group: 'music', p: 'в репетиционной комнате у стены с акустическими панелями, рядом усилитель и стул' },
+  { id: 'case',   label: '💼 Кейс открыт', group: 'music', p: 'рядом с открытым кейсом или чехлом на полу комнаты, дневной свет' },
+];
+
+// Правила «снято живым человеком, а не нарисовано нейросетью». Это не украшение:
+// отстройка владельца от конкурентов построена ровно на том, что его объявления
+// не выглядят машинными — и текст, и фото. Для комнатных сцен просим бытовую
+// достоверность, для предметных — честную предметную съёмку без CGI-глянца.
+// Блок — ОДНА строка с ведущим переводом: собранный промпт проходит через
+// .filter(Boolean), и отдельная пустая строка-разделитель молча пропала бы,
+// склеив заголовок блока с последним пунктом «ОБЯЗАТЕЛЬНО».
+const REALISM_ROOM = [
+  '',
+  'СНИМОК ДОЛЖЕН ВЫГЛЯДЕТЬ КАК ОБЫЧНОЕ ФОТО, А НЕ КАК КАРТИНКА ИЗ НЕЙРОСЕТИ:',
+  '- Съёмка на смартфон в реальной комнате: естественный свет из окна или обычная комнатная лампа, живые тени и отражения',
+  '- Допустимы бытовые мелочи: лёгкая пыль, неидеальный порядок вокруг, случайные предметы на заднем плане, слегка неровный ракурс',
+  '- Обычная глубина резкости телефонной камеры, естественное зерно, без вылизанной резкости по всему кадру',
+  '- НЕ надо: глянцевый рекламный рендер, 3D-графика, CGI, иллюстрация, цифровой арт, HDR-обработка, идеально симметричная композиция, «пластиковые» блики, вылизанные градиенты, светящиеся ореолы вокруг предмета, неестественно насыщенные цвета, контурная студийная подсветка',
+  '- Товар и фон в одном освещении и в одной перспективе: предмет не должен выглядеть вклеенным в сцену',
+].join('\n');
+const REALISM_CLEAN = [
+  '',
+  'ЭТО ЧЕСТНАЯ ПРЕДМЕТНАЯ СЪЁМКА, А НЕ КАРТИНКА ИЗ НЕЙРОСЕТИ:',
+  '- Настоящая фотография предмета на фоне: обычный мягкий свет, одна естественная тень под товаром, реальная фактура поверхностей',
+  '- Обычная детализация фотографии, естественное зерно, без вылизанной резкости по всему кадру',
+  '- НЕ надо: 3D-рендер, CGI, иллюстрация, цифровой арт, HDR-обработка, «пластиковые» блики, светящиеся ореолы, контурная подсветка, неестественно насыщенные цвета, идеально ровные градиенты фона',
+  '- Товар и фон в одном освещении: предмет не должен выглядеть вклеенным',
+].join('\n');
+
+// Сцены — данные: заводские правятся патчем-отличием, свои живут рядом. Тот же
+// приём, что у категорий: «сбросить к заводской» = удалить патч, а новые
+// заводские сцены доезжают до владельца, а не замирают его копией.
+let SCENES = BUILTIN_SCENES.slice();
+
+// Псевдо-id открытого черновика новой сцены: в наборе её ещё нет
+const SCENE_NEW = '__new_scene__';
+
+function applyScenePatch(base, patch) {
+  if (!patch) return base;
+  const out = { ...base };
+  for (const k of ['label', 'p', 'group', 'clean', 'hidden']) {
+    if (Object.prototype.hasOwnProperty.call(patch, k)) out[k] = patch[k];
+  }
+  return out;
+}
+
+function rebuildScenes() {
+  const cfg = state.scenesCfg || { builtin: {}, custom: [] };
+  const builtin = cfg.builtin || {};
+  const custom = Array.isArray(cfg.custom) ? cfg.custom : [];
+  // Своя сцена попадает в список сразу после «+ Своя сцена», ещё без текста:
+  // иначе её не увидел бы собственный редактор. От пустого запроса «покажи
+  // товар .» защищает не фильтр здесь, а stagedScenes() — список для выбора.
+  SCENES = [
+    ...BUILTIN_SCENES.map(s => applyScenePatch(s, builtin[s.id])),
+    ...custom.filter(s => s && s.id),
+  ].filter(s => !s.hidden);
+  // Список не должен опустеть: скрыть все сцены не даёт обработчик, но набор
+  // может приехать битым из файла или с сервера. Возвращаем заводские С УЧЁТОМ
+  // правок — голый BUILTIN_SCENES отменил бы переименования владельца.
+  if (!SCENES.length) SCENES = BUILTIN_SCENES.map(s => ({ ...applyScenePatch(s, builtin[s.id]), hidden: false }));
+  // Выбранная сцена могла исчезнуть вместе с пересборкой — правим здесь, в одном
+  // месте, а не в каждом вызывающем (их шесть, и два уже забывали это сделать).
+  sceneEnsureValid();
+  return SCENES;
+}
+
+// Сцена по id и сцена по умолчанию. Скрытая или удалённая сцена могла остаться
+// выбранной в состоянии — тогда отдаём первую доступную, а не роняем карточку.
+// Сцены, пригодные для генерации: недописанная своя сцена (текст ещё пустой)
+// в карточку не идёт — она дала бы запрос «покажи товар .» и сожгла деньги.
+function stagedScenes() {
+  const ok = SCENES.filter(s => s.p && s.p.trim());
+  return ok.length ? ok : BUILTIN_SCENES;
+}
+function sceneById(id) { return SCENES.find(s => s.id === id) || stagedScenes()[0]; }
+function sceneFirstId() { return stagedScenes()[0].id; }
+
+// Сцены, которые показываются наверху карточки: выбранная сейчас плюс те, чем
+// пользовались в последний раз. Список ведётся сам — заранее решать, какие сцены
+// «главные», не нужно, и свои сцены поднимаются наверх, как только их применили.
+// ⚠️ Список хранится ОТДЕЛЬНЫМ ключом, а не в state.settings. В настройках он
+// сделал бы их «правлеными» с первой же генерации, а syncSettingsWorth ровно по
+// этому признаку решает, можно ли отправить документ настроек на сервер: телефон
+// с пустым хранилищем затёр бы категории, пресеты и очередь, накопленные на ПК.
+// Этот сценарий уже случался и был закрыт ревью 11.09 — второй раз не заводим.
+const SCENE_TOP_MAX = 6;
+function sceneRecentSaved() {
+  const v = ls('avito_scene_recent', []);
+  return Array.isArray(v) ? v : [];
+}
+function sceneRecent() {
+  const list = stagedScenes();
+  const cur = state.vision?.staged?.scene;
+  const ids = [];
+  for (const id of [cur, ...sceneRecentSaved()]) {
+    if (id && !ids.includes(id) && list.some(s => s.id === id)) ids.push(id);
+  }
+  // До первого использования верх занимают первые сцены списка — пустая полка
+  // выглядела бы поломкой. Ширина ряда постоянная, чтобы кнопки не прыгали.
+  for (const s of list) { if (ids.length >= SCENE_TOP_MAX) break; if (!ids.includes(s.id)) ids.push(s.id); }
+  return ids.slice(0, SCENE_TOP_MAX);
+}
+function sceneUsed(id) {
+  if (!SCENES.some(s => s.id === id)) return;
+  const next = [id, ...sceneRecentSaved().filter(x => x !== id)].slice(0, SCENE_TOP_MAX);
+  try { localStorage.setItem('avito_scene_recent', JSON.stringify(next)); } catch(e) {}
+}
+
+// Выбранная сцена могла исчезнуть: её скрыли здесь, либо набор приехал с сервера
+// или из бэкапа. Тогда ни один чип не подсвечен, а генерация молча ушла бы по
+// первой сцене — и в журнале с именем файла осталась бы та, которой не было.
+function sceneEnsureValid() {
+  const st = state.vision?.staged;
+  if (!st) return;
+  if (!stagedScenes().some(s => s.id === st.scene)) st.scene = sceneFirstId();
+}
 
 // Качество — главный рычаг цены, сильнее выбора модели: замер 13.09 на одном и том
 // же фото дал $0.023 за medium против $0.060 за high (сравнение моделей при этом
@@ -717,7 +868,7 @@ function freshVision() {
     staged: {                          // направление 2б: «товар в интерьере»
       loading: false, error: '',
       img: null,                       // { dataUrl, scene } — последняя сгенерированная картинка
-      scene: STAGED_SCENES[0].id,      // выбранная сцена
+      scene: sceneFirstId(),           // выбранная сцена
       quality: STAGED_QUALITIES[0].id, // черновик/финал — рычаг цены, см. STAGED_QUALITIES
       extra: '',                       // уточнение сцены словами
       count: 0,                        // сколько раз генерировали (для имени файла)
@@ -1302,6 +1453,10 @@ const state = {
   // Конструктор категорий: { builtin: { <id>: патч }, custom: [ категория ] }.
   // Встроенные хранятся патчем-отличием, а не копией — см. applyCatPatch.
   catsCfg:    ls('avito_cats', { builtin: {}, custom: [] }),
+  // Сцены интерьера — тот же приём, что у категорий: патч заводских + свои
+  scenesCfg:  ls('avito_scenes', { builtin: {}, custom: [] }),
+  sceneEditId: null,   // какая сцена открыта в редакторе Настроек (SCENE_NEW — черновик)
+  sceneDraft: null,    // черновик новой сцены: в набор попадает только по «Сохранить»
   catEditId:  null,   // какая категория открыта в редакторе Настроек
   // Черновик редактора живёт в state, а не в DOM: карточка перерисовывается на
   // добавление/удаление/перестановку поля, и набранное иначе терялось бы.
@@ -1346,6 +1501,7 @@ const state = {
 };
 
 rebuildCats(); // категории собираются сразу после state — до первого render()
+rebuildScenes(); // и сцены интерьера: freshVision() выбирал первую ЗАВОДСКУЮ, а её могли скрыть
 
 // ══════════════════════════════════════════
 // LOCALSTORAGE
@@ -1453,6 +1609,7 @@ function _saveAll() {
     localStorage.setItem('avito_results_form', JSON.stringify(state.resultsForm ?? null)); // F12: снимок формы для ↻/↻×5 после F5
     localStorage.setItem('avito_catalogs',  JSON.stringify(state.catalogs));
     localStorage.setItem('avito_cats',      JSON.stringify(state.catsCfg));
+    localStorage.setItem('avito_scenes',    JSON.stringify(state.scenesCfg));
     // Три набора сырья — единственное невосполнимое, поэтому они пишутся слиянием
     // с тем, что уже лежит в хранилище (см. saveMerged), а не поверх него.
     state.favorites = saveMerged('avito_favorites', state.favorites, SYNC_KIND.fav);
@@ -1520,6 +1677,7 @@ function backupPayload() {
     presets:   state.presets || [],
     queue:     state.postQueue || [],
     cats:      state.catsCfg || null,
+    scenes:    state.scenesCfg || null,
     catalogs:  state.catalogs || null,
     settings:  state.settings || null,
     cv:        cvCfg,
@@ -1714,7 +1872,8 @@ function syncSettingsDoc() {
   let cvCfg = null;
   try { cvCfg = JSON.parse(lsRaw('avito_cv') || 'null'); } catch(e) {}
   return {
-    cats: state.catsCfg || null, catalogs: state.catalogs || null,
+    cats: state.catsCfg || null, scenes: state.scenesCfg || null,
+    catalogs: state.catalogs || null,
     settings: state.settings || null, presets: state.presets || [],
     queue: state.postQueue || [], cv: cvCfg,
   };
@@ -1765,6 +1924,8 @@ function syncSettingsWorth(d) {
   try {
     const cats = d.cats || {};
     if (Object.keys(cats.builtin || {}).length || (cats.custom || []).length) return true;
+    const scenes = d.scenes || {};
+    if (Object.keys(scenes.builtin || {}).length || (scenes.custom || []).length) return true;
     if ((d.presets || []).length || (d.queue || []).length) return true;
     if (Object.keys(d.catalogs || {}).length || d.cv) return true;
     // Сами настройки считаем своими, если хоть одно поле отличается от заводского:
@@ -1950,6 +2111,10 @@ async function syncPullSettings() {
     if (d.cats && typeof d.cats === 'object') {
       state.catsCfg = { builtin: d.cats.builtin || {}, custom: Array.isArray(d.cats.custom) ? d.cats.custom : [] };
       rebuildCats();
+    }
+    if (d.scenes && typeof d.scenes === 'object') {
+      state.scenesCfg = { builtin: d.scenes.builtin || {}, custom: Array.isArray(d.scenes.custom) ? d.scenes.custom : [] };
+      rebuildScenes();
     }
     if (d.catalogs && typeof d.catalogs === 'object') state.catalogs = d.catalogs;
     if (d.settings && typeof d.settings === 'object') {
@@ -4418,7 +4583,7 @@ function visionToCovers() {
 // (1:1 4:3 3:4 16:9 9:16 21:9), 3:4 ближе всего.
 const STAGED_ASPECT = '3:4';
 
-function stagedScene(id) { return STAGED_SCENES.find(s => s.id === id) || STAGED_SCENES[0]; }
+function stagedScene(id) { return sceneById(id); }
 
 function stagedPrompt() {
   const st = state.vision.staged;
@@ -4437,7 +4602,7 @@ function stagedPrompt() {
     '- Комплектацию не добавляй: если на фото нет коробки, кабеля или второго геймпада — их не должно быть и на картинке.',
     '- Пропорции товара сохрани, товар — главный объект кадра.',
     '- Никаких надписей, водяных знаков, логотипов магазинов, ценников и рамок.',
-    '- Фотореалистично, как снято на телефон в реальной комнате, без коллажа и без рисованного стиля.',
+    sc.clean ? REALISM_CLEAN : REALISM_ROOM,
   ].filter(Boolean).join('\n');
 }
 
@@ -4527,6 +4692,7 @@ async function doStagedPhoto() {
     const dataUrl = stagedExtractImage(await r.json());
     st.img = { dataUrl, scene, quality };
     st.count++;
+    sceneUsed(scene);   // сцена уходит наверх списка — им и пользуются чаще всего
     jlog('staged', null, {
       ok: true, phase: 'generate', scene, quality, aspect: STAGED_ASPECT,
       extra: st.extra.trim().slice(0, 200),
@@ -4584,9 +4750,23 @@ function stagedCardHTML() {
   const busy = visionBusy();
   return `<div class="vision-ask" style="gap:9px">
     <div class="vision-ask-head">🏠 Товар в интерьере <span class="vision-hint">— фото товара на живом фоне, для антидубля обложек</span></div>
-    <div class="vision-ask-opts">
-      ${STAGED_SCENES.map(s => `<button class="chip ${st.scene === s.id ? 'on' : ''}" data-act="staged-scene" data-k="${s.id}" ${busy ? 'disabled' : ''}>${esc(s.label)}</button>`).join('')}
-    </div>
+    ${(() => {
+      // Наверху — то, чем реально пользуются (плюс выбранная сейчас), остальное
+      // под раскрывающейся кнопкой: сцен почти два десятка, и сплошной ряд на
+      // телефоне превращается в прокрутку.
+      const top = sceneRecent();
+      const rest = stagedScenes().filter(s => !top.includes(s.id));
+      const chip = s => `<button class="chip ${st.scene === s.id ? 'on' : ''}" data-act="staged-scene" data-k="${esc(s.id)}" ${busy ? 'disabled' : ''}>${esc(s.label)}</button>`;
+      const byGroup = SCENE_GROUPS.map(g => {
+        const items = rest.filter(s => (s.group || 'any') === g.id);
+        return items.length ? `<div class="staged-group">${esc(g.label)}</div><div class="vision-ask-opts">${items.map(chip).join('')}</div>` : '';
+      }).join('');
+      // Сцена без известной группы (своя, заведённая в редакторе) не должна пропасть
+      const orphan = rest.filter(s => !SCENE_GROUPS.some(g => g.id === (s.group || 'any')));
+      const orphanHTML = orphan.length ? `<div class="staged-group">Свои</div><div class="vision-ask-opts">${orphan.map(chip).join('')}</div>` : '';
+      return `<div class="vision-ask-opts">${top.map(id => chip(sceneById(id))).join('')}</div>
+      ${rest.length ? `<details class="staged-more"><summary>Ещё сцены (${rest.length})</summary>${byGroup}${orphanHTML}</details>` : ''}`;
+    })()}
     <input type="text" data-act="staged-extra" placeholder="своими словами: что ещё в кадре (необязательно)" value="${esc(st.extra)}" ${busy ? 'disabled' : ''}>
     <div class="vision-ask-opts">
       ${STAGED_QUALITIES.map(q => `<button class="chip ${st.quality === q.id ? 'on' : ''}" data-act="staged-quality" data-k="${q.id}" title="${esc(q.hint)}" ${busy ? 'disabled' : ''}>${esc(q.label)}</button>`).join('')}
@@ -5436,6 +5616,73 @@ function catEditorHTML() {
 // SETTINGS TAB
 // ══════════════════════════════════════════
 
+// Редактор сцен интерьера. Сцена — это данные: строка текста, которая уходит в
+// промпт после «покажи его …». Заводские правятся патчем-отличием, поэтому
+// «сбросить» = удалить патч, а новые заводские сцены доезжают до владельца.
+function scenesEditorHTML() {
+  const cfg = state.scenesCfg || { builtin: {}, custom: [] };
+  const hiddenIds = Object.entries(cfg.builtin || {}).filter(([, p]) => p && p.hidden).map(([id]) => id);
+  const edit = state.sceneEditId === SCENE_NEW
+    ? state.sceneDraft
+    : (state.sceneEditId ? SCENES.find(s => s.id === state.sceneEditId) : null);
+  const isBuiltin = id => BUILTIN_SCENES.some(s => s.id === id);
+  const patched = id => !!(cfg.builtin || {})[id];
+
+  const row = s => `<div class="preset-item">
+    <span class="preset-item-name" title="${esc(s.p)}" style="cursor:help">${esc(s.label)}</span>
+    <span class="preset-item-meta">${esc((SCENE_GROUPS.find(g => g.id === (s.group || 'any')) || {}).label || 'Свои')}${s.clean ? ' · ровный фон' : ''}${isBuiltin(s.id) ? (patched(s.id) ? ' · правлена' : '') : ' · своя'}</span>
+    <button class="btn-sm" data-act="scene-edit" data-id="${esc(s.id)}">✎</button>
+    <button class="btn-icon" data-act="scene-del" data-id="${esc(s.id)}" title="${isBuiltin(s.id) ? 'Скрыть заводскую сцену' : 'Удалить свою сцену'}" style="color:var(--warn)">×</button>
+  </div>`;
+
+  return `<div class="card" style="margin-bottom:16px">
+    <div class="card-title">Сцены интерьера</div>
+    <div class="form-body">
+      <div style="font-size:12px;color:var(--muted)">
+        Сцена — это описание обстановки для «🏠 Товар в интерьере». Текст сцены уходит в запрос после слов «покажи товар…»,
+        сам товар модель всегда берёт с фото. Категория товара в запрос НЕ идёт, поэтому любую сцену можно выбрать для любого товара.
+      </div>
+      <div style="display:flex;flex-direction:column;gap:7px">${SCENES.map(row).join('')}</div>
+      ${hiddenIds.length ? `<div style="font-size:12px;color:var(--muted)">Скрыто заводских: ${hiddenIds.length}</div>` : ''}
+      ${edit ? `
+      <hr class="div">
+      <div class="field" style="max-width:320px">
+        <label>Название сцены</label>
+        <input type="text" id="scene-f-label" value="${esc(edit.label)}" placeholder="🎸 На стойке">
+      </div>
+      <div class="field">
+        <label>Текст для запроса — продолжает фразу «покажи товар…»</label>
+        <textarea id="scene-f-p" rows="3" placeholder="на инструментальной стойке в жилой комнате, дневной свет из окна">${esc(edit.p)}</textarea>
+      </div>
+      <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end">
+        <div class="field" style="min-width:190px;margin:0">
+          <label>Группа в списке</label>
+          <select id="scene-f-group">
+            ${SCENE_GROUPS.map(g => `<option value="${esc(g.id)}"${(edit.group || 'any') === g.id ? ' selected' : ''}>${esc(g.label)}</option>`).join('')}
+          </select>
+        </div>
+        <label style="display:flex;gap:7px;align-items:center;font-size:13px;cursor:pointer;padding-bottom:6px">
+          <input type="checkbox" id="scene-f-clean"${edit.clean ? ' checked' : ''}>
+          <span>Ровный фон (студия, каталог)</span>
+        </label>
+      </div>
+      <div style="font-size:12px;color:var(--muted)">
+        «Ровный фон» меняет правила достоверности: для комнатных сцен просим бытовые мелочи и живой свет, для предметных — честную съёмку на фоне. В обоих случаях запрещаем рендер, CGI и рекламный глянец.
+      </div>
+      <div style="display:flex;gap:8px;align-items:center">
+        <button class="btn-gen" data-act="scene-save" style="width:auto;padding:9px 22px">✓ Сохранить</button>
+        <button class="btn-add" data-act="scene-cancel">Отмена</button>
+        ${isBuiltin(edit.id) && patched(edit.id) ? `<button class="btn-add" data-act="scene-reset" data-id="${esc(edit.id)}">↺ Вернуть заводскую</button>` : ''}
+      </div>` : `
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <button class="btn-add" data-act="scene-add">+ Своя сцена</button>
+        ${(Object.keys(cfg.builtin || {}).length || (cfg.custom || []).length)
+          ? `<button class="btn-add" data-act="scenes-reset">↺ Сбросить все к заводским</button>` : ''}
+      </div>`}
+    </div>
+  </div>`;
+}
+
 function settingsTabHTML() {
   const isCustom = !!state.settings.customSys;
   return `<div style="max-width:860px">
@@ -5452,6 +5699,7 @@ function settingsTabHTML() {
         <div style="font-size:12px;color:var(--muted)">Отображается в шапке базы.</div>
       </div>
     </div>
+    ${scenesEditorHTML()}
     <div class="card" style="margin-bottom:16px">
       <div class="card-title">Аккаунты Авито и ротация</div>
       <div class="form-body">
@@ -8423,6 +8671,7 @@ function bindDbTab() {
         // сырья с телефона на рабочий ПК — точно нет, там свои правки категорий.
         const cfgHas = [];
         if (obj.cats)     cfgHas.push(`категории (своих ${arr(obj.cats.custom).length})`);
+        if (obj.scenes)   cfgHas.push(`сцены интерьера (своих ${arr(obj.scenes.custom).length})`);
         if (obj.catalogs) cfgHas.push('каталоги игр');
         if (obj.settings) cfgHas.push('настройки генератора');
         if (obj.cv)       cfgHas.push('настройки обложек');
@@ -8432,6 +8681,10 @@ function bindDbTab() {
           if (obj.cats && typeof obj.cats === 'object') {
             state.catsCfg = { builtin: obj.cats.builtin || {}, custom: arr(obj.cats.custom) };
             rebuildCats();
+          }
+          if (obj.scenes && typeof obj.scenes === 'object') {
+            state.scenesCfg = { builtin: obj.scenes.builtin || {}, custom: arr(obj.scenes.custom) };
+            rebuildScenes();
           }
           if (obj.catalogs && typeof obj.catalogs === 'object') state.catalogs = obj.catalogs;
           if (obj.settings && typeof obj.settings === 'object') {
@@ -9891,6 +10144,96 @@ document.addEventListener('click', e => {
       if (state.rotPanel === delId) { state.rotPanel = null; state.rotResult = null; }
       save(); renderDb(); break;
     }
+    case 'scene-add':
+      // Черновик живёт в state, а в набор сцена попадает только по «Сохранить»:
+      // иначе «добавил — передумал» оставляло бы невидимую пустую сцену (в
+      // карточку она не идёт), и каждый клик по кнопке плодил ещё одну.
+      state.sceneEditId = SCENE_NEW;
+      state.sceneDraft = { id: 'sc' + (Date.now() % 1e7), label: '🆕 Своя сцена', p: '', group: 'any', clean: false };
+      render(); break;
+    case 'scene-edit':
+      state.sceneEditId = el.dataset.id;
+      state.sceneDraft = null;
+      render(); break;
+    case 'scene-cancel':
+      state.sceneEditId = null;
+      state.sceneDraft = null;
+      render(); break;
+    case 'scene-save': {
+      const id = state.sceneEditId;
+      if (!id) break;
+      const label = (document.getElementById('scene-f-label')?.value || '').trim();
+      const p     = (document.getElementById('scene-f-p')?.value || '').trim();
+      const group = document.getElementById('scene-f-group')?.value || 'any';
+      const clean = !!document.getElementById('scene-f-clean')?.checked;
+      // Пустой текст сцены — это запрос «покажи товар .» и деньги на ветер
+      if (!p) { toast('Опишите обстановку — это и есть текст сцены'); break; }
+      const base = BUILTIN_SCENES.find(s => s.id === id);
+      if (base) {
+        // Заводская правится патчем-отличием: тогда «вернуть заводскую» = убрать
+        // патч, а будущие правки самой заводской сцены доедут до владельца.
+        const patch = {};
+        if (label && label !== base.label) patch.label = label;
+        if (p !== base.p) patch.p = p;
+        if (group !== (base.group || 'any')) patch.group = group;
+        if (clean !== !!base.clean) patch.clean = clean;
+        const prev = (state.scenesCfg.builtin || {})[id] || {};
+        if (prev.hidden) patch.hidden = true;   // правка скрытой её не возвращает
+        if (Object.keys(patch).length) state.scenesCfg.builtin = { ...(state.scenesCfg.builtin || {}), [id]: patch };
+        else { const b = { ...(state.scenesCfg.builtin || {}) }; delete b[id]; state.scenesCfg.builtin = b; }
+      } else if (id === SCENE_NEW) {
+        const d = state.sceneDraft || {};
+        state.scenesCfg.custom = [...(state.scenesCfg.custom || []),
+          { id: d.id || ('sc' + (Date.now() % 1e7)), label: label || 'Своя сцена', p, group, clean }];
+      } else {
+        state.scenesCfg.custom = (state.scenesCfg.custom || []).map(s =>
+          s.id === id ? { ...s, label: label || s.label, p, group, clean } : s);
+      }
+      state.sceneEditId = null;
+      state.sceneDraft = null;
+      rebuildScenes(); save(); render(); break;
+    }
+    case 'scene-reset': {
+      const id = el.dataset.id;
+      const b = { ...(state.scenesCfg.builtin || {}) };
+      delete b[id];
+      state.scenesCfg.builtin = b;
+      state.sceneEditId = null;
+      state.sceneDraft = null;
+      rebuildScenes(); save(); render(); break;
+    }
+    case 'scene-del': {
+      const id = el.dataset.id;
+      const base = BUILTIN_SCENES.find(s => s.id === id);
+      const sc = SCENES.find(s => s.id === id);
+      // Последнюю пригодную сцену убрать нельзя: карточка интерьера осталась бы
+      // без единой кнопки, а аварийный откат к заводским отменил бы все скрытия
+      // разом — выглядело бы как «удаление не работает».
+      if (stagedScenes().filter(s => s.id !== id).length === 0) {
+        toast('Должна остаться хотя бы одна сцена');
+        break;
+      }
+      if (!confirm(base
+        ? `Скрыть заводскую сцену «${sc ? sc.label : id}»? Вернуть её можно кнопкой «Сбросить все к заводским».`
+        : `Удалить свою сцену «${sc ? sc.label : id}»?`)) break;
+      if (base) {
+        state.scenesCfg.builtin = { ...(state.scenesCfg.builtin || {}), [id]: { ...((state.scenesCfg.builtin || {})[id] || {}), hidden: true } };
+      } else {
+        state.scenesCfg.custom = (state.scenesCfg.custom || []).filter(s => s.id !== id);
+      }
+      if (state.sceneEditId === id) state.sceneEditId = null;
+      rebuildScenes();
+      // Выбранная сцена могла только что исчезнуть — переводим выбор на живую
+      save(); render(); break;
+    }
+    case 'scenes-reset': {
+      if (!confirm('Вернуть заводской набор сцен? Свои сцены будут удалены, правки заводских — отменены.')) break;
+      state.scenesCfg = { builtin: {}, custom: [] };
+      state.sceneEditId = null;
+      rebuildScenes();
+      save(); render(); break;
+    }
+
     case 'acc-add': {
       const list = accList();
       // id никогда не переиспользуем: записи ссылаются на него, а вернувшийся
