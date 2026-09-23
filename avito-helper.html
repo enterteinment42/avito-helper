@@ -584,6 +584,13 @@
 
     /* ── Covers Module ── */
     .cv-wrap { display: grid; grid-template-columns: 310px 1fr; gap: 18px; max-width: 1140px; margin: 0 auto; padding: 24px 20px; align-items: start; }
+    /* На ПК у каждой колонки своя прокрутка высотой в экран: иначе липкое превью выше экрана,
+       и его низ открывался только после того, как длинное меню слева докрутится до конца */
+    @media (min-width: 721px) {
+      .cv-wrap { padding-top: 0; }
+      .cv-controls, .cv-preview-wrap { position: sticky; top: 62px; max-height: calc(100vh - 87px); overflow-y: auto; }
+      .cv-controls { padding-right: 4px; }
+    }
     @media (max-width: 720px) {
       .cv-wrap { grid-template-columns: 1fr; }
       /* GFX-9: превью — первым, липнет сверху во время прокрутки настроек, а не прячется внизу */
@@ -624,7 +631,7 @@
     .cv-row label { min-width: 76px; font-size: 13px; color: var(--text2); flex-shrink: 0; }
     .cv-row input[type=range] { flex: 1; accent-color: var(--teal); }
     .cv-val { font-family: var(--fm); font-size: 12px; color: var(--muted); min-width: 34px; }
-    .cv-preview-wrap { display: flex; flex-direction: column; gap: 10px; min-width: 0; position: sticky; top: 58px; align-self: start; }
+    .cv-preview-wrap { display: flex; flex-direction: column; gap: 10px; min-width: 0; position: sticky; top: 62px; align-self: start; }
     .cv-empty { color: var(--muted); font-size: 13px; font-style: italic; text-align: center; padding: 52px 0; }
     .cv-no-image { color: var(--muted); font-size: 13px; font-style: italic; text-align: center; padding: 32px; grid-column: 1/-1; }
     .cv-vars-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
@@ -633,7 +640,11 @@
     .cv-var-label { font-size: 12px; color: var(--text2); font-family: var(--fm); }
     .cv-layout-sep { width: 100%; font-size: 10px; color: var(--muted); padding: 6px 2px 0; font-family: var(--fm); letter-spacing: .4px; text-transform: uppercase; border-top: 1px solid var(--border); margin-top: 4px; }
     .cv-swap-hint { font-size: 11px; color: var(--muted); font-style: italic; text-align: center; padding: 4px 0; }
-    #cv-canvas { max-width: 100%; max-height: calc(100vh - 120px); height: auto; width: auto; border-radius: var(--r); display: block; cursor: pointer; user-select: none; -webkit-user-select: none; }
+    /* align-self: flex-start — без него флекс-колонка растягивает холст на всю ширину, а max-height
+       урезает только высоту: 4:5 сплющивался в квадрат */
+    #cv-canvas { align-self: flex-start; max-width: 100%; max-height: calc(100vh - 120px); height: auto; width: auto; border-radius: var(--r); display: block; cursor: pointer; user-select: none; -webkit-user-select: none; }
+    /* На ПК колонка превью высотой в экран: холсту оставляем место под заголовок и панель масштаба */
+    @media (min-width: 721px) { #cv-canvas { max-height: calc(100vh - 205px); } }
     .cv-transform-bar { display: flex; align-items: center; gap: 5px; flex-wrap: wrap; padding: 6px 8px; background: var(--card2); border-radius: var(--rs); border: 1px solid var(--border2); }
     .cv-tz-label { font-family: var(--fm); font-size: 11px; color: var(--accent-h); white-space: nowrap; }
     .cv-tz-sep { font-size: 11px; color: var(--muted); white-space: nowrap; }
@@ -6207,6 +6218,8 @@ const cv = {
   infogColor:'#ffffff', infogAlign:'left', infogX:null, infogY:null,
   // рамка одиночной картинки (режим Игра)
   gamePad:0, gameCorner:0, gameBorder:0, gameBorderColor:'#B45309', gameShadow:false,
+  // кадр обложки: cover — заполнить рамку со срезом; contain — вписать целиком, поля: blur (размытая обложка) | bg (цвет фона)
+  gameFit:'cover', gameFill:'blur',
   _selCell:null, _dragIdx:undefined, _canvasDrag:null,
   _pendingSearchName:null,
 };
@@ -6457,29 +6470,73 @@ function cvRR(ctx, x, y, w, h, r) {
 }
 
 // Вычисляет прямоугольник-источник (cover-fit + zoom/pan из transform) — общий для cvFit и cvDrawCirc4
-function cvFitSrcRect(img, w, h, t) {
-  const ir = img.naturalWidth / img.naturalHeight, cr = w / h;
-  let sx, sy, sw, sh;
-  if (ir > cr) { sh=img.naturalHeight; sw=sh*cr; sx=(img.naturalWidth-sw)/2; sy=0; }
-  else         { sw=img.naturalWidth;  sh=sw/cr; sx=0; sy=(img.naturalHeight-sh)/2; }
-  if (t) {
-    const s = Math.max(1, Math.min(4, t.scale || 1));
-    const nsw = sw/s, nsh = sh/s;
-    const maxOx = (sw-nsw)/2, maxOy = (sh-nsh)/2;
-    const ox = Math.max(-maxOx, Math.min(maxOx, (t.ox||0)*sw));
-    const oy = Math.max(-maxOy, Math.min(maxOy, (t.oy||0)*sh));
-    sx += (sw-nsw)/2 + ox; sy += (sh-nsh)/2 + oy;
-    sw = nsw; sh = nsh;
-  }
-  return { sx, sy, sw, sh };
+// fit: 'cover' (по умолчанию) — окно внутри картинки, лишнее срезается;
+// 'contain' — окно охватывает картинку целиком, по краям остаются поля.
+// Сдвиг ограничен всей картинкой, а не запасом от зума: раньше на 100% окно не двигалось
+// вовсе, и срезанный верх обложки (название игры) нельзя было вернуть в кадр.
+// tox/toy — сдвиг после ограничения, в тех же долях, что t.ox/t.oy.
+function cvFitSrcRect(img, w, h, t, fit) {
+  const W = img.naturalWidth, H = img.naturalHeight, cr = w / h;
+  let sw, sh;
+  if ((W / H > cr) !== (fit === 'contain')) { sh = H; sw = sh * cr; }
+  else                                      { sw = W; sh = sw / cr; }
+  const s = Math.max(1, Math.min(4, t?.scale || 1));
+  const nsw = sw / s, nsh = sh / s;
+  const maxOx = Math.abs(W - nsw) / 2, maxOy = Math.abs(H - nsh) / 2;
+  const ox = Math.max(-maxOx, Math.min(maxOx, (t?.ox || 0) * sw));
+  const oy = Math.max(-maxOy, Math.min(maxOy, (t?.oy || 0) * sh));
+  return { sx: (W - nsw) / 2 + ox, sy: (H - nsh) / 2 + oy, sw: nsw, sh: nsh, tox: ox / sw, toy: oy / sh };
 }
 
-function cvFit(ctx, img, x, y, w, h, r, t) {
-  const { sx, sy, sw, sh } = cvFitSrcRect(img, w, h, t);
+function cvFit(ctx, img, x, y, w, h, r, t, fit) {
+  const { sx, sy, sw, sh } = cvFitSrcRect(img, w, h, t, fit);
+  // В режиме contain окно выходит за края картинки. Обрезаем его сами, а не полагаемся
+  // на то, как браузер обработает drawImage с источником за границей изображения.
+  const kx = w / sw, ky = h / sh;
+  const x0 = Math.max(sx, 0), y0 = Math.max(sy, 0);
+  const x1 = Math.min(sx + sw, img.naturalWidth), y1 = Math.min(sy + sh, img.naturalHeight);
+  if (x1 <= x0 || y1 <= y0) return;
   ctx.save();
   if (r > 0) { cvRR(ctx,x,y,w,h,r); ctx.clip(); }
-  ctx.drawImage(img, sx,sy,sw,sh, x,y,w,h);
+  ctx.drawImage(img, x0, y0, x1-x0, y1-y0, x + (x0-sx)*kx, y + (y0-sy)*ky, (x1-x0)*kx, (y1-y0)*ky);
   ctx.restore();
+}
+
+// Поля вокруг вписанной обложки — её же размытая копия. Размытие через уменьшение
+// до пары десятков пикселей и обратное растяжение: работает одинаково в любом браузере,
+// в отличие от ctx.filter.
+function cvDrawBlurFill(ctx, img, x, y, w, h, r) {
+  const small = document.createElement('canvas');
+  const k = 24 / Math.max(w, h);
+  small.width = Math.max(1, Math.round(w * k)); small.height = Math.max(1, Math.round(h * k));
+  cvFit(small.getContext('2d'), img, 0, 0, small.width, small.height, 0);
+  ctx.save();
+  if (r > 0) { cvRR(ctx,x,y,w,h,r); ctx.clip(); }
+  ctx.imageSmoothingEnabled = true; ctx.imageSmoothingQuality = 'high';
+  ctx.drawImage(small, x, y, w, h);
+  ctx.fillStyle = 'rgba(0,0,0,0.28)'; ctx.fillRect(x, y, w, h);
+  ctx.restore();
+}
+
+// Рамка, в которую рисуется картинка: нужна, чтобы ограничить сдвиг сразу при действии,
+// иначе накопленный за краем сдвиг даёт «мёртвый ход» — тянешь, а кадр стоит.
+function cvFrameOf(img) {
+  const [cw, ch] = CV_SZ[cv.ratio] || CV_SZ['4:5'];
+  if (cv.mode === 'game') return { w: cw - 2*cv.gamePad, h: ch - 2*cv.gamePad, fit: cv.gameFit };
+  const c = cvCells(cv.layout, cv.images.length, cw, ch, cv.padding)[cv.images.indexOf(img)];
+  if (!c) return null;
+  if (c.circle) return { w: 2*c.r, h: 2*c.r };
+  if (c.poly) {
+    const xs = c.poly.map(p => p[0]), ys = c.poly.map(p => p[1]);
+    return { w: Math.max(...xs) - Math.min(...xs), h: Math.max(...ys) - Math.min(...ys) };
+  }
+  return { w: c.w, h: c.h };
+}
+function cvClampTransform(img) {
+  const f = cvFrameOf(img), t = img.transform;
+  if (!f || !t || !img.el?.naturalWidth) return;
+  const r = cvFitSrcRect(img.el, f.w, f.h, t, f.fit);
+  t.ox = r.tox; t.oy = r.toy;
 }
 
 const COLLAGE_LAYOUTS = {
@@ -7149,15 +7206,21 @@ function cvDrawGame(canvas, imgObj, opts) {
   } else {
     ctx.fillStyle = opts?.bg ?? cv.bg;
   }
+  const bgFill = ctx.fillStyle;
   ctx.fillRect(0,0,cw,ch);
+  const fw = cw-2*pad, fh = ch-2*pad;
+  const contain = cv.gameFit === 'contain';
   // Тень под картинкой (видна при отступе > 0)
   if (cv.gameShadow && pad > 0) {
     ctx.save();
     ctx.shadowColor = 'rgba(0,0,0,0.55)'; ctx.shadowBlur = cw*0.035; ctx.shadowOffsetY = cw*0.012;
-    cvRR(ctx, pad, pad, cw-2*pad, ch-2*pad, cr); ctx.fillStyle = '#000'; ctx.fill();
+    cvRR(ctx, pad, pad, fw, fh, cr); ctx.fillStyle = '#000'; ctx.fill();
     ctx.restore();
+    // Вписанная обложка не закрывает рамку целиком — поля под ней должны быть фоном, а не чёрной подложкой тени
+    if (contain && cv.gameFill !== 'blur') { ctx.save(); cvRR(ctx, pad, pad, fw, fh, cr); ctx.fillStyle = bgFill; ctx.fill(); ctx.restore(); }
   }
-  cvFit(ctx, imgObj.el, pad, pad, cw-2*pad, ch-2*pad, cr, imgObj.transform);
+  if (contain && cv.gameFill === 'blur') cvDrawBlurFill(ctx, imgObj.el, pad, pad, fw, fh, cr);
+  cvFit(ctx, imgObj.el, pad, pad, fw, fh, cr, imgObj.transform, cv.gameFit);
   // Обводка по краю картинки
   if (cv.gameBorder > 0) {
     ctx.save();
@@ -7575,6 +7638,18 @@ function coversTabHTML() {
       <div class="card">
         <div class="card-title">Рамка и фон</div>
         <div style="font-size:11px;color:var(--muted);margin-bottom:8px">Отступ открывает фон вокруг картинки — своя рамка для каждого объявления</div>
+        <div class="cv-row"><label>Кадр</label>
+          <div class="cv-layouts" style="margin-top:0">
+            <button class="cv-layout-btn ${cv.gameFit!=='contain'?'active':''}" data-cv-game-fit="cover" title="Обложка заполняет рамку, лишнее срезается — тяни кадр мышкой">Заполнить</button>
+            <button class="cv-layout-btn ${cv.gameFit==='contain'?'active':''}" data-cv-game-fit="contain" title="Обложка видна целиком, по краям — поля">Вписать целиком</button>
+          </div>
+        </div>
+        ${cv.gameFit==='contain' ? `<div class="cv-row"><label>Поля</label>
+          <div class="cv-layouts" style="margin-top:0">
+            <button class="cv-layout-btn ${cv.gameFill!=='bg'?'active':''}" data-cv-game-fill="blur">Размытая обложка</button>
+            <button class="cv-layout-btn ${cv.gameFill==='bg'?'active':''}" data-cv-game-fill="bg">Цвет фона</button>
+          </div>
+        </div>` : ''}
         ${bgPicker}
         <div class="cv-row">
           <label>Отступ</label>
@@ -7617,7 +7692,7 @@ function coversTabHTML() {
       <div class="card-title">Превью</div>
       <canvas id="cv-canvas"></canvas>
       ${!cv.images.length?'<p class="cv-empty">Загрузите обложку игры чтобы увидеть превью</p>':''}
-      <div id="cv-tz-area-game" style="margin-top:4px">${cv.images.length?'<div class="cv-swap-hint">💡 Колёсиком — масштаб &nbsp;·&nbsp; тяни картинку — сдвиг кадра</div>':''}</div>
+      <div id="cv-tz-area-game" style="margin-top:4px">${cv.images.length?'<div class="cv-swap-hint">💡 Колёсико или два пальца на тачпаде — масштаб &nbsp;·&nbsp; тяни картинку — сдвиг кадра</div>':''}</div>
       <div id="cv-vars-grid" class="cv-vars-grid" style="margin-top:14px">
         ${cv.images.length?'':''}
       </div>
@@ -7823,8 +7898,9 @@ function bindCoversTab() {
   // Canvas — drag to swap, click to select, wheel to zoom selected cell
   const canvas = document.getElementById('cv-canvas');
   if (canvas) {
-    if (cv.images.length && cv.mode === 'collage') cvDrawCollage(canvas);
-    if (cv.images.length && cv.mode === 'game') cvDrawGame(canvas, cv.images[0], {});
+    // cvRenderState, а не голая отрисовка: шаблон вкладки не содержит панели масштаба,
+    // и после любого render() (тень, кадр, стиль фона) она пропадала до следующей смены картинок
+    if (cv.images.length) cvRenderState();
 
     // GFX-8/GFX-14: точка-в-полигоне для poly-ячеек (circ4d) — общий хелпер для хит-теста и клика
     function cvPointInPoly(mx, my, poly) {
@@ -7943,6 +8019,7 @@ function bindCoversTab() {
         e.preventDefault();
         const img = cv.images[0];
         if (!img.transform) img.transform = {scale:1,ox:0,oy:0};
+        cvClampTransform(img);
         _gameDrag = { startMx: mx, startMy: my, ox: img.transform.ox||0, oy: img.transform.oy||0 };
         canvas.style.cursor = 'grabbing';
         return;
@@ -7959,10 +8036,15 @@ function bindCoversTab() {
         const img = cv.images[0];
         if (!img) return;
         if (!img.transform) img.transform = {scale:1,ox:0,oy:0};
-        const [cw2, ch2] = CV_SZ[cv.ratio] || CV_SZ['4:5'];
+        // Сдвиг в долях окна источника: картинка идёт ровно за курсором, если делить на размер рамки.
+        // Приращениями от прошлой точки, а не от начала: упёрлись в край и повели обратно — кадр
+        // сразу едет назад, без мёртвого хода.
+        const f = cvFrameOf(img);
         const s = img.transform.scale || 1;
-        img.transform.ox = _gameDrag.ox - (mx - _gameDrag.startMx) / (s * cw2);
-        img.transform.oy = _gameDrag.oy - (my - _gameDrag.startMy) / (s * ch2);
+        img.transform.ox -= (mx - _gameDrag.startMx) / (s * f.w);
+        img.transform.oy -= (my - _gameDrag.startMy) / (s * f.h);
+        _gameDrag.startMx = mx; _gameDrag.startMy = my;
+        cvClampTransform(img);
         cvDrawGame(canvas, img, {});
         return;
       }
@@ -8065,30 +8147,27 @@ function bindCoversTab() {
     canvas.addEventListener('touchend', onPointerUp);
     canvas.addEventListener('touchcancel', onPointerLeave);
 
+    // Масштаб колесом мыши, свайпом двумя пальцами и щипком на тачпаде. Шаг пропорционален
+    // величине прокрутки: тачпад шлёт десятки мелких событий за жест, и фиксированный шаг
+    // на каждое событие прыгал от 100% к 400% за одно движение. Щипок приходит как
+    // wheel с ctrlKey и мелкими дельтами — ему своя чувствительность.
     canvas.addEventListener('wheel', e => {
-      if (cv.mode === 'game') {
-        if (!cv.images.length) return;
-        e.preventDefault();
-        const img = cv.images[0];
-        if (!img.transform) img.transform = {scale:1,ox:0,oy:0};
-        img.transform.scale = Math.max(1, Math.min(4, (img.transform.scale||1) + (e.deltaY < 0 ? 0.15 : -0.15)));
-        const slider = document.getElementById('cv-tz-scale');
-        if (slider) slider.value = Math.round(img.transform.scale*100);
-        const valEl = document.getElementById('cv-tz-scale-val');
-        if (valEl) valEl.textContent = Math.round(img.transform.scale*100) + '%';
-        cvDrawGame(canvas, img, {});
-        return;
-      }
-      if (cv._selCell === null || cv._selCell === undefined || !cv.images[cv._selCell]) return;
+      let img;
+      if (cv.mode === 'game') img = cv.images[0];
+      else if (cv._selCell !== null && cv._selCell !== undefined) img = cv.images[cv._selCell];
+      if (!img) return;
       e.preventDefault();
-      const img = cv.images[cv._selCell];
       if (!img.transform) img.transform = {scale:1,ox:0,oy:0};
-      img.transform.scale = Math.max(1, Math.min(4, (img.transform.scale||1) + (e.deltaY < 0 ? 0.1 : -0.1)));
+      const dy = e.deltaY * (e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? 400 : 1);
+      const k = Math.exp(-dy * (e.ctrlKey ? 0.01 : 0.0015));
+      img.transform.scale = Math.max(1, Math.min(4, (img.transform.scale||1) * k));
+      cvClampTransform(img);
+      const pct = Math.round(img.transform.scale*100);
       const slider = document.getElementById('cv-tz-scale');
-      if (slider) { slider.value = Math.round(img.transform.scale*100); }
+      if (slider) slider.value = pct;
       const valEl = document.getElementById('cv-tz-scale-val');
-      if (valEl) valEl.textContent = Math.round(img.transform.scale*100) + '%';
-      cvDrawCollage(canvas);
+      if (valEl) valEl.textContent = pct + '%';
+      cv.mode === 'game' ? cvDrawGame(canvas, img, {}) : cvDrawCollage(canvas);
     }, {passive: false});
   }
 }
@@ -9308,6 +9387,9 @@ function bindScannerTab() {
 // ══════════════════════════════════════════
 
 function render() {
+  // У колонок обложек своя прокрутка (на ПК), и innerHTML сбросил бы её в ноль при каждом
+  // переключателе — меню прыгало бы наверх. Запоминаем и возвращаем.
+  const cvScroll = ['.cv-controls', '.cv-preview-wrap'].map(s => document.querySelector(s)?.scrollTop || 0);
   const favCnt = state.favorites.length;
   document.getElementById('app').innerHTML = `
 <header>
@@ -9364,7 +9446,10 @@ function render() {
   }
   if (state.tab === 'settings')  bindSettingsTab();
   if (state.tab === 'queue')     bindQueueTab();
-  if (state.tab === 'covers')   bindCoversTab();
+  if (state.tab === 'covers') {
+    bindCoversTab();
+    ['.cv-controls', '.cv-preview-wrap'].forEach((s, i) => { const el = document.querySelector(s); if (el) el.scrollTop = cvScroll[i]; });
+  }
   if (state.tab === 'database') bindDbTab();
   if (state.tab === 'scanner')  bindScannerTab();
 }
@@ -9428,7 +9513,7 @@ function reDurs() {
 
 document.addEventListener('click', e => {
   // Covers module — data-cv-* attributes
-  const cvEl = e.target.closest('[data-cv-mode],[data-cv-layout],[data-cv-ratio],[data-cv-bg],[data-cv-bg-style],[data-cv-toggle],[data-cv-grade],[data-cv-plat-sel],[data-cv-plat-pos],[data-cv-del],[data-cv-ms-shape],[data-cv-ms-pos],[data-cv-ms-bg],[data-cv-ms-tc],[data-cv-tz],[data-cv-to-color],[data-cv-to-bg],[data-cv-src],[data-cv-ig-align],[data-cv-ig-bg],[data-cv-ig-tc]');
+  const cvEl = e.target.closest('[data-cv-mode],[data-cv-layout],[data-cv-ratio],[data-cv-bg],[data-cv-bg-style],[data-cv-toggle],[data-cv-grade],[data-cv-plat-sel],[data-cv-plat-pos],[data-cv-del],[data-cv-ms-shape],[data-cv-ms-pos],[data-cv-ms-bg],[data-cv-ms-tc],[data-cv-tz],[data-cv-to-color],[data-cv-to-bg],[data-cv-src],[data-cv-ig-align],[data-cv-ig-bg],[data-cv-ig-tc],[data-cv-game-fit],[data-cv-game-fill]');
   if (cvEl) {
     if (cvEl.dataset.cvSrc) {
       cv.coverSource = cvEl.dataset.cvSrc;
@@ -9448,6 +9533,19 @@ document.addEventListener('click', e => {
       if (lb) lb.innerHTML = cvLayoutButtonsHTML(cv.layout, cv.images.length);
       const c = document.getElementById('cv-canvas');
       if (c && cv.images.length) cvDrawCollage(c); return;
+    }
+    if (cvEl.dataset.cvGameFit) {
+      cv.gameFit = cvEl.dataset.cvGameFit;
+      // Смена кадра — с чистого листа: сдвиг от «заполнить» в «вписать» переносить бессмысленно
+      const img = cv.images[0];
+      if (img) img.transform = { scale: 1, ox: 0, oy: 0 };
+      // render() сохраняет настройки только при загруженной картинке — без обложки выбор терялся бы на F5
+      cvSave(); render(); return;
+    }
+    if (cvEl.dataset.cvGameFill) {
+      cv.gameFill = cvEl.dataset.cvGameFill;
+      document.querySelectorAll('[data-cv-game-fill]').forEach(b => b.classList.toggle('active', b.dataset.cvGameFill === cv.gameFill));
+      cvReDraw(); return;
     }
     if (cvEl.dataset.cvRatio) {
       cv.ratio = cvEl.dataset.cvRatio; cv._selCell = null;
@@ -9553,6 +9651,7 @@ document.addEventListener('click', e => {
         case 'down':  t.oy = (t.oy||0) + PAN; break;
         case 'reset': t.scale=1; t.ox=0; t.oy=0; break;
       }
+      cvClampTransform(img);
       const scaleVal = Math.round((t.scale||1)*100);
       const slider = document.getElementById('cv-tz-scale');
       if (slider) slider.value = scaleVal;
@@ -10569,6 +10668,7 @@ document.addEventListener('input', e => {
     if (!img) return;
     if (!img.transform) img.transform = {scale:1,ox:0,oy:0};
     img.transform.scale = Math.max(1, Math.min(4, +el.value / 100));
+    cvClampTransform(img);
     const valEl = document.getElementById('cv-tz-scale-val');
     if (valEl) valEl.textContent = el.value + '%';
     const c = document.getElementById('cv-canvas');
