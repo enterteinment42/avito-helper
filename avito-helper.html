@@ -6242,6 +6242,8 @@ function cvLoad() {
   } catch(e) {}
 }
 cvLoad();
+// «Рамка» (крест с пустыми углами) удалена по слову Дениса 23.09.2026 — сохранённый выбор переводим на авто
+if (cv.layout === 'frame5') cv.layout = 'auto';
 
 // F8: перед заменой обложки игры освобождаем blob-URL старой картинки —
 // иначе при долгом подборе (несколько загрузок с диска подряд) они копятся в памяти
@@ -6430,7 +6432,7 @@ function cvRenderState() {
       </div>`;
     } else {
       tzArea.innerHTML = cv.images.length
-        ? '<div class="cv-swap-hint">💡 Тяни ячейку на другую — поменяет местами &nbsp;·&nbsp; клик — выбрать для масштабирования</div>'
+        ? '<div class="cv-swap-hint">💡 Тяни картинку — сдвиг кадра &nbsp;·&nbsp; клик — выбрать ячейку для масштаба &nbsp;·&nbsp; поменять местами — перетащи миниатюры</div>'
         : '';
     }
   }
@@ -6558,7 +6560,6 @@ const COLLAGE_LAYOUTS = {
   '1+4h':    { name:'1+4ряд',    n:5, cells:(cw,ch,p)=>{ const th=(ch-3*p)*.38,bh=ch-3*p-th,bw=(cw-5*p)/4; return [{x:p,y:p,w:cw-2*p,h:th},{x:p,y:2*p+th,w:bw,h:bh},{x:2*p+bw,y:2*p+th,w:bw,h:bh},{x:3*p+2*bw,y:2*p+th,w:bw,h:bh},{x:4*p+3*bw,y:2*p+th,w:cw-2*p-3*(bw+p),h:bh}]; } },
   '3v+2v':   { name:'3│+2│',    n:5, cells:(cw,ch,p)=>{ const lw=Math.round((cw-3*p)*.44),rw=cw-3*p-lw,lh=(ch-4*p)/3,rh=(ch-3*p)/2; return [{x:p,y:p,w:lw,h:lh},{x:p,y:2*p+lh,w:lw,h:lh},{x:p,y:3*p+2*lh,w:lw,h:ch-2*p-2*(lh+p)},{x:2*p+lw,y:p,w:rw,h:rh},{x:2*p+lw,y:2*p+rh,w:rw,h:ch-2*p-rh-p}]; } },
   '2v+3v':   { name:'2│+3│',    n:5, cells:(cw,ch,p)=>{ const rw=Math.round((cw-3*p)*.44),lw=cw-3*p-rw,lh=(ch-3*p)/2,rh=(ch-4*p)/3; return [{x:p,y:p,w:lw,h:lh},{x:p,y:2*p+lh,w:lw,h:ch-2*p-lh-p},{x:2*p+lw,y:p,w:rw,h:rh},{x:2*p+lw,y:2*p+rh,w:rw,h:rh},{x:2*p+lw,y:3*p+2*rh,w:rw,h:ch-2*p-2*(rh+p)}]; } },
-  'frame5':  { name:'Рамка',     n:5, cells:(cw,ch,p)=>{ const sw=Math.round((cw-4*p)*.26),mw=cw-2*p-2*(sw+p),sh=Math.round((ch-4*p)*.26),mh=ch-2*p-2*(sh+p); return [{x:2*p+sw,y:p,w:mw,h:sh},{x:p,y:2*p+sh,w:sw,h:mh},{x:2*p+sw,y:2*p+sh,w:mw,h:mh},{x:3*p+sw+mw,y:2*p+sh,w:sw,h:mh},{x:2*p+sw,y:3*p+sh+mh,w:mw,h:ch-2*p-sh-p-mh-p}]; } },
   'arch5':   { name:'П-форма',   n:5, cells:(cw,ch,p)=>{ const cw3=(cw-4*p)/3,topH=Math.round((ch-3*p)*.62),botH=ch-3*p-topH,midH=(topH-p)/2; return [{x:p,y:p,w:cw3,h:topH},{x:2*p+cw3,y:p,w:cw3,h:midH},{x:2*p+cw3,y:2*p+midH,w:cw3,h:topH-midH-p},{x:3*p+2*cw3,y:p,w:cw-2*p-2*(cw3+p),h:topH},{x:p,y:2*p+topH,w:cw-2*p,h:botH}]; } },
   '3x2':     { name:'3×2',       n:6, cells:(cw,ch,p)=>{ const iw=(cw-4*p)/3,ih=(ch-3*p)/2,out=[]; for(let r=0;r<2;r++) for(let c=0;c<3;c++) out.push({x:p+c*(iw+p),y:p+r*(ih+p),w:c===2?cw-2*p-2*(iw+p):iw,h:r===1?ch-2*p-ih-p:ih}); return out; } },
   '2x3':     { name:'2×3',       n:6, cells:(cw,ch,p)=>{ const iw=(cw-3*p)/2,ih=(ch-4*p)/3,out=[]; for(let r=0;r<3;r++) for(let c=0;c<2;c++) out.push({x:p+c*(iw+p),y:p+r*(ih+p),w:c===1?cw-2*p-iw-p:iw,h:r===2?ch-2*p-2*(ih+p):ih}); return out; } },
@@ -6581,7 +6582,7 @@ const COLLAGE_LAYOUTS = {
 const COLLAGE_UI_GROUPS = [
   { sep: null,              ids: ['auto', 'strip'] },
   { sep: '2–4 изображения', ids: ['1x2','2+1','2x2','3+1','1+3h','1v+3v','3v+1v','asym4'] },
-  { sep: '5 изображений',   ids: ['2+3','3+2','1+4','4+1','1+4h','3v+2v','2v+3v','c4','2c2','circ4','circ4d','square5','frame5','arch5'] },
+  { sep: '5 изображений',   ids: ['2+3','3+2','1+4','4+1','1+4h','3v+2v','2v+3v','c4','2c2','circ4','circ4d','square5','arch5'] },
   { sep: '6 изображений',   ids: ['3x2','2x3','2+4','4+2','2v+4v','4v+2v','pyr6','rpyr6','corner6','panel6'] },
   { sep: '7 изображений',   ids: ['3+4','4+3','2+3+2'] },
   { sep: '8–10 изображений', ids: ['4x2','3x3','5x2'] },
@@ -6712,7 +6713,8 @@ function cvDrawCirc4D(ctx, imgs, cw, ch, p, cr) {
     ctx.beginPath();
     poly.forEach(([x,y], k) => k === 0 ? ctx.moveTo(x,y) : ctx.lineTo(x,y));
     ctx.closePath(); ctx.clip();
-    cvFitClip(ctx, imgs[i + 1].el, bx, by, bw, bh);
+    // cvFit с transform, а не cvFitClip: иначе сдвиг и масштаб треугольника игнорировались
+    cvFit(ctx, imgs[i + 1].el, bx, by, bw, bh, 0, imgs[i + 1].transform);
     ctx.restore();
   });
   // Круг сверху по центру, перекрывает стык 4 квадрантов
@@ -7024,12 +7026,27 @@ function cvDrawEffects(ctx, cw, ch, lay, p, count, opts) {
       ctx.strokeStyle = cv.neonColor;
       ctx.lineWidth = Math.max(2.5, p * 0.32);
       const rad = Math.max(4, p * 0.7);
-      cells.forEach(c => {
+      const strokeCell = c => {
         if (c.circle) { ctx.beginPath(); ctx.arc(c.cx, c.cy, c.r, 0, Math.PI * 2); }
         else if (c.poly) { ctx.beginPath(); c.poly.forEach(([x,y],k) => k===0?ctx.moveTo(x,y):ctx.lineTo(x,y)); ctx.closePath(); }
         else cvRR(ctx, c.x, c.y, c.w, c.h, rad);
         ctx.stroke(); ctx.stroke();
-      });
+      };
+      // Круг+4, круг+4 диагональный, квадрат+4: фоновые ячейки уходят под центральную фигуру,
+      // и их швы, нарисованные поверх всего, перечёркивали круг белыми линиями. Режем швы
+      // фона по центральной фигуре с её кольцом, саму фигуру обводим отдельно.
+      const centre = (lay === 'circ4' || lay === 'circ4d' || lay === 'square5') ? cells[0] : null;
+      if (centre) {
+        const ring = Math.max(8, Math.round(p * 0.7));
+        ctx.save();
+        ctx.beginPath(); ctx.rect(0, 0, cw, ch);
+        if (centre.circle) { ctx.moveTo(centre.cx + centre.r + ring, centre.cy); ctx.arc(centre.cx, centre.cy, centre.r + ring, 0, Math.PI * 2); }
+        else ctx.rect(centre.x - ring, centre.y - ring, centre.w + 2*ring, centre.h + 2*ring);
+        ctx.clip('evenodd');
+        cells.slice(1).forEach(strokeCell);
+        ctx.restore();
+        strokeCell(centre);
+      } else cells.forEach(strokeCell);
       ctx.restore();
     }
   }
@@ -7137,10 +7154,32 @@ function cvReDraw() {
   else cvDrawCollage(c);
 }
 
+// Перетащенные позиции инфографики, стикера и текста сохраняются между F5 и форматами,
+// но ничем не ограничивались: блок, опущенный вниз в 4:5 (высота 1350), в квадрате (1080)
+// рисовался за нижним краем, и инфографика «не работала» — писали строки, а плашек нет.
+// Возвращаем всё в пределы текущего холста перед каждой отрисовкой.
+function cvClampOverlays(ctx, cw, ch) {
+  const cl = (v, a, b) => Math.max(a, Math.min(Math.max(a, b), v));
+  const before = [cv.infogX, cv.infogY, cv.maskStickerX, cv.maskStickerY, cv.textOverlayX, cv.textOverlayY].join();
+  if (cv.infogX !== null && cv.infogY !== null) {
+    const m = cvInfogMetrics(ctx, cw, ch);
+    if (m) { cv.infogX = cl(cv.infogX, 0, cw - m.maxW); cv.infogY = cl(cv.infogY, 0, ch - m.totalH); }
+  }
+  if (cv.maskStickerX !== null && cv.maskStickerY !== null) {
+    const h = cv.maskStickerSize / 2;
+    cv.maskStickerX = cl(cv.maskStickerX, h, cw - h); cv.maskStickerY = cl(cv.maskStickerY, h, ch - h);
+  }
+  const fs = cv.textOverlaySize;
+  if (cv.textOverlayX !== null) cv.textOverlayX = cl(cv.textOverlayX, fs, cw - fs);
+  if (cv.textOverlayY !== null) cv.textOverlayY = cl(cv.textOverlayY, fs, ch - fs);
+  if ([cv.infogX, cv.infogY, cv.maskStickerX, cv.maskStickerY, cv.textOverlayX, cv.textOverlayY].join() !== before) cvSave();
+}
+
 function cvDrawCollage(canvas, opts) {
   const [cw,ch] = CV_SZ[cv.ratio] || CV_SZ['4:5'];
   canvas.width=cw; canvas.height=ch;
   const ctx = canvas.getContext('2d');
+  cvClampOverlays(ctx, cw, ch);
   const p   = opts?.padding ?? cv.padding;
   const imgs= opts?.images ?? cv.images;
   const lay = opts?.layout ?? cv.layout;
@@ -7195,6 +7234,7 @@ function cvDrawGame(canvas, imgObj, opts) {
   const [cw,ch] = CV_SZ[cv.ratio] || CV_SZ['4:5'];
   canvas.width=cw; canvas.height=ch;
   const ctx = canvas.getContext('2d');
+  cvClampOverlays(ctx, cw, ch);
   const pad = opts?.pad ?? cv.gamePad;
   const cr  = opts?.corner ?? cv.gameCorner;
   // Фон: сплошной или градиент (как в cvDrawCollage)
@@ -7606,7 +7646,7 @@ function coversTabHTML() {
     </div>
     <div class="cv-preview-wrap">
       <div class="card-title">Превью</div>
-      <div id="cv-tz-area">${cv.images.length ? '<div class="cv-swap-hint">💡 Тяни ячейку на другую — поменяет местами &nbsp;·&nbsp; клик — выбрать для масштабирования</div>' : ''}</div>
+      <div id="cv-tz-area">${cv.images.length ? '<div class="cv-swap-hint">💡 Тяни картинку — сдвиг кадра &nbsp;·&nbsp; клик — выбрать ячейку для масштаба &nbsp;·&nbsp; поменять местами — перетащи миниатюры</div>' : ''}</div>
       <canvas id="cv-canvas"></canvas>
       ${!cv.images.length?'<p class="cv-empty">Загрузите изображения чтобы увидеть превью</p>':''}
       <div id="cv-collage-vars-grid" class="cv-vars-grid" style="margin-top:14px"></div>
@@ -8024,10 +8064,12 @@ function bindCoversTab() {
         canvas.style.cursor = 'grabbing';
         return;
       }
+      // Коллаж: перетаскивание двигает кадр внутри ячейки (решение Дениса 23.09.2026 — неудачный
+      // ракурс иначе не поправить). Поменять ячейки местами — перетаскиванием миниатюр.
       const hit = canvasHitCell(e);
-      if (hit === -1) return;
+      if (hit === -1 || !cv.images[hit]) return;
       e.preventDefault();
-      _drag = { cellIdx: hit, startX: e.clientX, startY: e.clientY, moved: false, targetCell: -1 };
+      _drag = { cellIdx: hit, startX: e.clientX, startY: e.clientY, moved: false, lastMx: mx, lastMy: my };
     }
 
     function onPointerMove(e) {
@@ -8074,24 +8116,18 @@ function bindCoversTab() {
       if (!_drag.moved && Math.sqrt(dx*dx+dy*dy) > 6) _drag.moved = true;
       if (!_drag.moved) return;
       canvas.style.cursor = 'grabbing';
-      const target = canvasHitCell(e);
-      _drag.targetCell = target;
+      // Сдвиг кадра ячейки — той же арифметикой, что в режиме «Игра»: приращениями, с ограничением
+      const img = cv.images[_drag.cellIdx];
+      const f = img && cvFrameOf(img);
+      if (!f) return;
+      if (!img.transform) img.transform = {scale:1,ox:0,oy:0};
+      const { mx, my } = canvasMouse(e);
+      const s = img.transform.scale || 1;
+      img.transform.ox = (img.transform.ox || 0) - (mx - _drag.lastMx) / (s * f.w);
+      img.transform.oy = (img.transform.oy || 0) - (my - _drag.lastMy) / (s * f.h);
+      _drag.lastMx = mx; _drag.lastMy = my;
+      cvClampTransform(img);
       cvDrawCollage(canvas);
-      if (target !== -1 && target !== _drag.cellIdx) {
-        const [cw,ch] = CV_SZ[cv.ratio] || CV_SZ['4:5'];
-        const cells = cvCells(cv.layout, cv.images.length, cw, ch, cv.padding);
-        const ctx = canvas.getContext('2d');
-        ctx.save();
-        const paintCell = (c, color) => {
-          ctx.fillStyle = color;
-          if (c.circle) { ctx.beginPath(); ctx.arc(c.cx,c.cy,c.r,0,Math.PI*2); ctx.fill(); }
-          else if (c.poly) { ctx.beginPath(); c.poly.forEach(([x,y],k)=>k===0?ctx.moveTo(x,y):ctx.lineTo(x,y)); ctx.closePath(); ctx.fill(); }
-          else ctx.fillRect(c.x,c.y,c.w,c.h);
-        };
-        paintCell(cells[_drag.cellIdx], 'rgba(250,204,21,0.28)');
-        paintCell(cells[target], 'rgba(15,118,110,0.38)');
-        ctx.restore();
-      }
     }
 
     function onPointerUp() {
@@ -8103,16 +8139,10 @@ function bindCoversTab() {
       if (_infogDrag) { _infogDrag = null; canvas.style.cursor = 'pointer'; cvSave(); return; }
       if (!_drag) return;
       canvas.style.cursor = 'pointer';
-      if (_drag.moved && _drag.targetCell !== -1 && _drag.targetCell !== _drag.cellIdx) {
-        const tmp = cv.images[_drag.cellIdx];
-        cv.images[_drag.cellIdx] = cv.images[_drag.targetCell];
-        cv.images[_drag.targetCell] = tmp;
-        cv._selCell = null;
-      } else if (!_drag.moved) {
-        cv._selCell = (cv._selCell === _drag.cellIdx) ? null : _drag.cellIdx;
-      }
+      const wasClick = !_drag.moved;
+      if (wasClick) cv._selCell = (cv._selCell === _drag.cellIdx) ? null : _drag.cellIdx;
       _drag = null;
-      cvRenderState();
+      if (wasClick) cvRenderState();
     }
 
     function onPointerLeave() {
