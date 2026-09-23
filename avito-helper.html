@@ -7182,7 +7182,9 @@ function cvDrawCollage(canvas, opts) {
   cvClampOverlays(ctx, cw, ch);
   const p   = opts?.padding ?? cv.padding;
   const imgs= opts?.images ?? cv.images;
-  const lay = opts?.layout ?? cv.layout;
+  // Раскладку разрешаем по числу картинок так же, как cvCells: иначе «Круг+4» с четырьмя фото
+  // рисовался кругом, а швы, клики и перетаскивание шли по ячейкам «авто»-сетки
+  const lay = cvResolveLayout(opts?.layout ?? cv.layout, imgs.length);
   // Background: solid (original) or gradient
   if (!opts?.bg && cv.bgStyle === 'gradient') {
     const bgGrad = ctx.createLinearGradient(0, 0, cw, ch);

@@ -196,6 +196,18 @@ export async function runCovers(browser, base, t) {
     });
     t.ok('circ4d: масштаб и сдвиг треугольника учитываются', c4dPan);
 
+    // ── «Круг+4» с четырьмя фото рисуется «авто»-сеткой — той же, по которой идут швы и клики ──
+    const c4of4 = await page.evaluate(() => {
+      const el = cv.images[0].el;
+      cv.images = [0, 1, 2, 3].map(i => ({ id: i + 1, url: el.src, el, transform: { scale: 1, ox: 0, oy: 0 } }));
+      const a = document.createElement('canvas'), b = document.createElement('canvas');
+      cv.layout = 'circ4'; cvDrawCollage(a);
+      cv.layout = cvResolveLayout('auto', 4); cvDrawCollage(b);
+      cv.layout = 'auto';
+      return a.toDataURL() === b.toDataURL();
+    });
+    t.ok('«Круг+4» с 4 фото рисуется той же сеткой, что «авто»', c4of4);
+
     // ── Неоновый шов не перечёркивает центральный круг (circ4d) ──
     const neon = await page.evaluate(async () => {
       const mk = async c => { const s = document.createElement('canvas'); s.width = 600; s.height = 800; const g = s.getContext('2d'); g.fillStyle = c; g.fillRect(0, 0, 600, 800);
