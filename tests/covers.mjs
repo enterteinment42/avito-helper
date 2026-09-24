@@ -14,7 +14,7 @@ const loadCover = page => page.evaluate(async () => {
   await new Promise(r => { el.onload = r; el.src = src.toDataURL('image/png'); });
   cv.mode = 'game'; cv.ratio = '4:5'; cv.gamePad = 0; cv.gameCorner = 0; cv.gameBorder = 0;
   cv.gameShadow = false; cv.gameFit = 'cover'; cv.gameFill = 'blur'; cv.bg = '#00ff00'; cv.bgStyle = 'solid';
-  cv.vignette = false; cv.grade = 'none'; cv.maskSticker = false; cv.textOverlay = false; cv.infog = false; cv.platBadge = false;
+  cv.vignette = false; cv.grade = 'none'; cv.layers = []; cv._selLayer = null;
   cv.images = [{ id: 1, url: el.src, el, transform: { scale: 1, ox: 0, oy: 0 } }];
   render();
 });
@@ -215,7 +215,7 @@ export async function runCovers(browser, base, t) {
       const imgs = [];
       for (const c of ['#0000ff', '#ff0000', '#ff0000', '#ff0000', '#ff0000']) { const el = await mk(c); imgs.push({ id: imgs.length + 1, url: el.src, el, transform: { scale: 1, ox: 0, oy: 0 } }); }
       cv.mode = 'collage'; cv.ratio = '1:1'; cv.layout = 'circ4d'; cv.padding = 12; cv._selCell = null;
-      cv.neonGap = true; cv.neonColor = '#ffffff'; cv.platBadge = false; cv.infog = false;
+      cv.neonGap = true; cv.neonColor = '#ffffff'; cv.layers = [];
       cv.images = imgs; render();
       const g = document.getElementById('cv-canvas').getContext('2d');
       const at = (x, y) => [...g.getImageData(Math.round(x), Math.round(y), 1, 1).data].slice(0, 3);
@@ -241,21 +241,21 @@ export async function runCovers(browser, base, t) {
     // ── Перетащенная инфографика не уходит за край (ситуация Дениса: утащили вниз в 4:5, включили квадрат) ──
     const ov = await page.evaluate(() => {
       cv.layout = 'auto'; cv.ratio = '1:1';
-      cv.infog = true; cv.infogText = 'строка один\nстрока два'; cv.infogX = 100; cv.infogY = 1250;
-      cv.maskSticker = true; cv.maskStickerText = 'ХИТ'; cv.maskStickerX = 5000; cv.maskStickerY = -300;
-      cv.textOverlay = true; cv.textOverlayText = 'текст'; cv.textOverlayX = -900; cv.textOverlayY = 9000;
+      const ig = { ...cvLayerDefaults('infog'), text: 'строка один\nстрока два', x: 0.3, y: 1.2 };
+      const st = { ...cvLayerDefaults('sticker'), text: 'ХИТ', x: 5, y: -0.4 };
+      const tx = { ...cvLayerDefaults('text'), text: 'текст', x: -0.8, y: 9 };
+      cv.layers = [ig, st, tx];
       render();
-      const c = document.getElementById('cv-canvas');
-      const m = cvInfogMetrics(c.getContext('2d'), c.width, c.height);
-      const res = { h: c.height, iy: cv.infogY, ih: m.totalH, sx: cv.maskStickerX, sy: cv.maskStickerY, sz: cv.maskStickerSize,
-        tx: cv.textOverlayX, ty: cv.textOverlayY, saved: JSON.parse(localStorage.getItem('avito_cv')).infogY };
-      cv.infog = false; cv.maskSticker = false; cv.textOverlay = false; cv.ratio = '4:5'; cvSave();
+      const f = cvLayerFrame(ig, 1080, 1080), fh = cvFrameHalf(f);
+      const res = { h: 1080, iyBottom: f.cy + fh.hy, iyTop: f.cy - fh.hy, sx: st.x * 1080, sy: st.y * 1080,
+        tx: tx.x * 1080, ty: tx.y * 1080, saved: JSON.parse(localStorage.getItem('avito_cv')).layers[0].y, igy: ig.y };
+      cv.layers = []; cv.ratio = '4:5'; cvSave();
       return res;
     });
-    t.ok('инфографика из-за нижнего края вернулась на холст', ov.iy + ov.ih <= ov.h && ov.iy >= 0, JSON.stringify(ov));
-    t.ok('и новая позиция сохранена', ov.saved === ov.iy, JSON.stringify(ov));
-    t.ok('стикер за краем вернулся на холст', ov.sx + ov.sz / 2 <= 1080 && ov.sy - ov.sz / 2 >= 0, JSON.stringify(ov));
-    t.ok('текст за краем вернулся на холст', ov.tx > 0 && ov.tx < 1080 && ov.ty > 0 && ov.ty < 1080, JSON.stringify(ov));
+    t.ok('инфографика из-за нижнего края вернулась на холст', ov.iyBottom <= ov.h + 0.5 && ov.iyTop >= 0, JSON.stringify(ov));
+    t.ok('и новая позиция сохранена', ov.saved === ov.igy, JSON.stringify(ov));
+    t.ok('центр стикера за краем вернулся на холст', ov.sx <= 1080 && ov.sx >= 0 && ov.sy >= 0 && ov.sy <= 1080, JSON.stringify(ov));
+    t.ok('надпись за краем вернулась на холст', ov.tx > 0 && ov.tx < 1080 && ov.ty > 0 && ov.ty < 1080, JSON.stringify(ov));
 
     // ── Раскладка «Рамка» удалена, сохранённый выбор не ломает коллаж ──
     const fr = await page.evaluate(() => ({ btn: !!document.querySelector('[data-cv-layout="frame5"]'), resolved: cvResolveLayout('frame5', 5) }));

@@ -17,6 +17,7 @@ import { runHistory } from './history.mjs';
 import { runRotate } from './rotate.mjs';
 import { runRegress } from './regress.mjs';
 import { runCovers } from './covers.mjs';
+import { runLayers } from './layers.mjs';
 
 const only = process.argv[2]; // node run.mjs parity|editor|regress — прогнать одну секцию
 
@@ -43,6 +44,7 @@ try {
   if (!only || only === 'history')  await runHistory(browser, base, t);
   if (!only || only === 'rotate')   await runRotate(browser, base, t);
   if (!only || only === 'covers')  await runCovers(browser, base, t);
+  if (!only || only === 'layers')  await runLayers(browser, base, t);
   if (!only || only === 'regress') await runRegress(browser, base, t);
 } catch (e) {
   console.error('\nСтенд упал:', e);

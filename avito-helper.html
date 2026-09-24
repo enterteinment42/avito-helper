@@ -652,6 +652,22 @@
     .cv-tz-btn:hover { border-color: var(--teal); color: var(--teal-h); }
     .cv-tz-range { flex: 1; min-width: 70px; accent-color: var(--teal); cursor: pointer; }
     .cv-tz-val { font-family: var(--fm); font-size: 10px; color: var(--muted); min-width: 30px; text-align: right; }
+    /* Слои оформления: список элементов, редактор выбранного, шаблоны */
+    .cv-lrows { display: flex; flex-direction: column; gap: 4px; margin-top: 10px; }
+    .cv-lrow { display: flex; align-items: center; gap: 8px; padding: 5px 8px; border-radius: var(--rs); border: 1px solid var(--border2); background: var(--card2); cursor: pointer; font-size: 12px; transition: border-color .12s; }
+    .cv-lrow:hover { border-color: var(--teal); }
+    .cv-lrow.active { border-color: #facc15; background: var(--card3); }
+    .cv-lrow.off .cv-lrow-name { opacity: .45; text-decoration: line-through; }
+    .cv-lrow-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text2); }
+    .cv-lrow-btn { background: none; border: 1px solid transparent; border-radius: 4px; color: var(--text2); cursor: pointer; font-size: 13px; padding: 1px 5px; line-height: 1.3; }
+    .cv-lrow-btn:hover { border-color: var(--teal); color: var(--teal-h); }
+    .cv-leditor { margin-top: 12px; padding-top: 10px; border-top: 1px dashed var(--border2); }
+    .cv-leditor-head { display: flex; align-items: center; gap: 4px; font-size: 13px; font-weight: 600; color: var(--accent-h); }
+    .cv-lhint { font-size: 11px; color: var(--teal-h); margin-top: 8px; line-height: 1.5; }
+    .cv-tpl-own { display: inline-flex; align-items: stretch; }
+    .cv-tpl-own .cv-layout-btn { border-top-right-radius: 0; border-bottom-right-radius: 0; }
+    .cv-tpl-del { border: 1px solid var(--border2); border-left: none; background: var(--card2); color: var(--muted); border-radius: 0 var(--rs) var(--rs) 0; cursor: pointer; padding: 0 7px; font-size: 13px; }
+    .cv-tpl-del:hover { color: var(--err); }
     .toggle-btn { padding: 4px 14px; border-radius: var(--rs); cursor: pointer; font-size: 13px; border: 1px solid var(--border2); font-family: var(--ft); background: var(--card2); color: var(--muted); transition: all .15s; }
     .toggle-btn.on { background: var(--teal-d); color: var(--teal-h); border-color: var(--teal); }
 
@@ -2135,7 +2151,7 @@ async function syncPullSettings() {
     if (Array.isArray(d.presets)) state.presets = d.presets;
     if (Array.isArray(d.queue)) state.postQueue = d.queue;
     if (d.cv && typeof d.cv === 'object') {
-      for (const k in d.cv) { if (k === 'images' || k.startsWith('_') || !(k in cv)) continue; cv[k] = d.cv[k]; }
+      cvApplyCfg(d.cv);
       cvSave();
     }
     save(); render();
@@ -2368,19 +2384,22 @@ function jVariants(list) {
 
 // Счётчики графических действий за сессию канваса — копятся в памяти,
 // уходят одной строкой вместе с cv_download (не событие-на-каждый-drag)
-const _jCv = { drags: 0, layouts: 0, toggles: 0, tz: 0 };
+// layers — добавленные элементы оформления, tpls — применённые шаблоны
+const _jCv = { drags: 0, layouts: 0, toggles: 0, tz: 0, layers: 0, tpls: 0 };
 function jCvBump(k) { try { _jCv[k] = (_jCv[k] || 0) + 1; } catch(e) {} }
 function jCvTakeCounters() {
-  const out = { drags: _jCv.drags, layouts: _jCv.layouts, toggles: _jCv.toggles, tz: _jCv.tz };
-  _jCv.drags = 0; _jCv.layouts = 0; _jCv.toggles = 0; _jCv.tz = 0;
+  const out = { ..._jCv };
+  for (const k in _jCv) _jCv[k] = 0;
   return out;
 }
 
-// Снимок настроек обложки (та же фильтрация, что cvSave: без картинок и _служебных)
+// Снимок настроек обложки (та же фильтрация, что cvSave: без картинок и _служебных).
+// Свои шаблоны не пишем: это библиотека, а не оформление этой обложки, и она раздувала бы
+// каждое событие скачивания.
 function jCvSnapshot() {
   try {
     const out = {};
-    for (const k in cv) { if (k === 'images' || k.startsWith('_')) continue; out[k] = cv[k]; }
+    for (const k in cv) { if (k === 'images' || k === 'tpls' || k.startsWith('_')) continue; out[k] = cv[k]; }
     return out;
   } catch(e) { return null; }
 }
@@ -2391,7 +2410,7 @@ const J_UI_ACTS = new Set([
   'toggle-conveyor','export-pkg','dup-check','scan-check','preset-save','preset-load','toggle-batch',
   'queue-add','queue-add-batch','queue-start','queue-clear','session-done','session-skip',
   'cv-download','cv-gen-vars','cv-gen-collage-vars','cv-dl-all-game','cv-dl-all-collage',
-  'cv-igdb-fetch','cv-igdb-game-fetch','cv-mask-toggle','cv-to-toggle','cv-ig-toggle','cv-ig-fill',
+  'cv-igdb-fetch','cv-igdb-game-fetch',
   'db-export','db-add','db-final','ref-add','ref-tricks','ref-preview','ref-voice','conv-photo',
   'db-rotate','db-rot-panel','db-rot-posted','db-show-due',
   'vision-recognize','vision-price','vision-apply-price','vision-covers','vision-undo','vision-pick',
@@ -6202,28 +6221,56 @@ const CV_PLATFORMS = [
 const cv = {
   mode:'collage', images:[], layout:'auto', bg:'#0f172a',
   padding:12, ratio:'4:5', igdbNames:'',
-  maskSticker:false, maskStickerText:'ЛУЧШАЯ ЦЕНА', maskStickerShape:'burst',
-  maskStickerSize:180, maskStickerPos:'tr', maskStickerBg:'#B45309', maskStickerColor:'#ffffff',
   coverSource:'igdb',
-  maskStickerX:null, maskStickerY:null, maskStickerAngle:0,
-  textOverlay:false, textOverlayText:'', textOverlayX:null, textOverlayY:null,
-  textOverlayAngle:0, textOverlayColor:'#ffffff', textOverlaySize:80, textOverlayBold:true,
-  textOverlayBg:false, textOverlayBgColor:'#000000', textOverlayBgOpacity:0.55,
   // effects — all off by default, original collage look preserved
   bgStyle:'solid', bg2:'#1a1a2e', vignette:false, grade:'none',
   neonGap:false, neonColor:'#B45309',
-  platBadge:false, platSel:['PS5'], platBadgePos:'bl',
-  // 📋 Инфографика — пилюли-характеристики поверх обложки (стиль карточек маркетплейсов)
-  infog:false, infogText:'', infogSize:38, infogBg:'#0f172a', infogBgOpacity:0.82,
-  infogColor:'#ffffff', infogAlign:'left', infogX:null, infogY:null,
+  // Слои оформления (стикеры, ленты, надписи, инфографика, платформы) и свои шаблоны — см. «Слои оформления»
+  layers:[], tpls:[],
   // рамка одиночной картинки (режим Игра)
   gamePad:0, gameCorner:0, gameBorder:0, gameBorderColor:'#B45309', gameShadow:false,
   // кадр обложки: cover — заполнить рамку со срезом; contain — вписать целиком, поля: blur (размытая обложка) | bg (цвет фона)
   gameFit:'cover', gameFill:'blur',
   _selCell:null, _dragIdx:undefined, _canvasDrag:null,
+  _selLayer:null, _layersUndo:null, _guides:null,
   _pendingSearchName:null,
 };
 let _cvId = 0;
+
+// ══ Слои оформления: стикеры, ленты, надписи, инфографика, значки платформ (24.09.2026) ══
+// Раньше — три блока по одному экземпляру, поворот ползунком, а текст подгонялся под заранее
+// заданный размер стикера: длинная надпись в пилюле мельчала до нечитаемой, инфографика
+// срезала строку по буквам. Теперь всё — слои одного вида: центр в долях холста (смена
+// 4:5 ↔ 1:1 не уносит слой за край), угол в градусах, масштаб. Форма растёт под текст,
+// а не текст мельчает под форму. Крутят и масштабируют ручками рамки прямо на холсте.
+// Шаблон — сохранённый набор слоёв. Константы стоят до cvLoad(): миграция старых
+// настроек идёт при запуске, а const в «мёртвой зоне» до своего объявления.
+const CV_LAYER_TYPES = {
+  sticker: { icon: '💥', name: 'Стикер' },
+  ribbon:  { icon: '🎗', name: 'Лента в углу' },
+  text:    { icon: '🔤', name: 'Надпись' },
+  infog:   { icon: '📋', name: 'Инфографика' },
+  plat:    { icon: '🎮', name: 'Платформы' },
+};
+const CV_STICKER_SHAPES = [['burst','💥 Взрыв'],['circle','⭕ Круг'],['pill','💊 Пилюля'],['badge','🏷 Бейдж'],['hex','⬡ Соты'],['diamond','💎 Ромб']];
+const CV_FONT_MONO = `'JetBrains Mono',monospace`;
+const CV_FONT_SERIF = `Literata,Georgia,serif`;
+// Поля оформления, которые свой шаблон запоминает вместе со слоями (фон, эффекты, рамка)
+const CV_TPL_STYLE_KEYS = ['bg','bg2','bgStyle','vignette','grade','neonGap','neonColor','padding','gamePad','gameCorner','gameBorder','gameBorderColor','gameShadow'];
+// Готовые шаблоны. place — куда поставить слой после замера; fromForm — строки инфографики
+// и платформы берутся из формы генератора. Цен здесь нет: в объявлениях игр они запрещены.
+const CV_TPL_BUILTIN = [
+  { id: 'b-preorder', icon: '🎗', name: 'Предзаказ', layers: [{ type: 'ribbon', corner: 'tr', text: 'ПРЕДЗАКАЗ', bg: '#dc2626' }] },
+  { id: 'b-new', icon: '🎗', name: 'Новинка', layers: [{ type: 'ribbon', corner: 'tr', text: 'НОВИНКА', bg: '#16a34a' }] },
+  { id: 'b-hit', icon: '💥', name: 'Хит', layers: [{ type: 'sticker', shape: 'burst', text: 'ХИТ', bg: '#facc15', color: '#000000', x: 0.82, y: 0.12, angle: -12 }] },
+  { id: 'b-ru', icon: '💊', name: 'На русском', layers: [{ type: 'sticker', shape: 'pill', text: 'НА РУССКОМ', bg: '#1d4ed8', color: '#ffffff', angle: 0, place: 'br' }] },
+  { id: 'b-card', icon: '📋', name: 'Карточка товара', layers: [{ type: 'plat', fromForm: true, place: 'br' }, { type: 'infog', fromForm: true, place: 'bl' }] },
+  { id: 'b-clean', icon: '✖', name: 'Без элементов', layers: [] },
+];
+// Ключи прежнего плоского формата — по ним узнаём настройки до слоёв (localStorage, сервер, бэкап)
+const CV_LEGACY_KEYS = ['maskSticker','maskStickerText','textOverlay','textOverlayText','infog','infogText','platBadge'];
+let _cvLid = 0;
+let _cvMctx = null;
 
 // GFX-10: настройки обложек (рамка/цвета/стикер/раскладка/формат/эффекты) переживают F5.
 // Не сохраняем сами картинки (blob/Image — несериализуемы, живут одну сессию) и служебные _-поля.
@@ -6237,9 +6284,17 @@ function cvSave() {
 function cvLoad() {
   try {
     const saved = JSON.parse(localStorage.getItem('avito_cv') || 'null');
-    if (!saved) return;
-    for (const k in saved) { if (k === 'images' || k.startsWith('_')) continue; if (k in cv) cv[k] = saved[k]; }
+    if (saved) cvApplyCfg(saved);
   } catch(e) {}
+}
+// Единая точка применения сохранённых настроек обложек: localStorage, сервер и файл-бэкап.
+// Только известные поля (чужой ключ осел бы в cv навсегда); настройки прежнего плоского
+// формата — без layers, но с полями стикера/текста/инфографики — переводятся в слои.
+function cvApplyCfg(o) {
+  if (!o || typeof o !== 'object') return;
+  for (const k in o) { if (k === 'images' || k.startsWith('_') || !(k in cv)) continue; cv[k] = o[k]; }
+  if (!Array.isArray(o.layers) && CV_LEGACY_KEYS.some(k => k in o)) cv.layers = cvLegacyLayers(o);
+  cvSanitizeLayers();
 }
 cvLoad();
 // «Рамка» (крест с пустыми углами) удалена по слову Дениса 23.09.2026 — сохранённый выбор переводим на авто
@@ -6432,7 +6487,7 @@ function cvRenderState() {
       </div>`;
     } else {
       tzArea.innerHTML = cv.images.length
-        ? '<div class="cv-swap-hint">💡 Тяни картинку — сдвиг кадра &nbsp;·&nbsp; клик — выбрать ячейку для масштаба &nbsp;·&nbsp; поменять местами — перетащи миниатюры</div>'
+        ? '<div class="cv-swap-hint">💡 Тяни картинку — сдвиг кадра &nbsp;·&nbsp; клик — выбрать ячейку для масштаба &nbsp;·&nbsp; поменять местами — перетащи миниатюры &nbsp;·&nbsp; щёлкни элемент — рамка с ручками</div>'
         : '';
     }
   }
@@ -6781,167 +6836,474 @@ function cvDrawBurst(ctx, cx, cy, outerR, innerR, points) {
   ctx.closePath();
 }
 
-function cvDrawMaskSticker(ctx, cw, ch) {
-  if (!cv.maskSticker || !cv.maskStickerText.trim()) return;
-  const tx = cv.maskStickerText.trim();
-  const shape = cv.maskStickerShape;
-  const sz = cv.maskStickerSize;
-  const bg = cv.maskStickerBg;
-  const color = cv.maskStickerColor;
-  const mg = sz * 0.3;
-  let scx, scy;
-  if (cv.maskStickerX !== null && cv.maskStickerY !== null) {
-    scx = cv.maskStickerX; scy = cv.maskStickerY;
-  } else {
-    const pos = cv.maskStickerPos;
-    if      (pos==='tl') { scx=mg+sz*.5;      scy=mg+sz*.5; }
-    else if (pos==='tr') { scx=cw-mg-sz*.5;   scy=mg+sz*.5; }
-    else if (pos==='bl') { scx=mg+sz*.5;      scy=ch-mg-sz*.5; }
-    else if (pos==='br') { scx=cw-mg-sz*.5;   scy=ch-mg-sz*.5; }
-    else                 { scx=cw/2;          scy=ch/2; }
+// ── Слои оформления: модель ──
+function cvNewLayerId() { return 'L' + Date.now().toString(36) + (++_cvLid); }
+
+function cvLayerDefaults(type) {
+  const b = { id: cvNewLayerId(), type, x: 0.5, y: 0.5, angle: 0, scale: 1, hidden: false };
+  switch (type) {
+    case 'sticker': return { ...b, x: 0.8, y: 0.14, angle: -12, text: 'ХИТ', shape: 'burst', size: 180, bg: '#B45309', color: '#ffffff' };
+    case 'ribbon':  return { ...b, corner: 'tr', text: 'ПРЕДЗАКАЗ', size: 76, bg: '#dc2626', color: '#ffffff' };
+    case 'text':    return { ...b, text: 'Ваш текст', size: 80, color: '#ffffff', bold: true, bgOn: false, bgColor: '#000000', bgOpacity: 0.55 };
+    case 'infog':   return { ...b, text: '', size: 38, bg: '#0f172a', opacity: 0.82, color: '#ffffff', align: 'left' };
+    case 'plat':    return { ...b, plats: ['PS5'] };
   }
-  ctx.save();
-  ctx.translate(scx, scy);
-  if (cv.maskStickerAngle) ctx.rotate(cv.maskStickerAngle * Math.PI / 180);
-  if (shape === 'badge') {
-    const bw=sz*1.5, bh=sz*.7, br=bh*.35;
-    cvRR(ctx, -bw/2, -bh/2, bw, bh, br); ctx.fillStyle=bg; ctx.fill();
-  } else if (shape === 'burst') {
-    cvDrawBurst(ctx, 0, 0, sz*.52, sz*.3, 10); ctx.fillStyle=bg; ctx.fill();
-  } else if (shape === 'circle') {
-    ctx.beginPath(); ctx.arc(0, 0, sz*.5, 0, Math.PI*2); ctx.fillStyle=bg; ctx.fill();
-  } else if (shape === 'ribbon') {
-    ctx.rotate(Math.PI/4);
-    ctx.fillStyle=bg; ctx.fillRect(-sz*.9, -sz*.21, sz*1.8, sz*.42);
-  } else if (shape === 'diamond') {
-    ctx.beginPath(); ctx.moveTo(0,-sz*.52); ctx.lineTo(sz*.52,0); ctx.lineTo(0,sz*.52); ctx.lineTo(-sz*.52,0); ctx.closePath();
-    ctx.fillStyle=bg; ctx.fill();
-  } else if (shape === 'pill') {
-    const bw=sz*1.45, bh=sz*.6; cvRR(ctx, -bw/2, -bh/2, bw, bh, bh/2); ctx.fillStyle=bg; ctx.fill();
-  } else if (shape === 'hex') {
-    ctx.beginPath();
-    for (let i=0;i<6;i++){ const a=Math.PI/3*i-Math.PI/2, r=sz*.52; const px=r*Math.cos(a), py=r*Math.sin(a); i===0?ctx.moveTo(px,py):ctx.lineTo(px,py); }
-    ctx.closePath(); ctx.fillStyle=bg; ctx.fill();
-  }
-  // Доступная ширина текста для каждой формы
-  const textW = {burst:sz*.62,circle:sz*.78,badge:sz*1.3,ribbon:sz*1.5,diamond:sz*.68,pill:sz*1.25,hex:sz*.82}[shape]||sz*.72;
-  const lineH_mul = 1.15;
-  // Авто-размер: начинаем с sz*0.32, уменьшаем пока текст не влезет или не разобьём на строки
-  function fitText(maxFs) {
-    let fs = maxFs;
-    while (fs > 8) {
-      ctx.font = `bold ${fs}px 'JetBrains Mono',monospace`;
-      const words = tx.split(' ');
-      const lines = []; let line = '';
-      for (const w of words) {
-        const test = line ? line + ' ' + w : w;
-        if (ctx.measureText(test).width > textW && line) { lines.push(line); line = w; }
-        else line = test;
+  return null;
+}
+
+// Слой из чужих рук (сервер, бэкап, старая версия) доводим до полного: неизвестный тип
+// выбрасываем, недостающие поля — заводские, битые координаты — в центр. Числа приводим
+// к числам: «0.3» строкой после стрелки на клавиатуре склеивалось в «0.30.0009…» → NaN,
+// и слой пропадал с обложки. Текст — к строке, платформы — к списку известных.
+function cvSanitizeLayers() {
+  const NUM = ['x', 'y', 'angle', 'scale', 'size', 'opacity', 'bgOpacity'];
+  cv.layers = (Array.isArray(cv.layers) ? cv.layers : [])
+    .filter(L => L && typeof L === 'object' && CV_LAYER_TYPES[L.type])
+    .map(L => {
+      const d = cvLayerDefaults(L.type);
+      const o = { ...d, ...L };
+      if (!o.id || typeof o.id !== 'string') o.id = cvNewLayerId();
+      for (const k of NUM) {
+        if (!(k in d)) continue;
+        const v = +o[k];
+        o[k] = Number.isFinite(v) ? v : (k === 'x' || k === 'y' ? 0.5 : d[k]);
       }
-      if (line) lines.push(line);
-      if (lines.every(l => ctx.measureText(l).width <= textW)) return { lines, fs };
-      fs = Math.round(fs * 0.88);
+      if (o.scale <= 0) o.scale = 1;
+      if (o.size <= 0) o.size = d.size;
+      if ('text' in d && typeof o.text !== 'string') o.text = o.text == null ? '' : String(o.text);
+      if ('plats' in d) o.plats = (Array.isArray(o.plats) ? o.plats : []).filter(id => CV_PLATFORMS.some(p => p.id === id));
+      o.hidden = !!o.hidden;
+      return o;
+    });
+  cv.tpls = (Array.isArray(cv.tpls) ? cv.tpls : []).filter(t => t && t.id && t.name && Array.isArray(t.layers));
+  if (cv._selLayer && !cv.layers.some(L => L.id === cv._selLayer)) cv._selLayer = null;
+}
+
+// Перевод прежнего плоского формата (один стикер, одна надпись, одна инфографика, значки
+// платформ) в слои. Выключенные надпись и инфографика со своим текстом переезжают скрытыми —
+// написанное руками не пропадает. Позиции были в пикселях холста, теперь доли.
+function cvLegacyLayers(o) {
+  const [cw, ch] = CV_SZ[o.ratio] || CV_SZ['4:5'];
+  const num = v => (v === null || v === undefined || v === '' || !Number.isFinite(+v)) ? null : +v;
+  const out = [];
+  const stTx = String(o.maskStickerText || '').trim();
+  if (o.maskSticker && stTx) {
+    const sz = num(o.maskStickerSize) || 180, pos = o.maskStickerPos || 'tr';
+    const common = { text: stTx, bg: o.maskStickerBg || '#B45309', color: o.maskStickerColor || '#ffffff' };
+    if (o.maskStickerShape === 'ribbon') {
+      out.push({ ...cvLayerDefaults('ribbon'), ...common, corner: /^[tb][lr]$/.test(pos) ? pos : 'tr', size: Math.round(sz * 0.42) });
+    } else {
+      const L = { ...cvLayerDefaults('sticker'), ...common, size: sz, angle: num(o.maskStickerAngle) || 0,
+        shape: CV_STICKER_SHAPES.some(([s]) => s === o.maskStickerShape) ? o.maskStickerShape : 'burst' };
+      let x = num(o.maskStickerX), y = num(o.maskStickerY);
+      if (x === null || y === null) {
+        const mg = sz * 0.3;
+        x = pos === 'tl' || pos === 'bl' ? mg + sz / 2 : pos === 'tr' || pos === 'br' ? cw - mg - sz / 2 : cw / 2;
+        y = pos === 'tl' || pos === 'tr' ? mg + sz / 2 : pos === 'bl' || pos === 'br' ? ch - mg - sz / 2 : ch / 2;
+      }
+      L.x = x / cw; L.y = y / ch;
+      out.push(L);
     }
-    return { lines: [tx], fs: 8 };
   }
-  const { lines, fs } = fitText(Math.round(sz * 0.32));
-  ctx.font = `bold ${fs}px 'JetBrains Mono',monospace`;
-  ctx.fillStyle = color; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-  const lh = fs * lineH_mul;
-  const totalH = lines.length * lh;
-  lines.forEach((l, i) => ctx.fillText(l, 0, (i - (lines.length - 1) / 2) * lh));
-  ctx.restore();
+  const toTx = String(o.textOverlayText || '').trim();
+  if (toTx) {
+    const x = num(o.textOverlayX), y = num(o.textOverlayY);
+    out.push({ ...cvLayerDefaults('text'), hidden: !o.textOverlay, text: o.textOverlayText,
+      size: num(o.textOverlaySize) || 80, angle: num(o.textOverlayAngle) || 0,
+      color: o.textOverlayColor || '#ffffff', bold: o.textOverlayBold !== false,
+      bgOn: !!o.textOverlayBg, bgColor: o.textOverlayBgColor || '#000000',
+      bgOpacity: num(o.textOverlayBgOpacity) ?? 0.55,
+      x: x === null ? 0.5 : x / cw, y: y === null ? 0.5 : y / ch });
+  }
+  if (o.platBadge && Array.isArray(o.platSel) && o.platSel.length) {
+    const L = { ...cvLayerDefaults('plat'), plats: o.platSel.filter(id => CV_PLATFORMS.some(p => p.id === id)) };
+    cvPlaceLayer(L, /^[tb][lr]$/.test(o.platBadgePos) ? o.platBadgePos : 'bl', cw, ch);
+    out.push(L);
+  }
+  if (String(o.infogText || '').trim()) {
+    const L = { ...cvLayerDefaults('infog'), hidden: !o.infog, text: o.infogText, size: num(o.infogSize) || 38,
+      bg: o.infogBg || '#0f172a', opacity: num(o.infogBgOpacity) ?? 0.82, color: o.infogColor || '#ffffff',
+      align: o.infogAlign === 'right' ? 'right' : 'left' };
+    const x = num(o.infogX), y = num(o.infogY);
+    if (x !== null && y !== null) {
+      // прежние координаты — левый верхний угол блока плашек, у слоя — центр
+      const f = cvLayerFrame(L, cw, ch);
+      L.x = (x + f.w / 2) / cw; L.y = (y + f.h / 2) / ch;
+    } else cvPlaceLayer(L, L.align === 'right' ? 'br' : 'bl', cw, ch);
+    out.push(L);
+  }
+  return out;
 }
 
-// ── Text overlay (stories-style) ──
-function cvDrawTextOverlay(ctx, cw, ch) {
-  if (!cv.textOverlay || !cv.textOverlayText.trim()) return;
-  const lines = cv.textOverlayText.trim().split('\n').filter(l => l.trim());
-  if (!lines.length) return;
-  const fs = cv.textOverlaySize;
-  const weight = cv.textOverlayBold ? 'bold' : 'normal';
-  ctx.font = `${weight} ${fs}px Literata,Georgia,serif`;
+function cvSelLayer() { return (cv.layers || []).find(L => L && L.id === cv._selLayer) || null; }
+function cvHasLayer(type) { return (cv.layers || []).some(L => L && !L.hidden && L.type === type); }
+
+// ── Слои: геометрия. Всё в пикселях холста шириной 1080, до масштаба слоя ──
+function cvMctx() {
+  if (!_cvMctx) _cvMctx = document.createElement('canvas').getContext('2d');
+  return _cvMctx;
+}
+function cvLinesOf(text) { return String(text || '').split('\n').map(s => s.trim()).filter(Boolean); }
+
+// Перенос по словам ровно в k строк примерно равной ширины
+function cvWrapWords(ctx, words, k) {
+  if (k <= 1 || words.length < 2) return [words.join(' ')];
+  const target = ctx.measureText(words.join(' ')).width / k;
+  const lines = []; let line = '';
+  for (const w of words) {
+    const test = line ? line + ' ' + w : w;
+    if (line && lines.length < k - 1 && ctx.measureText(test).width > target * 1.08) { lines.push(line); line = w; }
+    else line = test;
+  }
+  if (line) lines.push(line);
+  return lines;
+}
+
+// Стикер: шрифт задан размером, а форма растёт под текст. Пилюля и бейдж тянутся вширь;
+// круглые формы подбирают перенос по словам, при котором описанный вокруг текста круг
+// меньше («ЛУЧШАЯ ЦЕНА» в две строки даёт стикер компактнее, чем в одну длинную).
+function cvStickerGeom(L) {
+  const ctx = cvMctx();
+  const S = +L.size || 180;
+  const fs = Math.round(S * 0.3);
+  ctx.font = `bold ${fs}px ${CV_FONT_MONO}`;
+  const lh = fs * 1.12;
+  const meas = lines => ({ lines, tw: lines.length ? Math.max(...lines.map(l => ctx.measureText(l).width)) : 0, th: lines.length * lh });
+  const given = cvLinesOf(L.text);
+  let t = null;
+  if (L.shape === 'pill' || L.shape === 'badge' || given.length !== 1) t = meas(given);
+  else {
+    const words = given[0].split(/\s+/);
+    for (let k = 1; k <= Math.min(4, words.length); k++) {
+      const m = meas(cvWrapWords(ctx, words, k));
+      m.r = Math.hypot(m.tw / 2, m.th / 2);
+      if (!t || m.r < t.r - 0.5) t = m;
+    }
+  }
+  const tr = Math.hypot(t.tw / 2, t.th / 2), pad = fs * 0.4;
+  let w, h, R = 0, inner = 0;
+  switch (L.shape) {
+    case 'pill':    h = t.th + fs * 0.95; w = Math.max(t.tw + h * 0.95, h * 1.6); break;
+    case 'badge':   h = t.th + fs * 0.85; w = Math.max(t.tw + fs * 1.4, h * 1.5); break;
+    case 'circle':  R = Math.max(S * 0.5, tr + pad); w = h = 2 * R; break;
+    // текст — в круге, вписанном в шестиугольник (апофема = R·cos30°)
+    case 'hex':     R = Math.max(S * 0.52, (tr + pad) / 0.866); w = 2 * R * 0.866; h = 2 * R; break;
+    // ромб |x|+|y| ≤ R: угол прямоугольника текста должен лечь внутрь
+    case 'diamond': R = Math.max(S * 0.52, t.tw / 2 + t.th / 2 + pad); w = h = 2 * R; break;
+    // взрыв: ближе всего к центру впадины между лучами — текст в круге по впадинам
+    default:        inner = Math.max(S * 0.3, tr + pad * 0.6); R = inner / 0.58; w = h = 2 * R;
+  }
+  return { fs, lh, lines: t.lines, w, h, R, inner };
+}
+
+// Лента в углу: срезается краями холста, сама отодвигается от угла под длину надписи.
+// Середина ленты лежит на диагонали угла на расстоянии m; хорда внешней кромки = 2m − t,
+// в неё должен уместиться текст с полями. Геометрия — сразу в координатах холста.
+function cvRibbonGeom(L, cw, ch) {
+  const ctx = cvMctx();
+  const t = (+L.size || 76) * (L.scale || 1);
+  const fs = Math.round(t * 0.46);
+  ctx.font = `bold ${fs}px ${CV_FONT_MONO}`;
+  const text = cvLinesOf(L.text).join(' ');
+  const tw = text ? ctx.measureText(text).width : 0;
+  const m = Math.max(t * 1.6, (tw + fs * 1.4 + t) / 2);
+  const c = /^[tb][lr]$/.test(L.corner) ? L.corner : 'tr';
+  const sx = c[1] === 'r' ? -1 : 1, sy = c[0] === 'b' ? -1 : 1;   // направление внутрь холста
+  const Cx = sx < 0 ? cw : 0, Cy = sy < 0 ? ch : 0;
+  return { t, fs, text, tw, m, sx, sy, Cx, Cy,
+    cx: Cx + sx * m / Math.SQRT2, cy: Cy + sy * m / Math.SQRT2,
+    rot: (sx * sy < 0 ? 1 : -1) * Math.PI / 4, w: 2 * m, h: t };
+}
+
+function cvTextGeom(L) {
+  const ctx = cvMctx();
+  const fs = +L.size || 80;
+  ctx.font = `${L.bold ? 'bold' : 'normal'} ${fs}px ${CV_FONT_SERIF}`;
+  const lines = cvLinesOf(L.text);
   const lh = fs * 1.28;
-  const maxW = Math.max(...lines.map(l => ctx.measureText(l).width));
-  const totalH = lines.length * lh;
+  const tw = lines.length ? Math.max(...lines.map(l => ctx.measureText(l).width)) : 0;
   const padX = fs * 0.55, padY = fs * 0.32;
-  let scx = cv.textOverlayX ?? cw / 2;
-  let scy = cv.textOverlayY ?? ch / 2;
-  ctx.save();
-  ctx.translate(scx, scy);
-  if (cv.textOverlayAngle) ctx.rotate(cv.textOverlayAngle * Math.PI / 180);
-  if (cv.textOverlayBg) {
-    const bw = maxW + padX * 2, bh = totalH + padY * 2;
-    const r = fs * 0.22;
-    ctx.globalAlpha = cv.textOverlayBgOpacity;
-    ctx.fillStyle = cv.textOverlayBgColor;
-    cvRR(ctx, -bw / 2, -bh / 2, bw, bh, r);
-    ctx.fill();
-    ctx.globalAlpha = 1;
-  }
-  ctx.fillStyle = cv.textOverlayColor;
-  ctx.textAlign = 'center';
-  ctx.textBaseline = 'middle';
-  lines.forEach((l, i) => {
-    ctx.fillText(l, 0, (i - (lines.length - 1) / 2) * lh);
-  });
-  ctx.restore();
+  return { fs, lines, lh, tw, w: tw + padX * 2, h: lines.length * lh + padY * 2 };
 }
 
-// ── 📋 Инфографика: пилюли-характеристики поверх обложки ──
-// ov (переопределение для «✨ 4 варианта»): {align, bg, shift} — позиция/цвет/порядок строк
-// как оси антидубля; при ov drag-позиция игнорируется, чтобы варианты реально отличались
-function cvInfogLines(shift) {
-  let ls = (cv.infogText || '').split('\n').map(l => l.trim()).filter(Boolean).slice(0, 6);
-  // shift вращает строки, но первая (название товара) остаётся на месте
+// shift вращает строки, но первая (название товара) остаётся на месте — ось антидубля «4 вариантов»
+function cvInfogLinesOf(text, shift) {
+  let ls = cvLinesOf(text).slice(0, 6);
   if (shift && ls.length > 2) {
     const rest = ls.slice(1), s = shift % rest.length;
     ls = [ls[0], ...rest.slice(s), ...rest.slice(0, s)];
   }
   return ls;
 }
-function cvInfogMetrics(ctx, cw, ch, ov) {
-  const lines = cvInfogLines(ov?.shift);
-  if (!lines.length) return null;
-  const fs = cv.infogSize;
-  ctx.font = `bold ${fs}px 'JetBrains Mono',monospace`;
-  const padX = fs * 0.75, bh = fs * 1.75, gap = fs * 0.42;
-  const widths = lines.map(l => Math.min(ctx.measureText(l).width + padX * 2, cw * 0.92));
-  const maxW = Math.max(...widths);
-  const totalH = lines.length * bh + (lines.length - 1) * gap;
-  const align = ov?.align ?? cv.infogAlign;
-  const mg = cw * 0.045;
-  let x, y;
-  if (!ov && cv.infogX !== null && cv.infogY !== null) { x = cv.infogX; y = cv.infogY; }
-  else {
-    x = align === 'right' ? cw - mg - maxW : mg;
-    y = ch - ch * 0.06 - totalH;
+// Плашка растёт под строку. Если блок шире холста, уменьшается шрифт всего блока —
+// строки больше не срезаются по буквам (раньше хвост строки просто пропадал).
+function cvInfogGeom(L, cw, shift) {
+  const ctx = cvMctx();
+  const lines = cvInfogLinesOf(L.text, shift);
+  const limit = cw * 0.92 / (L.scale || 1);
+  let fs = +L.size || 38, widths = [], maxW = 0;
+  for (let pass = 0; pass < 2; pass++) {
+    ctx.font = `bold ${fs}px ${CV_FONT_MONO}`;
+    widths = lines.map(l => ctx.measureText(l).width + fs * 1.5);
+    maxW = widths.length ? Math.max(...widths) : 0;
+    if (maxW <= limit || pass) break;
+    fs = Math.max(12, Math.floor(fs * limit / maxW));
   }
-  return { lines, fs, padX, bh, gap, widths, maxW, totalH, x, y, align };
+  const bh = fs * 1.75, gap = fs * 0.42;
+  return { lines, fs, padX: fs * 0.75, bh, gap, widths, w: maxW, h: lines.length ? lines.length * bh + (lines.length - 1) * gap : 0 };
 }
-function cvDrawInfog(ctx, cw, ch, ov) {
-  if (!cv.infog) return;
-  const m = cvInfogMetrics(ctx, cw, ch, ov);
-  if (!m) return;
-  const bg = ov?.bg ?? cv.infogBg;
+
+function cvPlatGeom(L) {
+  const ctx = cvMctx();
+  const badges = (L.plats || []).map(id => CV_PLATFORMS.find(p => p.id === id)).filter(Boolean);
+  const fs = 37;
+  ctx.font = `bold ${fs}px ${CV_FONT_MONO}`;
+  const bh = fs * 1.9, padX = fs * 0.85, gap = fs * 0.5;
+  const widths = badges.map(b => ctx.measureText(b.id).width + padX * 2);
+  const w = widths.reduce((a, x) => a + x, 0) + gap * Math.max(0, badges.length - 1);
+  return { fs, badges, widths, bh, gap, w, h: badges.length ? bh : 0 };
+}
+
+function cvLayerGeom(L, cw, shift) {
+  switch (L.type) {
+    case 'sticker': return cvStickerGeom(L);
+    case 'text':    return cvTextGeom(L);
+    case 'infog':   return cvInfogGeom(L, cw, shift);
+    case 'plat':    return cvPlatGeom(L);
+  }
+  return { w: 0, h: 0 };
+}
+
+// Рамка слоя на холсте: центр, размер с учётом масштаба, угол в радианах.
+// Пустой слой получает рамку-минимум, чтобы его можно было найти и выделить.
+function cvLayerFrame(L, cw, ch) {
+  if (L.type === 'ribbon') { const g = cvRibbonGeom(L, cw, ch); return { cx: g.cx, cy: g.cy, w: g.w, h: g.h, rot: g.rot, ribbon: g }; }
+  const g = cvLayerGeom(L, cw);
+  const s = L.scale || 1;
+  return { cx: L.x * cw, cy: L.y * ch, w: Math.max(g.w, 40) * s, h: Math.max(g.h, 40) * s, rot: (L.angle || 0) * Math.PI / 180, g };
+}
+// Полуразмеры повёрнутой рамки по осям холста
+function cvFrameHalf(f) {
+  const c = Math.abs(Math.cos(f.rot)), s = Math.abs(Math.sin(f.rot));
+  return { hx: (f.w * c + f.h * s) / 2, hy: (f.w * s + f.h * c) / 2 };
+}
+
+// Поставить слой в угол/к краю/в центр холста: where — 'tl','tr','bl','br','c', 't','b'
+function cvPlaceLayer(L, where, cw, ch) {
+  if (L.type === 'ribbon') { if (/^[tb][lr]$/.test(where)) L.corner = where; return; }
+  const { hx, hy } = cvFrameHalf(cvLayerFrame(L, cw, ch));
+  const mg = cw * 0.045, v = where[0], h = where.length > 1 ? where[1] : '';
+  const x = h === 'l' ? mg + hx : h === 'r' ? cw - mg - hx : cw / 2;
+  const y = v === 't' ? mg + hy : v === 'b' ? ch - ch * 0.06 - hy : ch / 2;
+  L.x = x / cw; L.y = y / ch;
+}
+
+// Перед отрисовкой возвращаем слои на холст (перетащенное в 4:5 вниз не должно пропасть
+// в квадрате — дефект 23.09). Надпись, инфографика и значки — целиком внутри, если влезают;
+// стикер может заходить за край (это приём), но его центр остаётся на холсте.
+function cvClampLayers(cw, ch) {
+  let changed = false;
+  const cl = (v, a, b) => Math.max(a, Math.min(b, v));
+  for (const L of cv.layers || []) {
+    if (!L || L.type === 'ribbon') continue;
+    const f = cvLayerFrame(L, cw, ch);
+    let x, y;
+    if (L.type === 'sticker') { x = cl(f.cx, 0, cw); y = cl(f.cy, 0, ch); }
+    else {
+      const { hx, hy } = cvFrameHalf(f);
+      x = hx * 2 >= cw ? cw / 2 : cl(f.cx, hx, cw - hx);
+      y = hy * 2 >= ch ? ch / 2 : cl(f.cy, hy, ch - hy);
+    }
+    if (Math.abs(x - f.cx) > 0.01 || Math.abs(y - f.cy) > 0.01) { L.x = x / cw; L.y = y / ch; changed = true; }
+  }
+  return changed;
+}
+
+// Попадание точки холста в рамку слоя (с допуском в несколько пикселей)
+function cvLayerHit(L, mx, my, cw, ch) {
+  const f = cvLayerFrame(L, cw, ch);
+  const dx = mx - f.cx, dy = my - f.cy, c = Math.cos(-f.rot), s = Math.sin(-f.rot);
+  const lx = dx * c - dy * s, ly = dx * s + dy * c;
+  return Math.abs(lx) <= f.w / 2 + 6 && Math.abs(ly) <= f.h / 2 + 6;
+}
+// Верхний видимый слой под точкой
+function cvLayerAt(mx, my, cw, ch) {
+  const ls = cv.layers || [];
+  for (let i = ls.length - 1; i >= 0; i--) {
+    const L = ls[i];
+    if (L && !L.hidden && cvLayerHit(L, mx, my, cw, ch)) return L;
+  }
+  return null;
+}
+
+// Ручки выделенного слоя. k — пикселей холста на пиксель экрана: ручки одного экранного
+// размера при любом масштабе превью. У ленты нет поворота, а размер тянут от угла холста.
+function cvLayerHandles(f, k) {
+  if (f.ribbon) {
+    const g = f.ribbon, d = g.m + g.t / 2 + 16 * k;
+    return { scale: { x: g.Cx + g.sx * d / Math.SQRT2, y: g.Cy + g.sy * d / Math.SQRT2 }, rotate: null, anchor: { x: g.Cx, y: g.Cy } };
+  }
+  const at = (lx, ly) => ({ x: f.cx + lx * Math.cos(f.rot) - ly * Math.sin(f.rot), y: f.cy + lx * Math.sin(f.rot) + ly * Math.cos(f.rot) });
+  return { scale: at(f.w / 2 + 4 * k, f.h / 2 + 4 * k), rotate: at(0, -f.h / 2 - 32 * k), anchor: { x: f.cx, y: f.cy } };
+}
+function cvScreenK(canvas) {
+  const r = canvas.getBoundingClientRect();
+  return r.width ? canvas.width / r.width : 1;
+}
+
+// ── Слои: отрисовка ──
+function cvStickerPath(ctx, shape, g) {
+  switch (shape) {
+    case 'pill':  cvRR(ctx, -g.w / 2, -g.h / 2, g.w, g.h, g.h / 2); break;
+    case 'badge': cvRR(ctx, -g.w / 2, -g.h / 2, g.w, g.h, g.h * 0.25); break;
+    case 'circle': ctx.beginPath(); ctx.arc(0, 0, g.R, 0, Math.PI * 2); break;
+    case 'hex':
+      ctx.beginPath();
+      for (let i = 0; i < 6; i++) { const a = Math.PI / 3 * i - Math.PI / 2; const px = g.R * Math.cos(a), py = g.R * Math.sin(a); i ? ctx.lineTo(px, py) : ctx.moveTo(px, py); }
+      ctx.closePath(); break;
+    case 'diamond':
+      ctx.beginPath(); ctx.moveTo(0, -g.R); ctx.lineTo(g.R, 0); ctx.lineTo(0, g.R); ctx.lineTo(-g.R, 0); ctx.closePath(); break;
+    default: cvDrawBurst(ctx, 0, 0, g.R, g.inner, 10);
+  }
+}
+function cvDrawSticker(ctx, L, g) {
+  if (!g.lines.length) return;
   ctx.save();
-  ctx.font = `bold ${m.fs}px 'JetBrains Mono',monospace`;
-  ctx.textBaseline = 'middle';
-  m.lines.forEach((l, i) => {
-    const py = m.y + i * (m.bh + m.gap);
-    const w = m.widths[i];
-    const px = m.align === 'right' ? m.x + m.maxW - w : m.x;
-    ctx.globalAlpha = cv.infogBgOpacity;
-    ctx.shadowColor = 'rgba(0,0,0,0.35)'; ctx.shadowBlur = m.fs * 0.4; ctx.shadowOffsetY = m.fs * 0.08;
-    cvRR(ctx, px, py, w, m.bh, m.bh / 2); ctx.fillStyle = bg; ctx.fill();
+  ctx.shadowColor = 'rgba(0,0,0,0.35)'; ctx.shadowBlur = g.fs * 0.5; ctx.shadowOffsetY = g.fs * 0.1;
+  cvStickerPath(ctx, L.shape, g); ctx.fillStyle = L.bg; ctx.fill();
+  ctx.restore();
+  ctx.font = `bold ${g.fs}px ${CV_FONT_MONO}`;
+  ctx.fillStyle = L.color; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  g.lines.forEach((l, i) => ctx.fillText(l, 0, (i - (g.lines.length - 1) / 2) * g.lh + g.fs * 0.04));
+}
+function cvDrawRibbon(ctx, L, cw, ch) {
+  const g = cvRibbonGeom(L, cw, ch);
+  if (!g.text) return;
+  const len = 2 * g.m + 2 * g.t;
+  ctx.save();
+  ctx.translate(g.cx, g.cy); ctx.rotate(g.rot);
+  ctx.shadowColor = 'rgba(0,0,0,0.4)'; ctx.shadowBlur = g.t * 0.25; ctx.shadowOffsetY = g.t * 0.06;
+  ctx.fillStyle = L.bg; ctx.fillRect(-len / 2, -g.t / 2, len, g.t);
+  ctx.shadowColor = 'transparent'; ctx.shadowBlur = 0; ctx.shadowOffsetY = 0;
+  // тонкие светлые кромки — читается лентой, а не полосой
+  const e = g.t / 2 - g.t * 0.11;
+  ctx.strokeStyle = 'rgba(255,255,255,0.35)'; ctx.lineWidth = Math.max(1.5, g.t * 0.035);
+  ctx.beginPath(); ctx.moveTo(-len / 2, -e); ctx.lineTo(len / 2, -e); ctx.moveTo(-len / 2, e); ctx.lineTo(len / 2, e); ctx.stroke();
+  ctx.font = `bold ${g.fs}px ${CV_FONT_MONO}`;
+  ctx.fillStyle = L.color; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.fillText(g.text, 0, g.fs * 0.05);
+  ctx.restore();
+}
+function cvDrawTextLayer(ctx, L, g) {
+  if (!g.lines.length) return;
+  if (L.bgOn) {
+    ctx.save();
+    ctx.globalAlpha = +L.bgOpacity;
+    cvRR(ctx, -g.w / 2, -g.h / 2, g.w, g.h, g.fs * 0.22); ctx.fillStyle = L.bgColor; ctx.fill();
+    ctx.restore();
+  }
+  ctx.save();
+  ctx.font = `${L.bold ? 'bold' : 'normal'} ${g.fs}px ${CV_FONT_SERIF}`;
+  ctx.fillStyle = L.color; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  // без подложки лёгкая тень — надпись читается на пёстрой обложке
+  if (!L.bgOn) { ctx.shadowColor = 'rgba(0,0,0,0.55)'; ctx.shadowBlur = g.fs * 0.18; ctx.shadowOffsetY = g.fs * 0.04; }
+  g.lines.forEach((l, i) => ctx.fillText(l, 0, (i - (g.lines.length - 1) / 2) * g.lh));
+  ctx.restore();
+}
+function cvDrawInfogLayer(ctx, L, g) {
+  if (!g.lines.length) return;
+  ctx.save();
+  ctx.font = `bold ${g.fs}px ${CV_FONT_MONO}`;
+  ctx.textBaseline = 'middle'; ctx.textAlign = 'left';
+  g.lines.forEach((l, i) => {
+    const py = -g.h / 2 + i * (g.bh + g.gap);
+    const w = g.widths[i];
+    const px = L.align === 'right' ? g.w / 2 - w : -g.w / 2;
+    ctx.globalAlpha = +L.opacity;
+    ctx.shadowColor = 'rgba(0,0,0,0.35)'; ctx.shadowBlur = g.fs * 0.4; ctx.shadowOffsetY = g.fs * 0.08;
+    cvRR(ctx, px, py, w, g.bh, g.bh / 2); ctx.fillStyle = L.bg; ctx.fill();
     ctx.shadowColor = 'transparent'; ctx.shadowBlur = 0; ctx.shadowOffsetY = 0;
     ctx.globalAlpha = 1;
-    ctx.fillStyle = cv.infogColor; ctx.textAlign = 'left';
-    let t = l;
-    while (t.length > 1 && ctx.measureText(t).width > w - m.padX * 2) t = t.slice(0, -1);
-    ctx.fillText(t, px + m.padX, py + m.bh / 2 + m.fs * 0.04);
+    ctx.fillStyle = L.color;
+    ctx.fillText(l, px + g.padX, py + g.bh / 2 + g.fs * 0.04);
   });
   ctx.restore();
+}
+function cvDrawPlatLayer(ctx, L, g) {
+  if (!g.badges.length) return;
+  ctx.save();
+  ctx.font = `bold ${g.fs}px ${CV_FONT_MONO}`;
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  let x = -g.w / 2;
+  const y = -g.h / 2;
+  g.badges.forEach((b, i) => {
+    const w = g.widths[i];
+    ctx.shadowColor = 'rgba(0,0,0,0.5)'; ctx.shadowBlur = g.fs * 0.6; ctx.shadowOffsetY = g.fs * 0.12;
+    cvRR(ctx, x, y, w, g.bh, g.bh * 0.24); ctx.fillStyle = b.bg; ctx.fill();
+    ctx.shadowColor = 'transparent'; ctx.shadowBlur = 0; ctx.shadowOffsetY = 0;
+    ctx.fillStyle = '#fff';
+    ctx.fillText(b.id, x + w / 2, y + g.bh / 2 + g.fs * 0.04);
+    x += w + g.gap;
+  });
+  ctx.restore();
+}
+function cvDrawLayer(ctx, L, cw, ch, shift) {
+  if (L.type === 'ribbon') return cvDrawRibbon(ctx, L, cw, ch);
+  const g = cvLayerGeom(L, cw, shift);
+  ctx.save();
+  ctx.translate(L.x * cw, L.y * ch);
+  if (L.angle) ctx.rotate(L.angle * Math.PI / 180);
+  const s = L.scale || 1;
+  if (s !== 1) ctx.scale(s, s);
+  if (L.type === 'sticker') cvDrawSticker(ctx, L, g);
+  else if (L.type === 'text') cvDrawTextLayer(ctx, L, g);
+  else if (L.type === 'infog') cvDrawInfogLayer(ctx, L, g);
+  else if (L.type === 'plat') cvDrawPlatLayer(ctx, L, g);
+  ctx.restore();
+}
+// ov (переопределение для «✨ 4 варианта»): {align, bg, shift} для инфографики — сторона, цвет
+// плашек и порядок строк как оси антидубля; перетащенное место при этом не держим, иначе
+// варианты не отличались бы.
+// Переопределяется только ПЕРВАЯ видимая инфографика: вторую тот же угол положил бы поверх неё.
+function cvDrawLayers(ctx, cw, ch, ov) {
+  const ovTarget = ov ? (cv.layers || []).find(L => L && !L.hidden && L.type === 'infog') : null;
+  for (const L of cv.layers || []) {
+    if (!L || L.hidden) continue;
+    if (L === ovTarget) {
+      const V = { ...L, bg: ov.bg || L.bg, align: ov.align || L.align };
+      cvPlaceLayer(V, V.align === 'right' ? 'br' : 'bl', cw, ch);
+      cvDrawLayer(ctx, V, cw, ch, ov.shift);
+    } else cvDrawLayer(ctx, L, cw, ch);
+  }
+}
+// Рамка выделенного слоя с ручками — только на живом превью, в скачанный файл не попадает
+function cvDrawSelection(ctx, canvas, cw, ch) {
+  const L = cvSelLayer();
+  if (!L || L.hidden) return;
+  const k = cvScreenK(canvas);
+  const f = cvLayerFrame(L, cw, ch), h = cvLayerHandles(f, k);
+  ctx.save();
+  if (cv._guides && (cv._guides.v || cv._guides.h)) {
+    ctx.strokeStyle = 'rgba(45,212,191,0.9)'; ctx.lineWidth = 1.5 * k; ctx.setLineDash([6 * k, 6 * k]);
+    ctx.beginPath();
+    if (cv._guides.v) { ctx.moveTo(cw / 2, 0); ctx.lineTo(cw / 2, ch); }
+    if (cv._guides.h) { ctx.moveTo(0, ch / 2); ctx.lineTo(cw, ch / 2); }
+    ctx.stroke();
+  }
+  ctx.translate(f.cx, f.cy); ctx.rotate(f.rot);
+  ctx.strokeStyle = '#facc15'; ctx.lineWidth = 2 * k; ctx.setLineDash([8 * k, 6 * k]);
+  ctx.strokeRect(-f.w / 2 - 4 * k, -f.h / 2 - 4 * k, f.w + 8 * k, f.h + 8 * k);
+  ctx.setLineDash([]);
+  if (h.rotate) { ctx.beginPath(); ctx.moveTo(0, -f.h / 2 - 4 * k); ctx.lineTo(0, -f.h / 2 - 22 * k); ctx.stroke(); }
+  ctx.restore();
+  const dot = (p, fill) => {
+    ctx.save();
+    ctx.beginPath(); ctx.arc(p.x, p.y, 10 * k, 0, Math.PI * 2);
+    ctx.fillStyle = fill; ctx.fill(); ctx.lineWidth = 2.5 * k; ctx.strokeStyle = '#B45309'; ctx.stroke();
+    ctx.restore();
+  };
+  if (h.rotate) dot(h.rotate, '#ffffff');
+  dot(h.scale, '#facc15');
 }
 
 // ⚡ Автозаполнение инфографики из формы генератора — набор строк зависит от категории.
@@ -7003,14 +7365,198 @@ function cvInfogBuildLines() {
   }
   return L.slice(0, 5);
 }
+// Заполняет выбранную инфографику, а если выбрана не она — первую на обложке
 function cvInfogFillFromForm() {
   const lines = cvInfogBuildLines();
   if (!lines.length) { toast('Форма генератора пуста — заполнить нечего'); return; }
+  const sel = cvSelLayer();
+  const L = sel && sel.type === 'infog' ? sel : (cv.layers || []).find(x => x.type === 'infog');
+  if (!L) return;
   jlog('cv_infog_fill', null, { category: state.form.category, lines: lines.length });
-  cv.infogText = lines.join('\n');
-  const ta = document.getElementById('cv-ig-text');
-  if (ta) ta.value = cv.infogText;
-  cvReDraw();
+  L.text = lines.join('\n');
+  cvLayersChanged();
+}
+
+// Платформы для значков — из формы генератора (подписка или игра — по категории), иначе PS5
+function cvFormPlats() {
+  const f = state.form || {};
+  const list = f.category === 'game' ? f.gamePlatforms : f.category === 'gaming_sub' ? f.platforms : null;
+  const src = (Array.isArray(list) ? list : []).join(' ');
+  const got = CV_PLATFORMS.map(p => p.id).filter(id => new RegExp('(^|[^a-z0-9])' + id + '([^a-z0-9]|$)', 'i').test(src));
+  return got.length ? got : ['PS5'];
+}
+
+// ── Слои: действия из панели ──
+// «↶ Отменить» — ровно одно последнее действие (удаление, шаблон). Вместе со снимком «до»
+// запоминаем отпечаток «сразу после»: любая следующая правка элементов, фона или эффектов
+// его меняет, и отмена гаснет. Иначе она молча стирала бы всё, сделанное после (находка ревью).
+function cvLayersSnap(what) { cv._layersUndo = { what, layers: JSON.parse(JSON.stringify(cv.layers || [])), style: Object.fromEntries(CV_TPL_STYLE_KEYS.map(k => [k, cv[k]])), after: null }; }
+function cvUndoStamp() { return JSON.stringify({ l: cv.layers || [], s: CV_TPL_STYLE_KEYS.map(k => cv[k]) }); }
+function cvLayersSnapDone() {
+  if (!cv._layersUndo) return;
+  // отрисовка возвращает слои на холст — делаем это до отпечатка, чтобы он не разошёлся сам
+  const [cw, ch] = CV_SZ[cv.ratio] || CV_SZ['4:5'];
+  cvClampLayers(cw, ch);
+  cv._layersUndo.after = cvUndoStamp();
+}
+function cvUndoValid() {
+  const u = cv._layersUndo;
+  if (u && u.after !== cvUndoStamp()) cv._layersUndo = null;
+  return !!cv._layersUndo;
+}
+function cvLayersChanged() { cvReDraw(); cvRefreshLayersCard(); }
+function cvRefreshLayersCard() {
+  const c = document.getElementById('cv-layers-card');
+  if (c) c.outerHTML = cvLayersCardHTML();
+}
+function cvRefreshTplCard() {
+  const c = document.getElementById('cv-tpl-card');
+  if (c) c.outerHTML = cvTplCardHTML();
+}
+// Подпись «угол · масштаб» в редакторе — живьём во время перетаскивания ручек
+function cvUpdateLayerReadout(L) {
+  const el = document.getElementById('cv-ltf');
+  if (el && L && L.id === cv._selLayer) el.textContent = L.type === 'ribbon' ? `${Math.round((L.scale || 1) * 100)}%` : `${Math.round(L.angle || 0)}° · ${Math.round((L.scale || 1) * 100)}%`;
+}
+
+function cvAddLayer(type) {
+  const L = cvLayerDefaults(type);
+  if (!L) return;
+  const [cw, ch] = CV_SZ[cv.ratio] || CV_SZ['4:5'];
+  if (type === 'infog') {
+    L.text = cvInfogBuildLines().join('\n') || '✔️ Первая характеристика\n✔️ Вторая';
+    cvPlaceLayer(L, 'bl', cw, ch);
+  } else if (type === 'plat') { L.plats = cvFormPlats(); cvPlaceLayer(L, 'tl', cw, ch); }
+  // занятый угол не перекрываем: новая лента встаёт в первый свободный
+  else if (type === 'ribbon') L.corner = ['tr', 'tl', 'br', 'bl'].find(c => !(cv.layers || []).some(x => x.type === 'ribbon' && !x.hidden && x.corner === c)) || 'tr';
+  cv.layers.push(L);
+  cv._selLayer = L.id;
+  jCvBump('layers');
+  cvLayersChanged();
+}
+
+function cvLayerAction(a) {
+  const i = a.indexOf(':');
+  const op = i < 0 ? a : a.slice(0, i), arg = i < 0 ? '' : a.slice(i + 1);
+  if (op === 'add') return cvAddLayer(arg);
+  if (op === 'undo') {
+    if (!cvUndoValid()) {
+      toast('После этого уже были правки — отмена стёрла бы их, поэтому её нет');
+      cvRefreshLayersCard(); return;
+    }
+    const u = cv._layersUndo;
+    cv.layers = u.layers;
+    for (const k of CV_TPL_STYLE_KEYS) if (k in u.style) cv[k] = u.style[k];
+    cv._layersUndo = null; cv._selLayer = null;
+    cvSanitizeLayers();
+    render(); return;
+  }
+  if (op === 'sel') { cv._selLayer = arg; return cvLayersChanged(); }
+  if (op === 'hide') {
+    const L = cv.layers.find(x => x.id === arg);
+    if (L) L.hidden = !L.hidden;
+    return cvLayersChanged();
+  }
+  const L = cvSelLayer();
+  if (!L) return;
+  const idx = cv.layers.indexOf(L);
+  switch (op) {
+    case 'del': {
+      const name = cvLinesOf(L.text)[0] || CV_LAYER_TYPES[L.type].name;
+      cvLayersSnap(`удаление «${name.slice(0, 20)}»`);
+      cv.layers.splice(idx, 1); cv._selLayer = null; cvLayersSnapDone(); break;
+    }
+    case 'dup': {
+      const [cw, ch] = CV_SZ[cv.ratio] || CV_SZ['4:5'];
+      const D = { ...JSON.parse(JSON.stringify(L)), id: cvNewLayerId() };
+      // свободный угол — как у «+ Лента»: скрытые ленты угол не занимают
+      if (D.type === 'ribbon') D.corner = ['tr', 'tl', 'br', 'bl'].find(c => !cv.layers.some(x => x.type === 'ribbon' && !x.hidden && x.corner === c)) || D.corner;
+      else { D.x = Math.min(1, D.x + 40 / cw); D.y = Math.min(1, D.y + 40 / ch); }
+      cv.layers.splice(idx + 1, 0, D); cv._selLayer = D.id; break;
+    }
+    case 'up':   if (idx < cv.layers.length - 1) cv.layers.splice(idx + 1, 0, cv.layers.splice(idx, 1)[0]); break;
+    case 'down': if (idx > 0) cv.layers.splice(idx - 1, 0, cv.layers.splice(idx, 1)[0]); break;
+    case 'reset-rot':   L.angle = 0; break;
+    case 'reset-scale': L.scale = 1; break;
+    case 'fill': return cvInfogFillFromForm();
+  }
+  cvLayersChanged();
+}
+
+function cvLayerClick(el) {
+  const ds = el.dataset;
+  if (ds.cvTpl) return cvTplAction(ds.cvTpl);
+  if (ds.cvLa) return cvLayerAction(ds.cvLa);
+  const L = cvSelLayer();
+  if (!L) return;
+  if (ds.cvLv) { const i = ds.cvLv.indexOf(':'); L[ds.cvLv.slice(0, i)] = ds.cvLv.slice(i + 1); }
+  else if (ds.cvLt) L[ds.cvLt] = !L[ds.cvLt];
+  else if (ds.cvLplat) {
+    const on = new Set(L.plats || []);
+    on.has(ds.cvLplat) ? on.delete(ds.cvLplat) : on.add(ds.cvLplat);
+    L.plats = CV_PLATFORMS.map(p => p.id).filter(id => on.has(id));
+  }
+  cvLayersChanged();
+}
+
+// ── Шаблоны оформления ──
+function cvTplAction(a) {
+  const i = a.indexOf(':');
+  const op = i < 0 ? a : a.slice(0, i), id = i < 0 ? '' : a.slice(i + 1);
+  if (op === 'save') return cvSaveTpl();
+  if (op === 'apply') return cvApplyTpl(id);
+  if (op === 'del') {
+    const t = (cv.tpls || []).find(x => x.id === id);
+    if (!t || !confirm(`Удалить шаблон «${t.name}»?`)) return;
+    cv.tpls = cv.tpls.filter(x => x !== t);
+    cvSave(); cvRefreshTplCard();
+  }
+}
+
+// Шаблон ЗАМЕНЯЕТ элементы на обложке своим набором (и у своих шаблонов — фон, эффекты,
+// рамку). Прежнее состояние уходит в «↶ Отменить».
+function cvApplyTpl(id) {
+  const tpl = CV_TPL_BUILTIN.find(t => t.id === id) || (cv.tpls || []).find(t => t.id === id);
+  if (!tpl) return;
+  cvLayersSnap(`шаблон «${tpl.name}»`);
+  const [cw, ch] = CV_SZ[cv.ratio] || CV_SZ['4:5'];
+  let emptyForm = false;
+  cv.layers = (tpl.layers || []).map(spec => {
+    const { place, fromForm, id: _old, ...rest } = spec;
+    if (!CV_LAYER_TYPES[spec.type]) return null;
+    const L = { ...cvLayerDefaults(spec.type), ...JSON.parse(JSON.stringify(rest)), id: cvNewLayerId() };
+    if (fromForm && L.type === 'infog') { L.text = cvInfogBuildLines().join('\n'); if (!L.text) emptyForm = true; }
+    if (fromForm && L.type === 'plat') L.plats = cvFormPlats();
+    if (place) cvPlaceLayer(L, place, cw, ch);
+    return L;
+  }).filter(Boolean);
+  if (tpl.style) for (const k of CV_TPL_STYLE_KEYS) if (k in tpl.style) cv[k] = tpl.style[k];
+  cv._selLayer = null;
+  cvLayersSnapDone();
+  jCvBump('tpls');
+  jlog('cv_tpl', null, { tpl: tpl.name, builtin: !!CV_TPL_BUILTIN.find(t => t.id === id), layers: cv.layers.length });
+  if (emptyForm) toast('Форма генератора пуста — строки инфографики впиши сам');
+  render();
+}
+
+function cvSaveTpl() {
+  const name = (prompt('Название шаблона:', '') || '').trim();
+  if (!name) return;
+  const same = (cv.tpls || []).find(t => t.name === name);
+  if (same && !confirm(`Шаблон «${name}» уже есть. Заменить?`)) return;
+  // Инфографика, заполненная из формы и не тронутая руками, запоминается как «из формы»:
+  // иначе шаблон таскал бы строки одного товара на обложки всех следующих
+  const formLines = cvInfogBuildLines().join('\n');
+  const layers = (cv.layers || []).map(({ id, ...rest }) => {
+    const L = JSON.parse(JSON.stringify(rest));
+    if (L.type === 'infog' && formLines && cvLinesOf(L.text).join('\n') === formLines) { L.fromForm = true; L.text = ''; }
+    return L;
+  });
+  const style = Object.fromEntries(CV_TPL_STYLE_KEYS.map(k => [k, cv[k]]));
+  const tpl = { id: same ? same.id : 'u' + Date.now().toString(36), name, layers, style };
+  cv.tpls = same ? cv.tpls.map(t => t === same ? tpl : t) : [...(cv.tpls || []), tpl];
+  cvSave(); cvRefreshTplCard();
+  toast(`Шаблон «${name}» сохранён`);
 }
 
 // ── Effects over collage (vignette / tone / neon seam) ──
@@ -7067,33 +7613,6 @@ function cvDrawEffects(ctx, cw, ch, lay, p, count, opts) {
     }
     ctx.fillStyle = g; ctx.fillRect(0,0,cw,ch);
   }
-}
-
-// ── Platform badges (PS4/PS5/Xbox/PC) ──
-function cvDrawPlatBadge(ctx, cw, ch) {
-  if (!cv.platBadge || !cv.platSel || !cv.platSel.length) return;
-  const badges = cv.platSel.map(id => CV_PLATFORMS.find(p => p.id === id)).filter(Boolean);
-  if (!badges.length) return;
-  const fs = Math.round(cw * 0.034);
-  ctx.save();
-  ctx.font = `bold ${fs}px 'JetBrains Mono',monospace`;
-  const bh = fs * 1.9, padX = fs * 0.85, gap = fs * 0.5;
-  const widths = badges.map(b => ctx.measureText(b.id).width + padX*2);
-  const totalW = widths.reduce((a,w)=>a+w,0) + gap*(badges.length-1);
-  const mg = cw * 0.035;
-  const pos = cv.platBadgePos;
-  let x = (pos==='tl'||pos==='bl') ? mg : cw - mg - totalW;
-  const y = (pos==='tl'||pos==='tr') ? mg : ch - mg - bh;
-  badges.forEach((b,i) => {
-    const w = widths[i];
-    ctx.shadowColor = 'rgba(0,0,0,0.5)'; ctx.shadowBlur = fs*0.6; ctx.shadowOffsetY = fs*0.12;
-    cvRR(ctx, x, y, w, bh, bh*0.24); ctx.fillStyle = b.bg; ctx.fill();
-    ctx.shadowColor = 'transparent'; ctx.shadowBlur = 0; ctx.shadowOffsetY = 0;
-    ctx.fillStyle = '#fff'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-    ctx.fillText(b.id, x + w/2, y + bh/2 + fs*0.04);
-    x += w + gap;
-  });
-  ctx.restore();
 }
 
 // ── Diagonal stripes (scales to any photo count) ──
@@ -7154,32 +7673,11 @@ function cvReDraw() {
   else cvDrawCollage(c);
 }
 
-// Перетащенные позиции инфографики, стикера и текста сохраняются между F5 и форматами,
-// но ничем не ограничивались: блок, опущенный вниз в 4:5 (высота 1350), в квадрате (1080)
-// рисовался за нижним краем, и инфографика «не работала» — писали строки, а плашек нет.
-// Возвращаем всё в пределы текущего холста перед каждой отрисовкой.
-function cvClampOverlays(ctx, cw, ch) {
-  const cl = (v, a, b) => Math.max(a, Math.min(Math.max(a, b), v));
-  const before = [cv.infogX, cv.infogY, cv.maskStickerX, cv.maskStickerY, cv.textOverlayX, cv.textOverlayY].join();
-  if (cv.infogX !== null && cv.infogY !== null) {
-    const m = cvInfogMetrics(ctx, cw, ch);
-    if (m) { cv.infogX = cl(cv.infogX, 0, cw - m.maxW); cv.infogY = cl(cv.infogY, 0, ch - m.totalH); }
-  }
-  if (cv.maskStickerX !== null && cv.maskStickerY !== null) {
-    const h = cv.maskStickerSize / 2;
-    cv.maskStickerX = cl(cv.maskStickerX, h, cw - h); cv.maskStickerY = cl(cv.maskStickerY, h, ch - h);
-  }
-  const fs = cv.textOverlaySize;
-  if (cv.textOverlayX !== null) cv.textOverlayX = cl(cv.textOverlayX, fs, cw - fs);
-  if (cv.textOverlayY !== null) cv.textOverlayY = cl(cv.textOverlayY, fs, ch - fs);
-  if ([cv.infogX, cv.infogY, cv.maskStickerX, cv.maskStickerY, cv.textOverlayX, cv.textOverlayY].join() !== before) cvSave();
-}
-
 function cvDrawCollage(canvas, opts) {
   const [cw,ch] = CV_SZ[cv.ratio] || CV_SZ['4:5'];
   canvas.width=cw; canvas.height=ch;
   const ctx = canvas.getContext('2d');
-  cvClampOverlays(ctx, cw, ch);
+  if (cvClampLayers(cw, ch)) cvSave();
   const p   = opts?.padding ?? cv.padding;
   const imgs= opts?.images ?? cv.images;
   // Раскладку разрешаем по числу картинок так же, как cvCells: иначе «Круг+4» с четырьмя фото
@@ -7226,17 +7724,15 @@ function cvDrawCollage(canvas, opts) {
     }
   }
   cvDrawEffects(ctx, cw, ch, lay, p, imgs.length, opts);
-  cvDrawMaskSticker(ctx, cw, ch);
-  cvDrawTextOverlay(ctx, cw, ch);
-  cvDrawPlatBadge(ctx, cw, ch);
-  cvDrawInfog(ctx, cw, ch, opts?.infog);
+  cvDrawLayers(ctx, cw, ch, opts?.infog);
+  if (canvas.id === 'cv-canvas') cvDrawSelection(ctx, canvas, cw, ch);
 }
 
 function cvDrawGame(canvas, imgObj, opts) {
   const [cw,ch] = CV_SZ[cv.ratio] || CV_SZ['4:5'];
   canvas.width=cw; canvas.height=ch;
   const ctx = canvas.getContext('2d');
-  cvClampOverlays(ctx, cw, ch);
+  if (cvClampLayers(cw, ch)) cvSave();
   const pad = opts?.pad ?? cv.gamePad;
   const cr  = opts?.corner ?? cv.gameCorner;
   // Фон: сплошной или градиент (как в cvDrawCollage)
@@ -7272,9 +7768,8 @@ function cvDrawGame(canvas, imgObj, opts) {
     ctx.restore();
   }
   cvDrawEffects(ctx, cw, ch, 'single', pad || 12, 1, opts);
-  cvDrawMaskSticker(ctx, cw, ch); cvDrawTextOverlay(ctx, cw, ch);
-  cvDrawPlatBadge(ctx, cw, ch);
-  cvDrawInfog(ctx, cw, ch, opts?.infog);
+  cvDrawLayers(ctx, cw, ch, opts?.infog);
+  if (canvas.id === 'cv-canvas') cvDrawSelection(ctx, canvas, cw, ch);
 }
 
 // meta (необязательно): { variant: N, spec: {...}, keepCounters: true } — для вариантов из
@@ -7303,14 +7798,14 @@ function cvGenerateVariations() {
   if (!grid) return;
   // infog-переопределения — ось антидубля: позиция/цвет плашек/порядок строк меняются между вариантами
   const vars = [
-    { label:'1. Без отступов', bg:cv.bg,     pad:0,  corner:0,  infog:{align:'left',  bg:cv.infogBg, shift:0} },
+    { label:'1. Без отступов', bg:cv.bg,     pad:0,  corner:0,  infog:{align:'left',  bg:null,        shift:0} },
     { label:'2. Тонкий фон',   bg:cv.bg,     pad:36, corner:14, infog:{align:'right', bg:'#0F766E',  shift:1} },
     { label:'3. Тёмный',       bg:'#000',    pad:24, corner:10, infog:{align:'left',  bg:'#7c2d12',  shift:2} },
-    { label:'4. Синий',        bg:'#1e3a5f', pad:28, corner:12, infog:{align:'right', bg:cv.infogBg, shift:3} },
+    { label:'4. Синий',        bg:'#1e3a5f', pad:28, corner:12, infog:{align:'right', bg:null,        shift:3} },
   ];
 
   cv._gameVars = vars;
-  jlog('cv_variants', null, { mode: 'game', infog: !!cv.infog });
+  jlog('cv_variants', null, { mode: 'game', infog: cvHasLayer('infog') });
 
   grid.innerHTML = vars.map((v,i) => `
     <div class="cv-var">
@@ -7338,12 +7833,12 @@ function cvGenerateCollageVars() {
   if (!grid) return;
   // infog-переопределения — та же ось антидубля, что в вариантах игры
   const vars = [
-    { label: '1. Чёрный · 0px',   bg: '#000000', padding: 0,  infog:{align:'left',  bg:cv.infogBg, shift:0} },
+    { label: '1. Чёрный · 0px',   bg: '#000000', padding: 0,  infog:{align:'left',  bg:null,        shift:0} },
     { label: '2. Синий · 20px',    bg: '#1a1a2e', padding: 20, infog:{align:'right', bg:'#0F766E',  shift:1} },
     { label: '3. Зелёный · 16px',  bg: '#0f2010', padding: 16, infog:{align:'left',  bg:'#7c2d12',  shift:2} },
-    { label: '4. Текущий · ' + cv.padding + 'px', bg: cv.bg, padding: cv.padding, infog:{align:'right', bg:cv.infogBg, shift:3} },
+    { label: '4. Текущий · ' + cv.padding + 'px', bg: cv.bg, padding: cv.padding, infog:{align:'right', bg:null,        shift:3} },
   ];
-  jlog('cv_variants', null, { mode: 'collage', layout: cv.layout, imageCount: cv.images.length, infog: !!cv.infog });
+  jlog('cv_variants', null, { mode: 'collage', layout: cv.layout, imageCount: cv.images.length, infog: cvHasLayer('infog') });
   grid.innerHTML = vars.map((v,i) => `
     <div class="cv-var">
       <canvas id="cv-cvar-${i}"></canvas>
@@ -7415,6 +7910,105 @@ function cvLayoutButtonsHTML(activeLayout, imgCount) {
   }).join('');
 }
 
+// ── Слои: панель ──
+function cvTplCardHTML() {
+  const b = CV_TPL_BUILTIN.map(t => `<button class="cv-layout-btn" data-cv-tpl="apply:${t.id}">${t.icon} ${esc(t.name)}</button>`).join('');
+  const u = (cv.tpls || []).map(t => `<span class="cv-tpl-own"><button class="cv-layout-btn" data-cv-tpl="apply:${esc(t.id)}">⭐ ${esc(t.name)}</button><button class="cv-tpl-del" data-cv-tpl="del:${esc(t.id)}" title="Удалить шаблон">×</button></span>`).join('');
+  return `<div class="card" id="cv-tpl-card">
+    <div class="card-title">🎨 Шаблоны оформления</div>
+    <div style="font-size:11px;color:var(--muted);margin-bottom:4px">Шаблон заменяет элементы на обложке своим набором. Передумал — «↶ Отменить» в карточке ниже.</div>
+    <div class="cv-layouts">${b}</div>
+    ${u ? `<div class="cv-layout-sep">Мои шаблоны</div><div class="cv-layouts">${u}</div>` : ''}
+    <button class="btn-sm" data-cv-tpl="save" style="margin-top:10px">💾 Сохранить текущее как шаблон</button>
+  </div>`;
+}
+
+function cvLayerRowsHTML() {
+  // сверху — верхний слой, как в графических редакторах
+  return (cv.layers || []).slice().reverse().map(L => {
+    const d = CV_LAYER_TYPES[L.type];
+    const label = L.type === 'plat' ? ((L.plats || []).join(' / ') || '(пусто)') : (cvLinesOf(L.text)[0] || '(пусто)');
+    return `<div class="cv-lrow${L.id === cv._selLayer ? ' active' : ''}${L.hidden ? ' off' : ''}" data-cv-la="sel:${esc(L.id)}" title="${esc(d.name)}">
+      <span>${d.icon}</span><span class="cv-lrow-name">${esc(label)}</span>
+      <button class="cv-lrow-btn" data-cv-la="hide:${esc(L.id)}" title="${L.hidden ? 'Показать' : 'Скрыть'}">${L.hidden ? '🙈' : '👁'}</button>
+    </div>`;
+  }).join('');
+}
+
+function cvLayerEditorHTML(L) {
+  const swatches = (prop, list) => `<div class="cv-bg-row" style="margin-top:0">${list.map(c => `<button class="cv-color ${L[prop] === c ? 'active' : ''}" data-cv-lv="${prop}:${c}" style="background:${c};${c === '#ffffff' ? 'border:1px solid #555' : ''}"></button>`).join('')}<input type="color" data-cv-lp="${prop}" value="${esc(L[prop] || '#000000')}" title="Свой цвет" style="width:28px;height:28px;border:none;border-radius:50%;cursor:pointer;padding:0"></div>`;
+  const choice = (prop, opts) => `<div class="cv-layouts" style="flex:1;margin-top:0">${opts.map(([v, l]) => `<button class="cv-layout-btn ${L[prop] === v ? 'active' : ''}" data-cv-lv="${prop}:${v}">${l}</button>`).join('')}</div>`;
+  const toggle = prop => `<button class="toggle-btn ${L[prop] ? 'on' : ''}" data-cv-lt="${prop}">${L[prop] ? 'Вкл' : 'Выкл'}</button>`;
+  const range = (prop, min, max) => `<input type="range" data-cv-lp="${prop}" data-cv-div="100" min="${min}" max="${max}" value="${Math.round((+L[prop] || 0) * 100)}">`;
+  const row = (label, inner, top) => `<div class="cv-row"${top ? ' style="align-items:flex-start"' : ''}><label${top ? ' style="padding-top:4px"' : ''}>${label}</label>${inner}</div>`;
+  const area = (rows, ph) => `<textarea data-cv-lp="text" rows="${rows}" placeholder="${ph}" style="flex:1;font-size:13px;resize:vertical">${esc(L.text || '')}</textarea>`;
+  let body = '';
+  switch (L.type) {
+    case 'sticker':
+      body = row('Текст', area(2, 'ХИТ&#10;Enter — новая строка'), true)
+        + row('Форма', choice('shape', CV_STICKER_SHAPES))
+        + row('Фон', swatches('bg', CV_SC)) + row('Буквы', swatches('color', CV_STC));
+      break;
+    case 'ribbon':
+      body = row('Текст', `<input type="text" data-cv-lp="text" value="${esc(L.text || '')}" placeholder="ПРЕДЗАКАЗ" style="flex:1">`)
+        + row('Угол', choice('corner', [['tl', '↖'], ['tr', '↗'], ['bl', '↙'], ['br', '↘']]))
+        + row('Фон', swatches('bg', CV_SC)) + row('Буквы', swatches('color', CV_STC));
+      break;
+    case 'text':
+      body = row('Текст', area(3, 'Ваш текст&#10;Enter — новая строка'), true)
+        + row('Жирный', toggle('bold')) + row('Цвет', swatches('color', CV_STC))
+        + row('Подложка', toggle('bgOn'))
+        + (L.bgOn ? row('Цвет', swatches('bgColor', CV_SC)) + row('Плотность', range('bgOpacity', 0, 100)) : '');
+      break;
+    case 'infog':
+      body = row('Строки', area(4, '✔️ 405+ игр&#10;✔️ PS4 / PS5&#10;(строка = плашка, до 6)'), true)
+        + `<button class="btn-sm" data-cv-la="fill" style="margin:6px 0 2px">⚡ Заполнить из формы генератора</button>`
+        + row('Выравнив.', choice('align', [['left', '⬅ По левому'], ['right', '➡ По правому']]))
+        + row('Плашка', swatches('bg', CV_SC)) + row('Плотность', range('opacity', 20, 100))
+        + row('Буквы', swatches('color', CV_STC));
+      break;
+    case 'plat':
+      body = row('Какие', `<div class="cv-layouts" style="flex:1;margin-top:0">${CV_PLATFORMS.map(p => {
+        const on = (L.plats || []).includes(p.id);
+        return `<button class="cv-layout-btn ${on ? 'active' : ''}" data-cv-lplat="${p.id}" style="${on ? `background:${p.bg};color:#fff;border-color:${p.bg}` : ''}">${p.id}</button>`;
+      }).join('')}</div>`);
+      break;
+  }
+  const s = Math.round((L.scale || 1) * 100), a = Math.round(L.angle || 0);
+  const tf = `<div class="cv-row"><label>Положение</label><span class="cv-val" id="cv-ltf">${L.type === 'ribbon' ? `${s}%` : `${a}° · ${s}%`}</span>
+    ${L.type === 'ribbon' ? '' : '<button class="btn-sm" data-cv-la="reset-rot" title="Повернуть ровно">↺ Прямо</button>'}
+    <button class="btn-sm" data-cv-la="reset-scale" title="Вернуть исходный размер">↺ 100%</button></div>`;
+  const hint = L.type === 'ribbon'
+    ? '💡 Тяни ленту в другой угол · жёлтая ручка — толщина · колёсико над лентой — размер · Del — удалить'
+    : '💡 Тяни элемент — двигать · белая ручка сверху — крутить (Shift — шаг 15°) · жёлтая в углу — размер · колёсико над элементом — размер · Del — удалить';
+  const d = CV_LAYER_TYPES[L.type];
+  return `<div class="cv-leditor">
+    <div class="cv-leditor-head">${d.icon} ${d.name}<span style="flex:1"></span>
+      <button class="cv-lrow-btn" data-cv-la="up" title="Выше других">▲</button>
+      <button class="cv-lrow-btn" data-cv-la="down" title="Ниже других">▼</button>
+      <button class="cv-lrow-btn" data-cv-la="dup" title="Дублировать">⧉</button>
+      <button class="cv-lrow-btn" data-cv-la="del" title="Удалить (Del)">🗑</button>
+    </div>
+    ${body}${tf}
+    <div class="cv-lhint">${hint}</div>
+  </div>`;
+}
+
+function cvLayersCardHTML() {
+  const add = Object.entries(CV_LAYER_TYPES).map(([t, d]) => `<button class="cv-layout-btn" data-cv-la="add:${t}">+ ${d.icon} ${d.name}</button>`).join('');
+  const rows = cvLayerRowsHTML();
+  const sel = cvSelLayer();
+  const undo = cvUndoValid() ? `<button class="btn-sm" data-cv-la="undo" style="margin-top:8px">↶ Отменить: ${esc(cv._layersUndo.what)}</button>` : '';
+  return `<div class="card" id="cv-layers-card">
+    <div class="card-title">🧩 Элементы на обложке</div>
+    <div style="font-size:11px;color:var(--muted);margin-bottom:4px">Стикеры, ленты, надписи и плашки — уникальный элемент против детектора дублей Авито</div>
+    <div class="cv-layouts">${add}</div>
+    ${rows ? `<div class="cv-lrows" id="cv-lrows">${rows}</div>` : '<div style="font-size:12px;color:var(--muted);margin-top:10px;font-style:italic">Пока пусто — добавь элемент или выбери шаблон</div>'}
+    ${undo}
+    ${sel ? cvLayerEditorHTML(sel) : (rows ? '<div class="cv-lhint">💡 Щёлкни элемент на превью или в списке — появятся его настройки и ручки</div>' : '')}
+  </div>`;
+}
+
 function coversTabHTML() {
   const pill = (m, lbl) => `<button class="tab-pill ${cv.mode===m?'active':''}" data-cv-mode="${m}">${lbl}</button>`;
   const bgPicker = `<div class="cv-bg-row">
@@ -7450,155 +8044,9 @@ function coversTabHTML() {
       <button class="toggle-btn ${cv.neonGap?'on':''}" data-cv-toggle="neonGap">${cv.neonGap?'Вкл':'Выкл'}</button>
       ${cv.neonGap?`<input type="color" id="cv-neon-color" value="${cv.neonColor}" title="Цвет неона" style="width:28px;height:28px;border:none;border-radius:8px;cursor:pointer;padding:0;margin-left:6px">`:''}
     </div>
-    <div class="cv-row" style="align-items:flex-start">
-      <label style="padding-top:4px">Платформы</label>
-      <div style="flex:1">
-        <button class="toggle-btn ${cv.platBadge?'on':''}" data-cv-toggle="platBadge" style="margin-bottom:6px">${cv.platBadge?'Вкл':'Выкл'}</button>
-        ${cv.platBadge?`
-        <div class="cv-layouts" style="flex-wrap:wrap;margin-bottom:4px">
-          ${CV_PLATFORMS.map(p=>`<button class="cv-layout-btn ${(cv.platSel||[]).includes(p.id)?'active':''}" data-cv-plat-sel="${p.id}" style="${(cv.platSel||[]).includes(p.id)?`background:${p.bg};color:#fff;border-color:${p.bg}`:''}"> ${p.id}</button>`).join('')}
-        </div>
-        <div class="cv-row" style="margin:0"><label>Позиция</label>
-          <div class="cv-layouts">${[['tl','↖'],['tr','↗'],['bl','↙'],['br','↘']].map(([v,l])=>`<button class="cv-layout-btn ${cv.platBadgePos===v?'active':''}" data-cv-plat-pos="${v}">${l}</button>`).join('')}</div>
-        </div>`:''}
-      </div>
-    </div>
   </div>`;
 
-  const msSection = `<div class="card">
-    <div class="card-title">Маскирующий стикер</div>
-    <div style="font-size:11px;color:var(--muted);margin-bottom:8px">Уникальный элемент — обходит детектор дублей Авито</div>
-    <div class="cv-row" style="margin-top:0">
-      <label>Показать</label>
-      <button class="toggle-btn ${cv.maskSticker?'on':''}" data-act="cv-mask-toggle">${cv.maskSticker?'Вкл':'Выкл'}</button>
-    </div>
-    ${cv.maskSticker ? `
-    <div class="cv-row"><label>Текст</label>
-      <input type="text" id="cv-ms-text" value="${esc(cv.maskStickerText)}" placeholder="ЛУЧШАЯ ЦЕНА" style="flex:1">
-    </div>
-    <div class="cv-row"><label>Форма</label>
-      <div class="cv-layouts" style="flex:1">
-        ${[['burst','💥 Взрыв'],['badge','🏷 Бейдж'],['circle','⭕ Круг'],['ribbon','🎀 Лента'],['diamond','💎 Ромб'],['pill','💊 Пилюля'],['hex','⬡ Hex']].map(([s,l])=>
-          `<button class="cv-layout-btn ${cv.maskStickerShape===s?'active':''}" data-cv-ms-shape="${s}">${l}</button>`).join('')}
-      </div>
-    </div>
-    <div class="cv-row"><label>Позиция</label>
-      <div class="cv-layouts" style="flex:1">
-        ${[['tl','↖'],['tr','↗'],['bl','↙'],['br','↘'],['center','•']].map(([pos,l])=>
-          `<button class="cv-layout-btn ${cv.maskStickerPos===pos?'active':''}" data-cv-ms-pos="${pos}">${l}</button>`).join('')}
-      </div>
-    </div>
-    <div class="cv-row"><label>Размер</label>
-      <input type="range" id="cv-ms-size" min="80" max="400" value="${cv.maskStickerSize}">
-      <span class="cv-val" id="cv-ms-size-val">${cv.maskStickerSize}px</span>
-    </div>
-    <div class="cv-row"><label>Поворот</label>
-      <input type="range" id="cv-ms-angle" min="0" max="360" value="${cv.maskStickerAngle}">
-      <span class="cv-val" id="cv-ms-angle-val">${cv.maskStickerAngle}°</span>
-    </div>
-    <div style="font-size:11px;color:var(--teal-h);margin:2px 0 6px">💡 Тяни стикер мышкой на канвасе — он встанет куда нужно</div>
-    <div class="cv-row"><label>Фон</label>
-      <div class="cv-bg-row">
-        ${CV_SC.map(c=>`<button class="cv-color ${cv.maskStickerBg===c?'active':''}" data-cv-ms-bg="${c}" style="background:${c}"></button>`).join('')}
-        <input type="color" id="cv-ms-bg-custom" value="${cv.maskStickerBg}" title="Свой цвет" style="width:28px;height:28px;border:none;border-radius:50%;cursor:pointer;padding:0">
-      </div>
-    </div>
-    <div class="cv-row"><label>Текст</label>
-      <div class="cv-bg-row">
-        ${CV_STC.map(c=>`<button class="cv-color ${cv.maskStickerColor===c?'active':''}" data-cv-ms-tc="${c}" style="background:${c};${c==='#ffffff'?'border:1px solid #555':''}"></button>`).join('')}
-        <input type="color" id="cv-ms-tc-custom" value="${cv.maskStickerColor}" title="Свой цвет" style="width:28px;height:28px;border:none;border-radius:50%;cursor:pointer;padding:0">
-      </div>
-    </div>` : ''}
-  </div>
-  <div class="card">
-    <div class="card-title">Текст на обложке</div>
-    <div style="font-size:11px;color:var(--muted);margin-bottom:8px">Надпись как в сторис — тяни мышкой, крути угол, с фоном или без</div>
-    <div class="cv-row" style="margin-top:0">
-      <label>Показать</label>
-      <button class="toggle-btn ${cv.textOverlay?'on':''}" data-act="cv-to-toggle">${cv.textOverlay?'Вкл':'Выкл'}</button>
-    </div>
-    ${cv.textOverlay ? `
-    <div class="cv-row"><label>Текст</label>
-      <textarea id="cv-to-text" rows="3" style="flex:1;font-size:13px;resize:vertical"
-        placeholder="Ваш текст&#10;Несколько строк — через Enter">${esc(cv.textOverlayText)}</textarea>
-    </div>
-    <div class="cv-row"><label>Размер</label>
-      <input type="range" id="cv-to-size" min="20" max="300" value="${cv.textOverlaySize}">
-      <span class="cv-val" id="cv-to-size-val">${cv.textOverlaySize}px</span>
-    </div>
-    <div class="cv-row"><label>Поворот</label>
-      <input type="range" id="cv-to-angle" min="0" max="360" value="${cv.textOverlayAngle}">
-      <span class="cv-val" id="cv-to-angle-val">${cv.textOverlayAngle}°</span>
-    </div>
-    <div class="cv-row"><label>Жирный</label>
-      <button class="toggle-btn ${cv.textOverlayBold?'on':''}" data-act="cv-to-bold">${cv.textOverlayBold?'Да':'Нет'}</button>
-    </div>
-    <div class="cv-row"><label>Цвет текста</label>
-      <div class="cv-bg-row">
-        ${CV_STC.map(c=>`<button class="cv-color ${cv.textOverlayColor===c?'active':''}" data-cv-to-color="${c}" style="background:${c};${c==='#ffffff'?'border:1px solid #555':''}"></button>`).join('')}
-        <input type="color" id="cv-to-color-custom" value="${cv.textOverlayColor}" title="Свой цвет" style="width:28px;height:28px;border:none;border-radius:50%;cursor:pointer;padding:0">
-      </div>
-    </div>
-    <div class="cv-row"><label>Фон</label>
-      <button class="toggle-btn ${cv.textOverlayBg?'on':''}" data-act="cv-to-bg-toggle">${cv.textOverlayBg?'Вкл':'Выкл'}</button>
-    </div>
-    ${cv.textOverlayBg ? `
-    <div class="cv-row"><label>Цвет фона</label>
-      <div class="cv-bg-row">
-        ${CV_SC.map(c=>`<button class="cv-color ${cv.textOverlayBgColor===c?'active':''}" data-cv-to-bg="${c}" style="background:${c}"></button>`).join('')}
-        <input type="color" id="cv-to-bg-custom" value="${cv.textOverlayBgColor}" title="Свой цвет" style="width:28px;height:28px;border:none;border-radius:50%;cursor:pointer;padding:0">
-      </div>
-    </div>
-    <div class="cv-row"><label>Прозрачность</label>
-      <input type="range" id="cv-to-opacity" min="0" max="100" value="${Math.round(cv.textOverlayBgOpacity*100)}">
-      <span class="cv-val" id="cv-to-opacity-val">${Math.round(cv.textOverlayBgOpacity*100)}%</span>
-    </div>` : ''}
-    <div style="font-size:11px;color:var(--teal-h);margin-top:4px">💡 Тяни надпись мышкой прямо на канвасе</div>
-    ` : ''}
-  </div>`;
-
-  const igSection = `<div class="card">
-    <div class="card-title">📋 Инфографика</div>
-    <div style="font-size:11px;color:var(--muted);margin-bottom:8px">Плашки-характеристики поверх обложки — как продающие карточки маркетплейсов</div>
-    <div class="cv-row" style="margin-top:0">
-      <label>Показать</label>
-      <button class="toggle-btn ${cv.infog?'on':''}" data-act="cv-ig-toggle">${cv.infog?'Вкл':'Выкл'}</button>
-    </div>
-    ${cv.infog ? `
-    <div class="cv-row" style="align-items:flex-start"><label style="padding-top:4px">Строки</label>
-      <textarea id="cv-ig-text" rows="4" style="flex:1;font-size:13px;resize:vertical"
-        placeholder="✔️ 405+ игр&#10;✔️ PS4 / PS5&#10;💲 от 608₽/мес&#10;(строка = плашка, до 6)">${esc(cv.infogText)}</textarea>
-    </div>
-    <button class="btn-sm" data-act="cv-ig-fill" style="margin:2px 0 6px">⚡ Заполнить из формы генератора</button>
-    <div class="cv-row"><label>Размер</label>
-      <input type="range" id="cv-ig-size" min="24" max="64" value="${cv.infogSize}">
-      <span class="cv-val" id="cv-ig-size-val">${cv.infogSize}px</span>
-    </div>
-    <div class="cv-row"><label>Прозрачность</label>
-      <input type="range" id="cv-ig-opacity" min="20" max="100" value="${Math.round(cv.infogBgOpacity*100)}">
-      <span class="cv-val" id="cv-ig-opacity-val">${Math.round(cv.infogBgOpacity*100)}%</span>
-    </div>
-    <div class="cv-row"><label>Сторона</label>
-      <div class="cv-layouts" style="flex:1">
-        ${[['left','⬅ Слева'],['right','➡ Справа']].map(([v,l])=>
-          `<button class="cv-layout-btn ${cv.infogAlign===v?'active':''}" data-cv-ig-align="${v}">${l}</button>`).join('')}
-      </div>
-    </div>
-    <div class="cv-row"><label>Плашка</label>
-      <div class="cv-bg-row">
-        ${CV_SC.map(c=>`<button class="cv-color ${cv.infogBg===c?'active':''}" data-cv-ig-bg="${c}" style="background:${c}"></button>`).join('')}
-        <input type="color" id="cv-ig-bg-custom" value="${cv.infogBg}" title="Свой цвет" style="width:28px;height:28px;border:none;border-radius:50%;cursor:pointer;padding:0">
-      </div>
-    </div>
-    <div class="cv-row"><label>Текст</label>
-      <div class="cv-bg-row">
-        ${CV_STC.map(c=>`<button class="cv-color ${cv.infogColor===c?'active':''}" data-cv-ig-tc="${c}" style="background:${c};${c==='#ffffff'?'border:1px solid #555':''}"></button>`).join('')}
-        <input type="color" id="cv-ig-tc-custom" value="${cv.infogColor}" title="Свой цвет" style="width:28px;height:28px;border:none;border-radius:50%;cursor:pointer;padding:0">
-      </div>
-    </div>
-    <div style="font-size:11px;color:var(--teal-h);margin-top:4px">💡 Тяни блок плашек мышкой прямо на канвасе</div>
-    ` : ''}
-  </div>`;
+  const layersSection = cvTplCardHTML() + cvLayersCardHTML();
 
   if (cv.mode === 'collage') return `<div class="cv-wrap">
     <div class="cv-controls">
@@ -7625,9 +8073,8 @@ function coversTabHTML() {
           ${cvLayoutButtonsHTML(cv.layout, cv.images.length)}
         </div>
       </div>
+      ${layersSection}
       ${effectsSection}
-      ${msSection}
-      ${igSection}
       <div class="card">
         <div class="card-title">Фон и отступы</div>${bgPicker}
         <div class="cv-row">
@@ -7648,7 +8095,7 @@ function coversTabHTML() {
     </div>
     <div class="cv-preview-wrap">
       <div class="card-title">Превью</div>
-      <div id="cv-tz-area">${cv.images.length ? '<div class="cv-swap-hint">💡 Тяни картинку — сдвиг кадра &nbsp;·&nbsp; клик — выбрать ячейку для масштаба &nbsp;·&nbsp; поменять местами — перетащи миниатюры</div>' : ''}</div>
+      <div id="cv-tz-area">${cv.images.length ? '<div class="cv-swap-hint">💡 Тяни картинку — сдвиг кадра &nbsp;·&nbsp; клик — выбрать ячейку для масштаба &nbsp;·&nbsp; поменять местами — перетащи миниатюры &nbsp;·&nbsp; щёлкни элемент — рамка с ручками</div>' : ''}</div>
       <canvas id="cv-canvas"></canvas>
       ${!cv.images.length?'<p class="cv-empty">Загрузите изображения чтобы увидеть превью</p>':''}
       <div id="cv-collage-vars-grid" class="cv-vars-grid" style="margin-top:14px"></div>
@@ -7724,9 +8171,8 @@ function coversTabHTML() {
             `<button class="cv-layout-btn ${cv.ratio===r?'active':''}" data-cv-ratio="${r}">${lbl}</button>`).join('')}
         </div>
       </div>
+      ${layersSection}
       ${effectsSection}
-      ${msSection}
-      ${igSection}
       <button class="btn-gen" id="cv-download" data-act="cv-download" ${!cv.images.length?'disabled':''}>⬇ Скачать JPEG</button>
       <button class="btn-gen" id="cv-gen-vars" data-act="cv-gen-vars" ${!cv.images.length?'disabled':''} style="margin-top:8px">✨ 4 варианта (разный фон)</button>
     </div>
@@ -7734,7 +8180,7 @@ function coversTabHTML() {
       <div class="card-title">Превью</div>
       <canvas id="cv-canvas"></canvas>
       ${!cv.images.length?'<p class="cv-empty">Загрузите обложку игры чтобы увидеть превью</p>':''}
-      <div id="cv-tz-area-game" style="margin-top:4px">${cv.images.length?'<div class="cv-swap-hint">💡 Колёсико или два пальца на тачпаде — масштаб &nbsp;·&nbsp; тяни картинку — сдвиг кадра</div>':''}</div>
+      <div id="cv-tz-area-game" style="margin-top:4px">${cv.images.length?'<div class="cv-swap-hint">💡 Колёсико или два пальца на тачпаде — масштаб &nbsp;·&nbsp; тяни картинку — сдвиг кадра &nbsp;·&nbsp; щёлкни элемент — рамка с ручками</div>':''}</div>
       <div id="cv-vars-grid" class="cv-vars-grid" style="margin-top:14px">
         ${cv.images.length?'':''}
       </div>
@@ -7790,86 +8236,43 @@ function bindCoversTab() {
     cv.gameBorderColor = e.target.value; cvReDraw();
   });
 
-  // Mask sticker live inputs
-  document.getElementById('cv-ms-text')?.addEventListener('input', e => {
-    cv.maskStickerText = e.target.value;
-    const c = document.getElementById('cv-canvas');
-    if (c && cv.images.length) cvDrawCollage(c);
-  });
-  document.getElementById('cv-ms-size')?.addEventListener('input', e => {
-    cv.maskStickerSize = +e.target.value;
-    const v = document.getElementById('cv-ms-size-val');
-    if (v) v.textContent = cv.maskStickerSize + 'px';
-    const c = document.getElementById('cv-canvas');
-    if (c && cv.images.length) cvDrawCollage(c);
-  });
-  document.getElementById('cv-ms-angle')?.addEventListener('input', e => {
-    cv.maskStickerAngle = +e.target.value;
-    const v = document.getElementById('cv-ms-angle-val');
-    if (v) v.textContent = cv.maskStickerAngle + '°';
-    const c = document.getElementById('cv-canvas');
-    if (c && cv.images.length) cvDrawCollage(c);
-  });
-  // Text overlay live inputs
-  document.getElementById('cv-to-text')?.addEventListener('input', e => {
-    cv.textOverlayText = e.target.value; cvReDraw();
-  });
-  document.getElementById('cv-to-size')?.addEventListener('input', e => {
-    cv.textOverlaySize = +e.target.value;
-    const v = document.getElementById('cv-to-size-val'); if (v) v.textContent = e.target.value + 'px';
-    cvReDraw();
-  });
-  document.getElementById('cv-to-angle')?.addEventListener('input', e => {
-    cv.textOverlayAngle = +e.target.value;
-    const v = document.getElementById('cv-to-angle-val'); if (v) v.textContent = e.target.value + '°';
-    cvReDraw();
-  });
-  document.getElementById('cv-to-color-custom')?.addEventListener('input', e => {
-    cv.textOverlayColor = e.target.value; cvReDraw();
-  });
-  document.getElementById('cv-to-bg-custom')?.addEventListener('input', e => {
-    cv.textOverlayBgColor = e.target.value; cvReDraw();
-  });
-  document.getElementById('cv-to-opacity')?.addEventListener('input', e => {
-    cv.textOverlayBgOpacity = +e.target.value / 100;
-    const v = document.getElementById('cv-to-opacity-val'); if (v) v.textContent = e.target.value + '%';
-    cvReDraw();
-  });
-  // 📋 Инфографика — live inputs
-  document.getElementById('cv-ig-text')?.addEventListener('input', e => {
-    cv.infogText = e.target.value; cvReDraw();
-  });
-  document.getElementById('cv-ig-size')?.addEventListener('input', e => {
-    cv.infogSize = +e.target.value;
-    const v = document.getElementById('cv-ig-size-val'); if (v) v.textContent = e.target.value + 'px';
-    cvReDraw();
-  });
-  document.getElementById('cv-ig-opacity')?.addEventListener('input', e => {
-    cv.infogBgOpacity = +e.target.value / 100;
-    const v = document.getElementById('cv-ig-opacity-val'); if (v) v.textContent = e.target.value + '%';
-    cvReDraw();
-  });
-  document.getElementById('cv-ig-bg-custom')?.addEventListener('input', e => {
-    cv.infogBg = e.target.value; cvReDraw();
-  });
-  document.getElementById('cv-ig-tc-custom')?.addEventListener('input', e => {
-    cv.infogColor = e.target.value; cvReDraw();
-  });
+  // Поля выбранного слоя (текст, цвет, плотность) — делегированием, один раз на документ:
+  // карточка элементов перерисовывается при каждой смене выбора и своих слушателей не держит
+  if (!window._cvLayerInputBound) {
+    window._cvLayerInputBound = true;
+    document.addEventListener('input', e => {
+      const el = e.target.closest && e.target.closest('[data-cv-lp]');
+      if (!el) return;
+      const L = cvSelLayer();
+      if (!L) return;
+      const p = el.dataset.cvLp;
+      L[p] = el.type === 'range' ? +el.value / (+el.dataset.cvDiv || 1) : el.value;
+      cvReDraw();
+      // подпись в списке следует за текстом, не пересоздавая поле ввода (фокус и курсор на месте)
+      if (p === 'text') { const r = document.getElementById('cv-lrows'); if (r) r.innerHTML = cvLayerRowsHTML(); }
+    });
+    // Клавиши для выделенного слоя: Del — удалить, Esc — снять выделение, стрелки — сдвиг (Shift — ×10)
+    document.addEventListener('keydown', e => {
+      if (state.tab !== 'covers' || !cv._selLayer) return;
+      if (e.target.closest && e.target.closest('input,textarea,select,[contenteditable]')) return;
+      const L = cvSelLayer();
+      if (!L) return;
+      // Только Del: Backspace после клика по цвету (фокус на кнопке) удалял элемент нечаянно
+      if (e.key === 'Delete') { e.preventDefault(); cvLayerAction('del'); return; }
+      if (e.key === 'Escape') { cv._selLayer = null; cvLayersChanged(); return; }
+      const dir = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] }[e.key];
+      if (!dir || L.type === 'ribbon') return;
+      e.preventDefault();
+      const [cw, ch] = CV_SZ[cv.ratio] || CV_SZ['4:5'], st = e.shiftKey ? 10 : 1;
+      L.x += dir[0] * st / cw; L.y += dir[1] * st / ch;
+      cvReDraw();
+    });
+  }
   document.getElementById('cv-bg2-custom')?.addEventListener('input', e => {
     cv.bg2 = e.target.value; cvReDraw();
   });
   document.getElementById('cv-neon-color')?.addEventListener('input', e => {
     cv.neonColor = e.target.value; cvReDraw();
-  });
-  document.getElementById('cv-ms-bg-custom')?.addEventListener('input', e => {
-    cv.maskStickerBg = e.target.value;
-    const c = document.getElementById('cv-canvas');
-    if (c && cv.images.length) cvDrawCollage(c);
-  });
-  document.getElementById('cv-ms-tc-custom')?.addEventListener('input', e => {
-    cv.maskStickerColor = e.target.value;
-    const c = document.getElementById('cv-canvas');
-    if (c && cv.images.length) cvDrawCollage(c);
   });
 
   // Drag-to-reorder thumbnails — делегируем через document один раз,
@@ -7968,10 +8371,10 @@ function bindCoversTab() {
     }
 
     let _drag = null;
-    let _stickerDrag = null;
-    let _textDrag = null;
     let _gameDrag = null;
-    let _infogDrag = null;
+    // Слой под рукой: move — тянем сам слой, rotate / scale — за ручки рамки; _pinch — два пальца
+    let _layerDrag = null;
+    let _pinch = null;
 
     function canvasMouse(e) {
       const rect = canvas.getBoundingClientRect();
@@ -7980,83 +8383,54 @@ function bindCoversTab() {
         my: (e.clientY - rect.top)  * (canvas.height / rect.height),
       };
     }
-
-    // GFX-14: круговой (rotation-invariant) хитбокс по факту размера формы стикера, не квадрат sz*1.3
-    const STICKER_HIT_R = {badge:.83, burst:.55, circle:.5, ribbon:.93, diamond:.52, pill:.79, hex:.55};
-    function stickerPos() {
-      const [cw, ch] = CV_SZ[cv.ratio] || CV_SZ['4:5'];
-      const sz = cv.maskStickerSize, mg = sz * 0.3;
-      if (cv.maskStickerX !== null && cv.maskStickerY !== null) return { scx: cv.maskStickerX, scy: cv.maskStickerY };
-      const pos = cv.maskStickerPos;
-      if      (pos==='tl') return { scx:mg+sz*.5,    scy:mg+sz*.5 };
-      else if (pos==='tr') return { scx:cw-mg-sz*.5, scy:mg+sz*.5 };
-      else if (pos==='bl') return { scx:mg+sz*.5,    scy:ch-mg-sz*.5 };
-      else if (pos==='br') return { scx:cw-mg-sz*.5, scy:ch-mg-sz*.5 };
-      else                 return { scx:cw/2,         scy:ch/2 };
+    const cvSz = () => CV_SZ[cv.ratio] || CV_SZ['4:5'];
+    const redraw = () => cv.mode === 'game' ? cvDrawGame(canvas, cv.images[0], {}) : cvDrawCollage(canvas);
+    const nearPt = (p, mx, my, k) => !!p && Math.hypot(mx - p.x, my - p.y) <= 18 * k;
+    // Какую ручку выделенного слоя задевает точка: 'rotate' | 'scale' | null
+    function handleAt(mx, my) {
+      const L = cvSelLayer();
+      if (!L || L.hidden) return null;
+      const [cw, ch] = cvSz(), k = cvScreenK(canvas);
+      const f = cvLayerFrame(L, cw, ch), h = cvLayerHandles(f, k);
+      if (nearPt(h.rotate, mx, my, k)) return { kind: 'rotate', L, f, h };
+      if (nearPt(h.scale, mx, my, k)) return { kind: 'scale', L, f, h };
+      return null;
     }
-    function stickerHit(mx, my) {
-      if (!cv.maskSticker || !cv.maskStickerText.trim()) return false;
-      const sz = cv.maskStickerSize;
-      const { scx, scy } = stickerPos();
-      const hitR = sz * (STICKER_HIT_R[cv.maskStickerShape] ?? 0.6);
-      return Math.sqrt((mx-scx)**2 + (my-scy)**2) <= hitR;
-    }
-
-    // GFX-14: хитбокс текста по факту измеренного размера блока, не 2×fontSize
-    function textOverlayHit(mx, my) {
-      if (!cv.textOverlay || !cv.textOverlayText.trim()) return null;
-      const lines = cv.textOverlayText.trim().split('\n').filter(l => l.trim());
-      if (!lines.length) return null;
-      const [cw2, ch2] = CV_SZ[cv.ratio] || CV_SZ['4:5'];
-      const tcx = cv.textOverlayX ?? cw2 / 2;
-      const tcy = cv.textOverlayY ?? ch2 / 2;
-      const fs = cv.textOverlaySize;
-      const ctx = canvas.getContext('2d');
-      ctx.font = `${cv.textOverlayBold ? 'bold' : 'normal'} ${fs}px Literata,Georgia,serif`;
-      const lh = fs * 1.28;
-      const maxW = Math.max(...lines.map(l => ctx.measureText(l).width));
-      const totalH = lines.length * lh;
-      const hw = maxW/2 + fs*0.55, hh = totalH/2 + fs*0.32;
-      const hitR = Math.sqrt(hw*hw + hh*hh);
-      return Math.sqrt((mx-tcx)**2 + (my-tcy)**2) <= hitR ? { tcx, tcy } : null;
-    }
-
-    // 📋 Инфографика: хитбокс по факту измеренного блока плашек (как у текста — GFX-14)
-    function infogHit(mx, my) {
-      if (!cv.infog) return null;
-      const [cw2, ch2] = CV_SZ[cv.ratio] || CV_SZ['4:5'];
-      const m = cvInfogMetrics(canvas.getContext('2d'), cw2, ch2);
-      if (!m) return null;
-      return (mx >= m.x && mx <= m.x + m.maxW && my >= m.y && my <= m.y + m.totalH) ? m : null;
+    // Выбор слоя на холсте открывает его настройки; на ПК карточку подтягиваем в видимую часть меню
+    function selectLayer(id) {
+      if (cv._selLayer === id) return;
+      cv._selLayer = id;
+      cvRefreshLayersCard();
+      const card = document.getElementById('cv-layers-card'), col = document.querySelector('.cv-controls');
+      if (id && card && col && getComputedStyle(col).overflowY === 'auto') card.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
     }
 
     function onPointerDown(e) {
       if (!cv.images.length) return;
       const { mx, my } = canvasMouse(e);
-      // Text overlay drag
-      const th = textOverlayHit(mx, my);
-      if (th) {
+      const [cw, ch] = cvSz();
+      // 1) ручки выделенного слоя — поверх всего
+      const hd = handleAt(mx, my);
+      if (hd) {
         e.preventDefault();
-        _textDrag = { offX: mx - th.tcx, offY: my - th.tcy };
+        _layerDrag = hd.kind === 'rotate'
+          ? { mode: 'rotate', L: hd.L, cx: hd.f.cx, cy: hd.f.cy, a0: Math.atan2(my - hd.f.cy, mx - hd.f.cx), angle0: hd.L.angle || 0 }
+          : { mode: 'scale', L: hd.L, ax: hd.h.anchor.x, ay: hd.h.anchor.y, d0: Math.max(1, Math.hypot(mx - hd.h.anchor.x, my - hd.h.anchor.y)), s0: hd.L.scale || 1 };
+        return;
+      }
+      // 2) сам слой: выделить и тянуть
+      const hit = cvLayerAt(mx, my, cw, ch);
+      if (hit) {
+        e.preventDefault();
+        const f = cvLayerFrame(hit, cw, ch);
+        _layerDrag = { mode: 'move', L: hit, offX: mx - f.cx, offY: my - f.cy, sx: mx, sy: my, moved: false };
+        selectLayer(hit.id);
+        redraw();
         canvas.style.cursor = 'grabbing';
         return;
       }
-      // Sticker drag takes priority
-      if (stickerHit(mx, my)) {
-        e.preventDefault();
-        const { scx, scy } = stickerPos();
-        _stickerDrag = { offX: mx - scx, offY: my - scy };
-        canvas.style.cursor = 'grabbing';
-        return;
-      }
-      // Infographic block drag
-      const ih = infogHit(mx, my);
-      if (ih) {
-        e.preventDefault();
-        _infogDrag = { offX: mx - ih.x, offY: my - ih.y };
-        canvas.style.cursor = 'grabbing';
-        return;
-      }
+      // 3) мимо слоёв — снимаем выделение и работаем с картинкой, как раньше
+      if (cv._selLayer) { selectLayer(null); redraw(); }
       if (cv.mode === 'game') {
         e.preventDefault();
         const img = cv.images[0];
@@ -8068,13 +8442,45 @@ function bindCoversTab() {
       }
       // Коллаж: перетаскивание двигает кадр внутри ячейки (решение Дениса 23.09.2026 — неудачный
       // ракурс иначе не поправить). Поменять ячейки местами — перетаскиванием миниатюр.
-      const hit = canvasHitCell(e);
-      if (hit === -1 || !cv.images[hit]) return;
+      const hitCell = canvasHitCell(e);
+      if (hitCell === -1 || !cv.images[hitCell]) return;
       e.preventDefault();
-      _drag = { cellIdx: hit, startX: e.clientX, startY: e.clientY, moved: false, lastMx: mx, lastMy: my };
+      _drag = { cellIdx: hitCell, startX: e.clientX, startY: e.clientY, moved: false, lastMx: mx, lastMy: my };
+    }
+
+    function moveLayer(e, mx, my) {
+      const [cw, ch] = cvSz(), k = cvScreenK(canvas), D = _layerDrag, L = D.L;
+      if (D.mode === 'move') {
+        if (!D.moved && Math.hypot(mx - D.sx, my - D.sy) < 3 * k) return;
+        D.moved = true;
+        if (L.type === 'ribbon') {
+          // лента живёт в углу: тянешь — переезжает в тот угол, в чьей четверти курсор
+          const c = (my < ch / 2 ? 't' : 'b') + (mx < cw / 2 ? 'l' : 'r');
+          if (c !== L.corner) { L.corner = c; cvRefreshLayersCard(); }
+        } else {
+          let x = mx - D.offX, y = my - D.offY;
+          // прилипание центра к осям холста — ровно по центру без «на глаз»
+          const snap = 10 * k, gv = Math.abs(x - cw / 2) < snap, gh = Math.abs(y - ch / 2) < snap;
+          if (gv) x = cw / 2;
+          if (gh) y = ch / 2;
+          cv._guides = { v: gv, h: gh };
+          L.x = x / cw; L.y = y / ch;
+        }
+      } else if (D.mode === 'rotate') {
+        let a = D.angle0 + (Math.atan2(my - D.cy, mx - D.cx) - D.a0) * 180 / Math.PI;
+        a = ((a % 360) + 540) % 360 - 180;
+        if (e.shiftKey) a = Math.round(a / 15) * 15;
+        else { const r = Math.round(a / 45) * 45; if (Math.abs(a - r) < 4) a = r; }   // прилипание к 0°/45°/90°
+        L.angle = Math.round(a * 10) / 10;
+      } else if (D.mode === 'scale') {
+        L.scale = Math.max(0.25, Math.min(6, D.s0 * Math.hypot(mx - D.ax, my - D.ay) / D.d0));
+      }
+      cvUpdateLayerReadout(L);
+      redraw();
     }
 
     function onPointerMove(e) {
+      if (_layerDrag) { const { mx, my } = canvasMouse(e); moveLayer(e, mx, my); return; }
       if (_gameDrag) {
         const { mx, my } = canvasMouse(e);
         const img = cv.images[0];
@@ -8092,28 +8498,15 @@ function bindCoversTab() {
         cvDrawGame(canvas, img, {});
         return;
       }
-      if (_textDrag) {
+      if (!_drag) {
+        // Подсказка курсором: над ручкой — крутить/тянуть размер, над слоем — двигать
+        if (!cv.images.length || e.buttons === undefined) return;
         const { mx, my } = canvasMouse(e);
-        cv.textOverlayX = mx - _textDrag.offX;
-        cv.textOverlayY = my - _textDrag.offY;
-        cv.mode === 'game' ? cvDrawGame(canvas, cv.images[0], {}) : cvDrawCollage(canvas);
+        const hd = handleAt(mx, my);
+        const [cw, ch] = cvSz();
+        canvas.style.cursor = hd ? (hd.kind === 'rotate' ? 'crosshair' : 'nwse-resize') : cvLayerAt(mx, my, cw, ch) ? 'move' : '';
         return;
       }
-      if (_stickerDrag) {
-        const { mx, my } = canvasMouse(e);
-        cv.maskStickerX = mx - _stickerDrag.offX;
-        cv.maskStickerY = my - _stickerDrag.offY;
-        cv.mode === 'game' ? cvDrawGame(canvas, cv.images[0], {}) : cvDrawCollage(canvas);
-        return;
-      }
-      if (_infogDrag) {
-        const { mx, my } = canvasMouse(e);
-        cv.infogX = mx - _infogDrag.offX;
-        cv.infogY = my - _infogDrag.offY;
-        cv.mode === 'game' ? cvDrawGame(canvas, cv.images[0], {}) : cvDrawCollage(canvas);
-        return;
-      }
-      if (!_drag) return;
       const dx = e.clientX - _drag.startX, dy = e.clientY - _drag.startY;
       if (!_drag.moved && Math.sqrt(dx*dx+dy*dy) > 6) _drag.moved = true;
       if (!_drag.moved) return;
@@ -8132,15 +8525,24 @@ function bindCoversTab() {
       cvDrawCollage(canvas);
     }
 
+    function endLayerDrag() {
+      const D = _layerDrag;
+      _layerDrag = null; cv._guides = null;
+      canvas.style.cursor = '';
+      if (D.mode !== 'move' || D.moved) jCvBump('drags');
+      cvSave();
+      // элемент сдвинули после удаления/шаблона — кнопка «Отменить» больше не честная, убираем
+      if (cv._layersUndo && !cvUndoValid()) cvRefreshLayersCard();
+      redraw();   // убрать направляющие
+    }
+
     function onPointerUp() {
+      if (_layerDrag) { endLayerDrag(); return; }
       // Журнал: любой завершившийся drag на канвасе — в счётчик сессии (уйдёт с cv_download)
-      if (_gameDrag || _textDrag || _stickerDrag || _infogDrag || (_drag && _drag.moved)) jCvBump('drags');
-      if (_gameDrag) { _gameDrag = null; canvas.style.cursor = 'pointer'; return; }
-      if (_textDrag) { _textDrag = null; canvas.style.cursor = 'pointer'; return; }
-      if (_stickerDrag) { _stickerDrag = null; canvas.style.cursor = 'pointer'; return; }
-      if (_infogDrag) { _infogDrag = null; canvas.style.cursor = 'pointer'; cvSave(); return; }
+      if (_gameDrag || (_drag && _drag.moved)) jCvBump('drags');
+      if (_gameDrag) { _gameDrag = null; canvas.style.cursor = ''; return; }
       if (!_drag) return;
-      canvas.style.cursor = 'pointer';
+      canvas.style.cursor = '';
       const wasClick = !_drag.moved;
       if (wasClick) cv._selCell = (cv._selCell === _drag.cellIdx) ? null : _drag.cellIdx;
       _drag = null;
@@ -8148,13 +8550,11 @@ function bindCoversTab() {
     }
 
     function onPointerLeave() {
-      if (_gameDrag) { _gameDrag = null; canvas.style.cursor = 'pointer'; return; }
-      if (_textDrag) { _textDrag = null; canvas.style.cursor = 'pointer'; return; }
-      if (_stickerDrag) { _stickerDrag = null; canvas.style.cursor = 'pointer'; return; }
-      if (_infogDrag) { _infogDrag = null; canvas.style.cursor = 'pointer'; cvSave(); return; }
+      if (_layerDrag) { endLayerDrag(); return; }
+      if (_gameDrag) { _gameDrag = null; canvas.style.cursor = ''; return; }
       if (!_drag) return;
       _drag = null;
-      canvas.style.cursor = 'pointer';
+      canvas.style.cursor = '';
       cvDrawCollage(canvas);
     }
 
@@ -8162,28 +8562,78 @@ function bindCoversTab() {
     canvas.addEventListener('mousemove', onPointerMove);
     canvas.addEventListener('mouseup', onPointerUp);
     canvas.addEventListener('mouseleave', onPointerLeave);
+    // Двойной щелчок по элементу — сразу к его тексту в меню
+    canvas.addEventListener('dblclick', e => {
+      const { mx, my } = canvasMouse(e);
+      const [cw, ch] = cvSz();
+      const L = cvLayerAt(mx, my, cw, ch);
+      if (!L) return;
+      selectLayer(L.id);
+      const inp = document.querySelector('#cv-layers-card [data-cv-lp="text"]');
+      if (inp) { inp.focus(); inp.select?.(); }
+    });
 
-    // GFX-8: touch-эквиваленты — drag стикера/текста/ячеек и сдвиг кадра игры на мобиле
+    // GFX-8: touch-эквиваленты — слои, ячейки и сдвиг кадра игры на мобиле.
+    // Два пальца на выделенном слое — щипок меняет размер, поворот пальцев крутит.
+    const pinchOf = e => {
+      const [a, b] = e.touches;
+      return { d: Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY), a: Math.atan2(b.clientY - a.clientY, b.clientX - a.clientX) };
+    };
     canvas.addEventListener('touchstart', e => {
+      if (e.touches.length === 2) {
+        const L = cvSelLayer();
+        if (!L || L.hidden) return;
+        e.preventDefault();
+        _layerDrag = null; _drag = null; _gameDrag = null;
+        const p = pinchOf(e);
+        _pinch = { L, d0: Math.max(1, p.d), a0: p.a, s0: L.scale || 1, angle0: L.angle || 0 };
+        return;
+      }
       if (e.touches.length !== 1) return;
       const t = e.touches[0];
       onPointerDown({ clientX: t.clientX, clientY: t.clientY, preventDefault: () => e.preventDefault() });
     }, {passive: false});
     canvas.addEventListener('touchmove', e => {
-      if (!_drag && !_stickerDrag && !_textDrag && !_gameDrag && !_infogDrag) return;
+      if (_pinch && e.touches.length === 2) {
+        e.preventDefault();
+        const p = pinchOf(e), L = _pinch.L;
+        L.scale = Math.max(0.25, Math.min(6, _pinch.s0 * p.d / _pinch.d0));
+        if (L.type !== 'ribbon') L.angle = Math.round((_pinch.angle0 + (p.a - _pinch.a0) * 180 / Math.PI) * 10) / 10;
+        cvUpdateLayerReadout(L);
+        redraw();
+        return;
+      }
+      if (!_drag && !_gameDrag && !_layerDrag) return;
       if (e.touches.length !== 1) return;
       e.preventDefault();
       const t = e.touches[0];
       onPointerMove({ clientX: t.clientX, clientY: t.clientY });
     }, {passive: false});
-    canvas.addEventListener('touchend', onPointerUp);
-    canvas.addEventListener('touchcancel', onPointerLeave);
+    canvas.addEventListener('touchend', e => {
+      if (_pinch) { if (e.touches.length < 2) { _pinch = null; jCvBump('drags'); cvSave(); } return; }
+      onPointerUp();
+    });
+    canvas.addEventListener('touchcancel', () => { _pinch = null; onPointerLeave(); });
 
     // Масштаб колесом мыши, свайпом двумя пальцами и щипком на тачпаде. Шаг пропорционален
     // величине прокрутки: тачпад шлёт десятки мелких событий за жест, и фиксированный шаг
     // на каждое событие прыгал от 100% к 400% за одно движение. Щипок приходит как
     // wheel с ctrlKey и мелкими дельтами — ему своя чувствительность.
     canvas.addEventListener('wheel', e => {
+      const dyL = e.deltaY * (e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? 400 : 1);
+      // Над выделенным элементом колесо и щипок меняют его размер, а не масштаб картинки
+      const sel = cvSelLayer();
+      if (sel && !sel.hidden) {
+        const { mx, my } = canvasMouse(e);
+        const [cw, ch] = cvSz();
+        if (cvLayerHit(sel, mx, my, cw, ch)) {
+          e.preventDefault();
+          sel.scale = Math.max(0.25, Math.min(6, (sel.scale || 1) * Math.exp(-dyL * (e.ctrlKey ? 0.01 : 0.0015))));
+          cvUpdateLayerReadout(sel);
+          cvReDraw();
+          return;
+        }
+      }
       let img;
       if (cv.mode === 'game') img = cv.images[0];
       else if (cv._selCell !== null && cv._selCell !== undefined) img = cv.images[cv._selCell];
@@ -8803,9 +9253,8 @@ function bindDbTab() {
             if (MODEL_MIGRATION[state.settings.model]) state.settings.model = MODEL_MIGRATION[state.settings.model];
           }
           if (obj.cv && typeof obj.cv === 'object') {
-            // Только известные поля: чужой ключ из файла осел бы в cv навсегда,
-            // а картинки и служебные _-поля не сохраняются по построению.
-            for (const k in obj.cv) { if (k === 'images' || k.startsWith('_') || !(k in cv)) continue; cv[k] = obj.cv[k]; }
+            // Только известные поля, старый формат переводится в слои — всё в cvApplyCfg
+            cvApplyCfg(obj.cv);
             cvSave();
           }
         };
@@ -9544,8 +9993,11 @@ function reDurs() {
 // ══════════════════════════════════════════
 
 document.addEventListener('click', e => {
+  // Обложки: слои оформления и шаблоны
+  const cvLay = e.target.closest('[data-cv-la],[data-cv-lv],[data-cv-lt],[data-cv-lplat],[data-cv-tpl]');
+  if (cvLay) { cvLayerClick(cvLay); return; }
   // Covers module — data-cv-* attributes
-  const cvEl = e.target.closest('[data-cv-mode],[data-cv-layout],[data-cv-ratio],[data-cv-bg],[data-cv-bg-style],[data-cv-toggle],[data-cv-grade],[data-cv-plat-sel],[data-cv-plat-pos],[data-cv-del],[data-cv-ms-shape],[data-cv-ms-pos],[data-cv-ms-bg],[data-cv-ms-tc],[data-cv-tz],[data-cv-to-color],[data-cv-to-bg],[data-cv-src],[data-cv-ig-align],[data-cv-ig-bg],[data-cv-ig-tc],[data-cv-game-fit],[data-cv-game-fill]');
+  const cvEl = e.target.closest('[data-cv-mode],[data-cv-layout],[data-cv-ratio],[data-cv-bg],[data-cv-bg-style],[data-cv-toggle],[data-cv-grade],[data-cv-del],[data-cv-tz],[data-cv-src],[data-cv-game-fit],[data-cv-game-fill]');
   if (cvEl) {
     if (cvEl.dataset.cvSrc) {
       cv.coverSource = cvEl.dataset.cvSrc;
@@ -9602,67 +10054,6 @@ document.addEventListener('click', e => {
     if (cvEl.dataset.cvGrade) {
       cv.grade = cvEl.dataset.cvGrade;
       document.querySelectorAll('[data-cv-grade]').forEach(b => b.classList.toggle('active', b.dataset.cvGrade === cv.grade));
-      cvReDraw(); return;
-    }
-    if (cvEl.dataset.cvPlatSel) {
-      const id = cvEl.dataset.cvPlatSel;
-      cv.platSel = (cv.platSel||[]).includes(id) ? cv.platSel.filter(x=>x!==id) : [...(cv.platSel||[]), id];
-      render(); cvReDraw(); return;
-    }
-    if (cvEl.dataset.cvPlatPos) {
-      cv.platBadgePos = cvEl.dataset.cvPlatPos;
-      document.querySelectorAll('[data-cv-plat-pos]').forEach(b => b.classList.toggle('active', b.dataset.cvPlatPos === cv.platBadgePos));
-      cvReDraw(); return;
-    }
-    if (cvEl.dataset.cvMsShape) {
-      cv.maskStickerShape = cvEl.dataset.cvMsShape;
-      document.querySelectorAll('[data-cv-ms-shape]').forEach(b => b.classList.toggle('active', b.dataset.cvMsShape === cv.maskStickerShape));
-      const c = document.getElementById('cv-canvas');
-      if (c && cv.images.length) cvDrawCollage(c); return;
-    }
-    if (cvEl.dataset.cvMsPos) {
-      cv.maskStickerPos = cvEl.dataset.cvMsPos;
-      cv.maskStickerX = null; cv.maskStickerY = null; // сброс drag-позиции
-      document.querySelectorAll('[data-cv-ms-pos]').forEach(b => b.classList.toggle('active', b.dataset.cvMsPos === cv.maskStickerPos));
-      const c = document.getElementById('cv-canvas');
-      if (c && cv.images.length) cvDrawCollage(c); return;
-    }
-    if (cvEl.dataset.cvMsBg) {
-      cv.maskStickerBg = cvEl.dataset.cvMsBg;
-      document.querySelectorAll('[data-cv-ms-bg]').forEach(b => b.classList.toggle('active', b.dataset.cvMsBg === cv.maskStickerBg));
-      const c = document.getElementById('cv-canvas');
-      if (c && cv.images.length) cvDrawCollage(c); return;
-    }
-    if (cvEl.dataset.cvMsTc) {
-      cv.maskStickerColor = cvEl.dataset.cvMsTc;
-      document.querySelectorAll('[data-cv-ms-tc]').forEach(b => b.classList.toggle('active', b.dataset.cvMsTc === cv.maskStickerColor));
-      const c = document.getElementById('cv-canvas');
-      if (c && cv.images.length) cvDrawCollage(c); return;
-    }
-    if (cvEl.dataset.cvToColor) {
-      cv.textOverlayColor = cvEl.dataset.cvToColor;
-      document.querySelectorAll('[data-cv-to-color]').forEach(b => b.classList.toggle('active', b.dataset.cvToColor === cv.textOverlayColor));
-      cvReDraw(); return;
-    }
-    if (cvEl.dataset.cvToBg) {
-      cv.textOverlayBgColor = cvEl.dataset.cvToBg;
-      document.querySelectorAll('[data-cv-to-bg]').forEach(b => b.classList.toggle('active', b.dataset.cvToBg === cv.textOverlayBgColor));
-      cvReDraw(); return;
-    }
-    if (cvEl.dataset.cvIgAlign) {
-      cv.infogAlign = cvEl.dataset.cvIgAlign;
-      cv.infogX = null; cv.infogY = null; // сброс drag-позиции, как у стикера
-      document.querySelectorAll('[data-cv-ig-align]').forEach(b => b.classList.toggle('active', b.dataset.cvIgAlign === cv.infogAlign));
-      cvReDraw(); return;
-    }
-    if (cvEl.dataset.cvIgBg) {
-      cv.infogBg = cvEl.dataset.cvIgBg;
-      document.querySelectorAll('[data-cv-ig-bg]').forEach(b => b.classList.toggle('active', b.dataset.cvIgBg === cv.infogBg));
-      cvReDraw(); return;
-    }
-    if (cvEl.dataset.cvIgTc) {
-      cv.infogColor = cvEl.dataset.cvIgTc;
-      document.querySelectorAll('[data-cv-ig-tc]').forEach(b => b.classList.toggle('active', b.dataset.cvIgTc === cv.infogColor));
       cvReDraw(); return;
     }
     if (cvEl.dataset.cvDel !== undefined) { cvRemoveImage(+cvEl.dataset.cvDel); return; }
@@ -10021,21 +10412,6 @@ document.addEventListener('click', e => {
       else { cvDrawCollage(tmp); cvDownload(tmp, 'collage.jpg'); }
       break;
     }
-    case 'cv-mask-toggle':
-      cv.maskSticker = !cv.maskSticker; render(); break;
-
-    case 'cv-to-toggle':
-      cv.textOverlay = !cv.textOverlay; render(); break;
-    case 'cv-to-bold':
-      cv.textOverlayBold = !cv.textOverlayBold; render(); break;
-    case 'cv-to-bg-toggle':
-      cv.textOverlayBg = !cv.textOverlayBg; render(); break;
-
-    case 'cv-ig-toggle':
-      cv.infog = !cv.infog; render(); break;
-    case 'cv-ig-fill':
-      cvInfogFillFromForm(); break;
-
     case 'cv-gen-vars':
       cvGenerateVariations(); break;
 

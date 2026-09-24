@@ -30,6 +30,8 @@ const KNOWN_EVENTS = [
   'vision', 'vision_uncertain', 'vision_pick', 'refs_tricks',
   // сессия 2026-09-10 (2б, «товар в интерьере»): phase generate | download
   'staged',
+  // сессия 2026-09-24: шаблон оформления обложки (tpl, builtin, layers)
+  'cv_tpl',
   // сессия 2026-09-16: ротация выдохшегося объявления (mode light | mid)
   'rotate',
 ];
