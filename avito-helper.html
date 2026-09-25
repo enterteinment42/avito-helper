@@ -663,6 +663,7 @@
     .cv-tz-sep { font-size: 11px; color: var(--muted); white-space: nowrap; }
     .cv-tz-btn { padding: 1px 7px; border-radius: 4px; border: 1px solid var(--border2); background: var(--card3); color: var(--text); cursor: pointer; font-size: 14px; line-height: 1.5; transition: all .12s; }
     .cv-tz-btn:hover { border-color: var(--teal); color: var(--teal-h); }
+    .cv-tz-btn.active { border-color: var(--teal); color: var(--teal-h); background: var(--teal-d); }
     .cv-tz-range { flex: 1; min-width: 70px; accent-color: var(--teal); cursor: pointer; }
     .cv-tz-val { font-family: var(--fm); font-size: 10px; color: var(--muted); min-width: 30px; text-align: right; }
     /* Слои оформления: список элементов, редактор выбранного, шаблоны */
@@ -6238,6 +6239,10 @@ const cv = {
   // effects — all off by default, original collage look preserved
   bgStyle:'solid', bg2:'#1a1a2e', vignette:false, grade:'none',
   neonGap:false, neonColor:'#B45309',
+  // Коллаж (план Fotor, Ф6, 25.09.2026): padding — промежуток между фото; margin — поле по краю,
+  // cellRadius — скругление ячеек, px. null = как было до 25.09: поле равно промежутку,
+  // радиус считается от промежутка. Узор фона — поверх цвета, тоном от фона, плотность — доля.
+  margin:null, cellRadius:null, bgPattern:'none', bgPatternAlpha:0.14,
   // Слои оформления (стикеры, ленты, надписи, инфографика, платформы) и свои шаблоны — см. «Слои оформления»
   layers:[], tpls:[],
   // рамка одиночной картинки (режим Игра)
@@ -6282,7 +6287,9 @@ const CV_FONTS = [
 // Слои, у которых есть буквы: у них шрифт, заливка градиентом, обводка и тень букв
 const CV_TEXT_TYPES = ['sticker', 'ribbon', 'text', 'infog'];
 // Поля оформления, которые свой шаблон запоминает вместе со слоями (фон, эффекты, рамка)
-const CV_TPL_STYLE_KEYS = ['bg','bg2','bgStyle','vignette','grade','neonGap','neonColor','padding','gamePad','gameCorner','gameBorder','gameBorderColor','gameShadow'];
+const CV_TPL_STYLE_KEYS = ['bg','bg2','bgStyle','vignette','grade','neonGap','neonColor','padding','margin','cellRadius','bgPattern','bgPatternAlpha','gamePad','gameCorner','gameBorder','gameBorderColor','gameShadow'];
+const CV_TPL_STYLE_PRE_F6 = { margin: null, cellRadius: null, bgPattern: 'none', bgPatternAlpha: 0.14 };
+const CV_PATTERNS = [['none', 'Нет'], ['dots', '• Точки'], ['stripes', '╱ Полосы'], ['grid', '▦ Клетка'], ['hex', '⬡ Соты']];
 // Готовые шаблоны. place — куда поставить слой после замера; fromForm — строки инфографики
 // и платформы берутся из формы генератора. Цен здесь нет: в объявлениях игр они запрещены.
 const CV_TPL_BUILTIN = [
@@ -6321,7 +6328,21 @@ function cvApplyCfg(o) {
   for (const k in o) { if (k === 'images' || k.startsWith('_') || !(k in cv)) continue; cv[k] = o[k]; }
   if (!Array.isArray(o.layers) && CV_LEGACY_KEYS.some(k => k in o)) cv.layers = cvLegacyLayers(o);
   cvSanitizeLayers();
+  cvSanitizeStyle();
 }
+// Поля коллажа из чужих рук: число строкой — к числу, мусор — к «как было» (null / без узора)
+function cvSanitizeStyle() {
+  const px = v => (v === null || v === undefined || v === '' || !Number.isFinite(+v)) ? null : Math.max(0, Math.min(120, +v));
+  cv.margin = px(cv.margin);
+  cv.cellRadius = px(cv.cellRadius);
+  if (!CV_PATTERNS.some(([id]) => id === cv.bgPattern)) cv.bgPattern = 'none';
+  const a = +cv.bgPatternAlpha;
+  cv.bgPatternAlpha = Number.isFinite(a) ? Math.max(0.02, Math.min(0.5, a)) : 0.14;
+}
+// Прежняя формула: скругление ячейки от промежутка. Живые поле и радиус коллажа — с учётом null.
+function cvAutoRadius(p) { return Math.max(4, p * 0.7); }
+function cvMargin() { return cv.margin ?? cv.padding; }
+function cvCellRadius() { return cv.cellRadius ?? cvAutoRadius(cv.padding); }
 cvLoad();
 // «Рамка» (крест с пустыми углами) удалена по слову Дениса 23.09.2026 — сохранённый выбор переводим на авто
 if (cv.layout === 'frame5') cv.layout = 'auto';
@@ -6495,9 +6516,19 @@ function cvRenderState() {
   const tzArea = document.getElementById('cv-tz-area');
   if (tzArea && cv.mode === 'collage') {
     if (cv._selCell !== null && cv._selCell !== undefined && cv.images[cv._selCell]) {
-      const t = cv.images[cv._selCell].transform || {scale:1,ox:0,oy:0};
+      const selImg = cv.images[cv._selCell];
+      const t = selImg.transform || {scale:1,ox:0,oy:0};
       const scaleVal = Math.round((t.scale||1)*100);
-      tzArea.innerHTML = `<div class="cv-transform-bar">
+      // «Вписать целиком» — только прямоугольным ячейкам: круг, треугольники, полосы и стопка режут фото по фигуре
+      const [cw, ch] = CV_SZ[cv.ratio] || CV_SZ['4:5'];
+      const cell = cvCells(cv.layout, cv.images.length, cw, ch, cv.padding, cvMargin())[cv._selCell];
+      const fitOk = cell && !cell.circle && !cell.poly;
+      const contain = selImg.fit === 'contain';
+      tzArea.innerHTML = `${fitOk ? `<div class="cv-transform-bar">
+        <span class="cv-tz-label">Кадр:</span>
+        <button class="cv-tz-btn ${contain ? '' : 'active'}" data-cv-cell-fit="cover" style="font-size:12px" title="Фото заполняет ячейку, лишнее срезается">Заполнить</button>
+        <button class="cv-tz-btn ${contain ? 'active' : ''}" data-cv-cell-fit="contain" style="font-size:12px" title="Фото видно целиком, по краям — его размытая копия">Вписать целиком</button>
+      </div>` : ''}<div class="cv-transform-bar">
         <span class="cv-tz-label">Ячейка ${cv._selCell+1}:</span>
         <span class="cv-tz-sep">масштаб</span>
         <button class="cv-tz-btn" data-cv-tz="zoom-out" title="Уменьшить">−</button>
@@ -6601,19 +6632,28 @@ function cvDrawBlurFill(ctx, img, x, y, w, h, r) {
   ctx.restore();
 }
 
+// Картинка в прямоугольной ячейке коллажа: заполнить со срезом или вписать целиком (Ф6) —
+// поля ячейки тогда её же размытая копия, как у обложки в режиме «Игра»
+function cvFitCell(ctx, im, x, y, w, h, r) {
+  if (im.fit === 'contain') {
+    cvDrawBlurFill(ctx, im.el, x, y, w, h, r);
+    cvFit(ctx, im.el, x, y, w, h, r, im.transform, 'contain');
+  } else cvFit(ctx, im.el, x, y, w, h, r, im.transform);
+}
+
 // Рамка, в которую рисуется картинка: нужна, чтобы ограничить сдвиг сразу при действии,
 // иначе накопленный за краем сдвиг даёт «мёртвый ход» — тянешь, а кадр стоит.
 function cvFrameOf(img) {
   const [cw, ch] = CV_SZ[cv.ratio] || CV_SZ['4:5'];
   if (cv.mode === 'game') return { w: cw - 2*cv.gamePad, h: ch - 2*cv.gamePad, fit: cv.gameFit };
-  const c = cvCells(cv.layout, cv.images.length, cw, ch, cv.padding)[cv.images.indexOf(img)];
+  const c = cvCells(cv.layout, cv.images.length, cw, ch, cv.padding, cvMargin())[cv.images.indexOf(img)];
   if (!c) return null;
   if (c.circle) return { w: 2*c.r, h: 2*c.r };
   if (c.poly) {
     const xs = c.poly.map(p => p[0]), ys = c.poly.map(p => p[1]);
     return { w: Math.max(...xs) - Math.min(...xs), h: Math.max(...ys) - Math.min(...ys) };
   }
-  return { w: c.w, h: c.h };
+  return { w: c.w, h: c.h, fit: img.fit === 'contain' ? 'contain' : undefined };
 }
 function cvClampTransform(img) {
   const f = cvFrameOf(img), t = img.transform;
@@ -6696,7 +6736,15 @@ function cvResolveLayout(layout, count) {
   return layout;
 }
 
-function cvCells(layout, count, cw, ch, p) {
+// m — поле по краю (по умолчанию = промежутку p). Формулы раскладок знают одно число и для
+// шва, и для края, поэтому поле делаем пересчётом: раскладка на холсте, уменьшенном на
+// (m − p) с каждой стороны, сдвинутая на столько же. Отрицательная разница (поле уже шва) тоже годится.
+function cvCells(layout, count, cw, ch, p, m) {
+  const d = (m ?? p) - p;
+  if (d) return cvCells(layout, count, cw - 2 * d, ch - 2 * d, p).map(c =>
+    c.circle ? { ...c, cx: c.cx + d, cy: c.cy + d }
+    : c.poly ? { ...c, poly: c.poly.map(([x, y]) => [x + d, y + d]) }
+    : { ...c, x: c.x + d, y: c.y + d });
   const L = cvResolveLayout(layout, count);
   if (L === 'strip') {
     const iw = (cw - (count + 1) * p) / count;
@@ -6755,7 +6803,7 @@ function cvDrawCirc4(ctx, imgs, cw, ch, p, cr) {
     {x: 2*p + halfW,   y: 2*p + halfH,   w: halfW2, h: halfH2},
   ];
   grid.forEach((cell, i) => {
-    if (i + 1 < imgs.length) cvFit(ctx, imgs[i + 1].el, cell.x, cell.y, cell.w, cell.h, cr, imgs[i + 1].transform);
+    if (i + 1 < imgs.length) cvFitCell(ctx, imgs[i + 1], cell.x, cell.y, cell.w, cell.h, cr);
   });
   // Круг сверху по центру, перекрывает стык 4 блоков
   const r = Math.floor(Math.min(cw, ch) * 0.30);
@@ -6765,6 +6813,7 @@ function cvDrawCirc4(ctx, imgs, cw, ch, p, cr) {
   ctx.save();
   ctx.fillStyle = cv.bg;
   ctx.beginPath(); ctx.arc(cx, cy, r + Math.max(8, Math.round(p * 0.7)), 0, Math.PI * 2); ctx.fill();
+  cvPatternInPath(ctx, [cv.bg]);
   ctx.restore();
   ctx.save();
   ctx.shadowColor = 'rgba(0,0,0,0.45)'; ctx.shadowBlur = 30;
@@ -6806,6 +6855,7 @@ function cvDrawCirc4D(ctx, imgs, cw, ch, p, cr) {
   ctx.save();
   ctx.fillStyle = cv.bg;
   ctx.beginPath(); ctx.arc(cx, cy, r + Math.max(8, Math.round(p * 0.7)), 0, Math.PI * 2); ctx.fill();
+  cvPatternInPath(ctx, [cv.bg]);
   ctx.restore();
   ctx.save();
   ctx.shadowColor = 'rgba(0,0,0,0.45)'; ctx.shadowBlur = 30;
@@ -6837,7 +6887,7 @@ function cvDrawSquare5(ctx, imgs, cw, ch, p, cr) {
     {x: 2*p + halfW, y: 2*p + halfH, w: halfW2, h: halfH2},
   ];
   grid.forEach((cell, i) => {
-    if (i + 1 < imgs.length) cvFit(ctx, imgs[i + 1].el, cell.x, cell.y, cell.w, cell.h, cr, imgs[i + 1].transform);
+    if (i + 1 < imgs.length) cvFitCell(ctx, imgs[i + 1], cell.x, cell.y, cell.w, cell.h, cr);
   });
   // Центральная квадратная плашка (+30% крупнее)
   const side = Math.floor(Math.min(cw, ch) * 0.55);
@@ -6847,8 +6897,9 @@ function cvDrawSquare5(ctx, imgs, cw, ch, p, cr) {
   ctx.shadowColor = 'rgba(0,0,0,0.4)'; ctx.shadowBlur = 28;
   ctx.fillStyle = cv.bg;
   cvRR(ctx, sqX - sqRing, sqY - sqRing, side + sqRing*2, side + sqRing*2, cr); ctx.fill();
+  cvPatternInPath(ctx, [cv.bg]);
   ctx.restore();
-  cvFit(ctx, imgs[0].el, sqX, sqY, side, side, cr, imgs[0].transform);
+  cvFitCell(ctx, imgs[0], sqX, sqY, side, side, cr);
 }
 
 function cvDrawBurst(ctx, cx, cy, outerR, innerR, points) {
@@ -7648,7 +7699,12 @@ function cvApplyTpl(id) {
     if (place) cvPlaceLayer(L, place, cw, ch);
     return L;
   }).filter(Boolean);
-  if (tpl.style) for (const k of CV_TPL_STYLE_KEYS) if (k in tpl.style) cv[k] = tpl.style[k];
+  // Свой шаблон, сохранённый до поля/углов/узора (Ф6), этих ключей не знает — для него они
+  // «как было», иначе поле и узор с прошлой обложки оставались бы поверх шаблона (ревью 25.09)
+  if (tpl.style) {
+    const style = { ...CV_TPL_STYLE_PRE_F6, ...tpl.style };
+    for (const k of CV_TPL_STYLE_KEYS) if (k in style) cv[k] = style[k];
+  }
   cv._selLayer = null;
   cvLayersSnapDone();
   jCvBump('tpls');
@@ -7678,18 +7734,19 @@ function cvSaveTpl() {
 }
 
 // ── Effects over collage (vignette / tone / neon seam) ──
-function cvDrawEffects(ctx, cw, ch, lay, p, count, opts) {
+// geo (коллаж): { m — поле по краю, cr — скругление ячеек }; шов идёт по тем же ячейкам
+function cvDrawEffects(ctx, cw, ch, lay, p, count, opts, geo) {
   const special = ['diag','stack'];
   // Neon seam — glowing outline of each cell (incl. single image, circ4/square5)
   if (cv.neonGap && !special.includes(lay)) {
-    const cells = cvCells(lay, count, cw, ch, p);
+    const cells = cvCells(lay, count, cw, ch, p, geo?.m);
     if (cells.length) {
       ctx.save();
       ctx.shadowColor = cv.neonColor;
       ctx.shadowBlur = Math.max(12, p * 1.7);
       ctx.strokeStyle = cv.neonColor;
       ctx.lineWidth = Math.max(2.5, p * 0.32);
-      const rad = Math.max(4, p * 0.7);
+      const rad = geo?.cr ?? cvAutoRadius(p);
       const strokeCell = c => {
         if (c.circle) { ctx.beginPath(); ctx.arc(c.cx, c.cy, c.r, 0, Math.PI * 2); }
         else if (c.poly) { ctx.beginPath(); c.poly.forEach(([x,y],k) => k===0?ctx.moveTo(x,y):ctx.lineTo(x,y)); ctx.closePath(); }
@@ -7731,6 +7788,71 @@ function cvDrawEffects(ctx, cw, ch, lay, p, count, opts) {
     }
     ctx.fillStyle = g; ctx.fillRect(0,0,cw,ch);
   }
+}
+
+// ── Узор фона (Ф6): виден в швах, полях коллажа и рамке «Игры». Цвет сам — светлее
+// тёмного фона или темнее светлого (по средней яркости фона, у градиента — обоих цветов),
+// человек задаёт только плотность. Шаг — в пикселях холста шириной 1080. ──
+function cvBgLum(hex) {
+  const m = /^#?([0-9a-f]{6})$/i.exec(String(hex || '').trim());
+  if (!m) return 0;
+  const n = parseInt(m[1], 16);
+  return (0.299 * (n >> 16 & 255) + 0.587 * (n >> 8 & 255) + 0.114 * (n & 255)) / 255;
+}
+// Цвета фона, от которых узор берёт тон: у варианта — его фон, у градиента — оба цвета
+function cvBgTones(opts) { return opts?.bg ? [opts.bg] : cv.bgStyle === 'gradient' ? [cv.bg, cv.bg2] : [cv.bg]; }
+function cvDrawBgPattern(ctx, cw, ch, bgs) {
+  const kind = cv.bgPattern;
+  if (!kind || kind === 'none') return;
+  const lum = bgs.reduce((a, c) => a + cvBgLum(c), 0) / bgs.length;
+  const ink = lum < 0.55 ? '#ffffff' : '#000000';
+  ctx.save();
+  ctx.globalAlpha = +cv.bgPatternAlpha || 0.14;
+  ctx.fillStyle = ink; ctx.strokeStyle = ink;
+  ctx.beginPath();
+  if (kind === 'dots') {
+    const s = 36, r = 4.5;
+    for (let row = 0, y = s / 2; y < ch + s; y += s * 0.866, row++)
+      for (let x = (row % 2 ? s : s / 2); x < cw + s; x += s) { ctx.moveTo(x + r, y); ctx.arc(x, y, r, 0, Math.PI * 2); }
+    ctx.fill();
+  } else if (kind === 'stripes') {
+    const s = 44;
+    ctx.lineWidth = 12;
+    for (let x = -ch; x < cw + ch; x += s) { ctx.moveTo(x, 0); ctx.lineTo(x + ch, ch); }
+    ctx.stroke();
+  } else if (kind === 'grid') {
+    const s = 54;
+    ctx.lineWidth = 2;
+    for (let x = s / 2; x < cw; x += s) { ctx.moveTo(x, 0); ctx.lineTo(x, ch); }
+    for (let y = s / 2; y < ch; y += s) { ctx.moveTo(0, y); ctx.lineTo(cw, y); }
+    ctx.stroke();
+  } else if (kind === 'hex') {
+    const R = 34, w = R * Math.sqrt(3);
+    ctx.lineWidth = 2.5;
+    for (let row = 0, y = 0; y < ch + R * 2; y += R * 1.5, row++)
+      for (let x = (row % 2 ? w / 2 : 0); x < cw + w; x += w)
+        for (let i = 0; i < 6; i++) {
+          const a = Math.PI / 3 * i + Math.PI / 6;
+          const px = x + R * Math.cos(a), py = y + R * Math.sin(a);
+          i ? ctx.lineTo(px, py) : ctx.moveTo(px, py);
+          if (i === 5) ctx.closePath();
+        }
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+// Узор поверх фигуры, только что залитой ровным цветом фона (кольцо вокруг круга и квадрата,
+// поля вписанной обложки в «Игре»): без него узор обрывался на её краю (ревью 25.09).
+// Путь фигуры уже в ctx. Узор — в координатах холста, а не текущего сдвига (поле коллажа
+// рисует фигурные раскладки со сдвигом), иначе он разошёлся бы с узором фона.
+function cvPatternInPath(ctx, bgs) {
+  if (!cv.bgPattern || cv.bgPattern === 'none') return;
+  ctx.save();
+  ctx.clip();
+  ctx.shadowColor = 'transparent';
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  cvDrawBgPattern(ctx, ctx.canvas.width, ctx.canvas.height, bgs);
+  ctx.restore();
 }
 
 // ── Diagonal stripes (scales to any photo count) ──
@@ -7811,27 +7933,36 @@ function cvDrawCollage(canvas, opts) {
     ctx.fillStyle = opts?.bg ?? cv.bg;
   }
   ctx.fillRect(0,0,cw,ch);
+  cvDrawBgPattern(ctx, cw, ch, cvBgTones(opts));
   if (!imgs.length) return;
-  const cr = Math.max(4, p * 0.7);
+  // Варианты («✨ 4 варианта») задают свой промежуток: поле и радиус у них — от него, если
+  // вариант не передал свои (четвёртый, «Текущий», передаёт живые настройки)
+  const variant = !!opts && 'padding' in opts;
+  const m  = variant ? (opts.margin ?? p) : cvMargin();
+  const cr = variant ? (opts.radius ?? cvAutoRadius(p)) : cvCellRadius();
+  // Фигурные раскладки считают геометрию сами — поле им даём сдвигом и уменьшенным холстом,
+  // ровно как cvCells, иначе клики и швы разойдутся с рисунком
+  const d = m - p;
+  const special = fn => { ctx.save(); ctx.translate(d, d); fn(cw - 2 * d, ch - 2 * d); ctx.restore(); };
   if (lay === 'circ4') {
-    cvDrawCirc4(ctx, imgs, cw, ch, p, cr);
+    special((w, h) => cvDrawCirc4(ctx, imgs, w, h, p, cr));
   } else if (lay === 'circ4d') {
-    cvDrawCirc4D(ctx, imgs, cw, ch, p, cr);
+    special((w, h) => cvDrawCirc4D(ctx, imgs, w, h, p, cr));
   } else if (lay === 'square5') {
-    cvDrawSquare5(ctx, imgs, cw, ch, p, cr);
+    special((w, h) => cvDrawSquare5(ctx, imgs, w, h, p, cr));
   } else if (lay === 'diag') {
-    cvDrawDiagStripes(ctx, imgs, cw, ch, p);
+    special((w, h) => cvDrawDiagStripes(ctx, imgs, w, h, p));
   } else if (lay === 'stack') {
-    cvDrawStack(ctx, imgs, cw, ch, p);
+    special((w, h) => cvDrawStack(ctx, imgs, w, h, p));
   } else {
-    const cells = cvCells(lay, imgs.length, cw, ch, p);
+    const cells = cvCells(lay, imgs.length, cw, ch, p, m);
     cells.forEach((cell,i) => {
-      if (i < imgs.length) cvFit(ctx, imgs[i].el, cell.x, cell.y, cell.w, cell.h, cr, imgs[i].transform);
+      if (i < imgs.length) cvFitCell(ctx, imgs[i], cell.x, cell.y, cell.w, cell.h, cr);
     });
   }
   // Universal selection highlight — works for all layouts incl. circ4/square5
   if (!opts && cv._selCell !== null && cv._selCell !== undefined) {
-    const _sc = cvCells(lay, imgs.length, cw, ch, p)[cv._selCell];
+    const _sc = cvCells(lay, imgs.length, cw, ch, p, m)[cv._selCell];
     if (_sc) {
       ctx.save();
       ctx.strokeStyle = '#facc15'; ctx.lineWidth = Math.max(6, p * 0.5);
@@ -7841,7 +7972,7 @@ function cvDrawCollage(canvas, opts) {
       ctx.restore();
     }
   }
-  cvDrawEffects(ctx, cw, ch, lay, p, imgs.length, opts);
+  cvDrawEffects(ctx, cw, ch, lay, p, imgs.length, opts, { m, cr });
   cvDrawLayers(ctx, cw, ch, opts?.infog);
   if (canvas.id === 'cv-canvas') cvDrawSelection(ctx, canvas, cw, ch);
 }
@@ -7864,6 +7995,7 @@ function cvDrawGame(canvas, imgObj, opts) {
   }
   const bgFill = ctx.fillStyle;
   ctx.fillRect(0,0,cw,ch);
+  cvDrawBgPattern(ctx, cw, ch, cvBgTones(opts));
   const fw = cw-2*pad, fh = ch-2*pad;
   const contain = cv.gameFit === 'contain';
   // Тень под картинкой (видна при отступе > 0)
@@ -7873,7 +8005,7 @@ function cvDrawGame(canvas, imgObj, opts) {
     cvRR(ctx, pad, pad, fw, fh, cr); ctx.fillStyle = '#000'; ctx.fill();
     ctx.restore();
     // Вписанная обложка не закрывает рамку целиком — поля под ней должны быть фоном, а не чёрной подложкой тени
-    if (contain && cv.gameFill !== 'blur') { ctx.save(); cvRR(ctx, pad, pad, fw, fh, cr); ctx.fillStyle = bgFill; ctx.fill(); ctx.restore(); }
+    if (contain && cv.gameFill !== 'blur') { ctx.save(); cvRR(ctx, pad, pad, fw, fh, cr); ctx.fillStyle = bgFill; ctx.fill(); cvPatternInPath(ctx, cvBgTones(opts)); ctx.restore(); }
   }
   if (contain && cv.gameFill === 'blur') cvDrawBlurFill(ctx, imgObj.el, pad, pad, fw, fh, cr);
   cvFit(ctx, imgObj.el, pad, pad, fw, fh, cr, imgObj.transform, cv.gameFit);
@@ -7955,7 +8087,7 @@ function cvGenerateCollageVars() {
     { label: '1. Чёрный · 0px',   bg: '#000000', padding: 0,  infog:{align:'left',  bg:null,        shift:0} },
     { label: '2. Синий · 20px',    bg: '#1a1a2e', padding: 20, infog:{align:'right', bg:'#0F766E',  shift:1} },
     { label: '3. Зелёный · 16px',  bg: '#0f2010', padding: 16, infog:{align:'left',  bg:'#7c2d12',  shift:2} },
-    { label: '4. Текущий · ' + cv.padding + 'px', bg: cv.bg, padding: cv.padding, infog:{align:'right', bg:null,        shift:3} },
+    { label: '4. Текущий · ' + cv.padding + 'px', bg: cv.bg, padding: cv.padding, margin: cvMargin(), radius: cvCellRadius(), infog:{align:'right', bg:null,        shift:3} },
   ];
   jlog('cv_variants', null, { mode: 'collage', layout: cv.layout, imageCount: cv.images.length, infog: cvHasLayer('infog') });
   grid.innerHTML = vars.map((v,i) => `
@@ -7967,13 +8099,13 @@ function cvGenerateCollageVars() {
     `<button class="btn-copy" data-act="cv-dl-all-collage" style="margin-top:8px;width:100%;justify-content:center;padding:7px">⬇ Скачать все 4</button>`;
   vars.forEach((v,i) => {
     const c = document.getElementById(`cv-cvar-${i}`);
-    if (c) cvDrawCollage(c, { bg: v.bg, padding: v.padding, infog: v.infog });
+    if (c) cvDrawCollage(c, { bg: v.bg, padding: v.padding, margin: v.margin, radius: v.radius, infog: v.infog });
   });
   grid.querySelectorAll('[data-cv-dl-cvar]').forEach(btn => {
     const i = +btn.dataset.cvDlCvar;
     btn.addEventListener('click', () => cvFontsReady().then(() => {
       const tmp = document.createElement('canvas');
-      cvDrawCollage(tmp, { bg: vars[i].bg, padding: vars[i].padding, infog: vars[i].infog });
+      cvDrawCollage(tmp, { bg: vars[i].bg, padding: vars[i].padding, margin: vars[i].margin, radius: vars[i].radius, infog: vars[i].infog });
       cvDownload(tmp, `collage-var-${i+1}.jpg`, { variant: i + 1, spec: vars[i] });
     }));
   });
@@ -8146,6 +8278,25 @@ function cvLayersCardHTML() {
   </div>`;
 }
 
+// Ползунок поля или скругления коллажа (Ф6): null — «как было» (поле = шву, радиус от шва),
+// ползунок тогда показывает текущее расчётное значение; кнопка возвращает к «как было»
+function cvGeoVal(key) { return Math.round(key === 'margin' ? cvMargin() : cvCellRadius()); }
+function cvGeoRowHTML(key, label, title, autoLbl) {
+  const auto = cv[key] === null;
+  return `<div class="cv-row" id="cv-geo-${key}" title="${title}">
+    <label>${label}</label>
+    <input type="range" data-cv-geo="${key}" min="0" max="80" value="${cvGeoVal(key)}">
+    <span class="cv-val" data-cv-geo-val="${key}">${cvGeoVal(key)}px</span>
+    <button class="btn-sm ${auto ? 'active' : ''}" data-cv-geo-auto="${key}" title="Вернуть: ${autoLbl}" ${auto ? 'disabled' : ''}>${autoLbl}</button>
+  </div>`;
+}
+function cvRefreshGeoRows() {
+  for (const key of ['margin', 'cellRadius']) {
+    const row = document.getElementById(`cv-geo-${key}`);
+    if (row) row.outerHTML = cvGeoRowHTML(key, row.querySelector('label').textContent, row.title, row.querySelector('[data-cv-geo-auto]').textContent);
+  }
+}
+
 function coversTabHTML() {
   const pill = (m, lbl) => `<button class="tab-pill ${cv.mode===m?'active':''}" data-cv-mode="${m}">${lbl}</button>`;
   const bgPicker = `<div class="cv-bg-row">
@@ -8166,6 +8317,13 @@ function coversTabHTML() {
       </div>
     </div>
     ${cv.bgStyle==='gradient'?`<div class="cv-row"><label>Цвет 2</label><input type="color" id="cv-bg2-custom" value="${cv.bg2}" style="width:32px;height:28px;border:none;border-radius:8px;cursor:pointer;padding:0"></div>`:''}
+    <div class="cv-row">
+      <label>Узор</label>
+      <div class="cv-layouts" style="flex:1;margin-top:0">
+        ${CV_PATTERNS.map(([v,l])=>`<button class="cv-layout-btn ${cv.bgPattern===v?'active':''}" data-cv-pattern="${v}">${l}</button>`).join('')}
+      </div>
+    </div>
+    ${cv.bgPattern!=='none'?`<div class="cv-row"><label>Плотность</label><input type="range" id="cv-pattern-alpha" min="2" max="50" value="${Math.round(cv.bgPatternAlpha*100)}"><span class="cv-val" id="cv-pattern-alpha-val">${Math.round(cv.bgPatternAlpha*100)}%</span></div>`:''}
     <div class="cv-row">
       <label>Виньетка</label>
       <button class="toggle-btn ${cv.vignette?'on':''}" data-cv-toggle="vignette">${cv.vignette?'Вкл':'Выкл'}</button>
@@ -8215,10 +8373,12 @@ function coversTabHTML() {
       <div class="card">
         <div class="card-title">Фон и отступы</div>${bgPicker}
         <div class="cv-row">
-          <label>Отступы</label>
+          <label>Промежуток</label>
           <input type="range" id="cv-padding" min="0" max="40" value="${cv.padding}">
           <span class="cv-val" id="cv-padding-val">${cv.padding}px</span>
         </div>
+        ${cvGeoRowHTML('margin', 'Поле', 'Поле по краю коллажа — отдельно от шва между фото', 'как шов')}
+        ${cvGeoRowHTML('cellRadius', 'Углы', 'Скругление углов у фото', 'авто')}
       </div>
       <div class="card">
         <div class="card-title">Формат</div>
@@ -8352,9 +8512,31 @@ function bindCoversTab() {
     cv.padding = +e.target.value;
     const v = document.getElementById('cv-padding-val');
     if (v) v.textContent = cv.padding + 'px';
-    const c = document.getElementById('cv-canvas');
-    if (c && cv.images.length) cvDrawCollage(c);
+    // поле и углы «как было» считаются от шва — их ползунки показывают новое значение
+    if (cv.margin === null || cv.cellRadius === null) cvRefreshGeoRows();
+    cvReDraw();   // раньше рисовал без сохранения — шов терялся на F5, если после него ничего не трогали
   });
+  document.getElementById('cv-pattern-alpha')?.addEventListener('input', e => {
+    cv.bgPatternAlpha = +e.target.value / 100;
+    const v = document.getElementById('cv-pattern-alpha-val');
+    if (v) v.textContent = e.target.value + '%';
+    cvReDraw();
+  });
+  // Поле и углы коллажа — делегированием: строки пересоздаются при смене шва и кнопке «как было»
+  if (!window._cvGeoBound) {
+    window._cvGeoBound = true;
+    document.addEventListener('input', e => {
+      const el = e.target.closest && e.target.closest('[data-cv-geo]');
+      if (!el) return;
+      const key = el.dataset.cvGeo;
+      cv[key] = +el.value;
+      const v = document.querySelector(`[data-cv-geo-val="${key}"]`);
+      if (v) v.textContent = el.value + 'px';
+      const b = document.querySelector(`[data-cv-geo-auto="${key}"]`);
+      if (b) { b.disabled = false; b.classList.remove('active'); }
+      cvReDraw();
+    });
+  }
   document.getElementById('cv-bg-custom')?.addEventListener('input', e => {
     cv.bg = e.target.value;
     document.querySelectorAll('[data-cv-bg]').forEach(b => b.classList.toggle('active', b.dataset.cvBg === cv.bg));
@@ -8499,7 +8681,7 @@ function bindCoversTab() {
       const mx = (e.clientX - rect.left) * (canvas.width / rect.width);
       const my = (e.clientY - rect.top)  * (canvas.height / rect.height);
       const [cw,ch] = CV_SZ[cv.ratio] || CV_SZ['4:5'];
-      const cells = cvCells(cv.layout, cv.images.length, cw, ch, cv.padding);
+      const cells = cvCells(cv.layout, cv.images.length, cw, ch, cv.padding, cvMargin());
       return cells.findIndex(c => c.circle
         ? Math.sqrt((mx-c.cx)**2+(my-c.cy)**2) <= c.r
         : c.poly
@@ -10134,8 +10316,25 @@ document.addEventListener('click', e => {
   const cvLay = e.target.closest('[data-cv-la],[data-cv-lv],[data-cv-lt],[data-cv-lplat],[data-cv-tpl]');
   if (cvLay) { cvLayerClick(cvLay); return; }
   // Covers module — data-cv-* attributes
-  const cvEl = e.target.closest('[data-cv-mode],[data-cv-layout],[data-cv-ratio],[data-cv-bg],[data-cv-bg-style],[data-cv-toggle],[data-cv-grade],[data-cv-del],[data-cv-tz],[data-cv-src],[data-cv-game-fit],[data-cv-game-fill]');
+  const cvEl = e.target.closest('[data-cv-mode],[data-cv-layout],[data-cv-ratio],[data-cv-bg],[data-cv-bg-style],[data-cv-toggle],[data-cv-grade],[data-cv-del],[data-cv-tz],[data-cv-src],[data-cv-game-fit],[data-cv-game-fill],[data-cv-pattern],[data-cv-geo-auto],[data-cv-cell-fit]');
   if (cvEl) {
+    if (cvEl.dataset.cvPattern) {
+      cv.bgPattern = cvEl.dataset.cvPattern;
+      render(); cvReDraw(); return;
+    }
+    if (cvEl.dataset.cvGeoAuto) {
+      cv[cvEl.dataset.cvGeoAuto] = null;
+      cvRefreshGeoRows(); cvReDraw(); return;
+    }
+    // Кадр выбранной ячейки коллажа: заполнить со срезом / вписать целиком (Ф6).
+    // Как в «Игре» — с чистого листа: сдвиг из одного режима в другом бессмыслен
+    if (cvEl.dataset.cvCellFit) {
+      const img = cv.images[cv._selCell];
+      if (!img) return;
+      img.fit = cvEl.dataset.cvCellFit === 'contain' ? 'contain' : 'cover';
+      img.transform = { scale: 1, ox: 0, oy: 0 };
+      cvRenderState(); return;
+    }
     if (cvEl.dataset.cvSrc) {
       cv.coverSource = cvEl.dataset.cvSrc;
       document.querySelectorAll('[data-cv-src]').forEach(b => b.classList.toggle('active', b.dataset.cvSrc === cv.coverSource));
@@ -10567,7 +10766,7 @@ document.addEventListener('click', e => {
       // Шрифты слоёв — догрузить до первого файла.
       cvFontsReady().then(() => vars.forEach((v,i) => setTimeout(() => {
         const tmp = document.createElement('canvas');
-        cvDrawCollage(tmp, { bg: v.bg, padding: v.padding, infog: v.infog });
+        cvDrawCollage(tmp, { bg: v.bg, padding: v.padding, margin: v.margin, radius: v.radius, infog: v.infog });
         cvDownload(tmp, `collage-var-${i+1}.jpg`, { variant: i + 1, spec: v, keepCounters: i < vars.length - 1, batch: true });
       }, i * 350)));
       break;
