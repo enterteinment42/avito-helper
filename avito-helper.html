@@ -21,6 +21,19 @@
     @font-face { font-family:'JetBrains Mono'; font-style:normal; font-weight:400; font-display:swap; src:url('fonts/JetBrainsMono-normal-400-latin.woff2') format('woff2'); unicode-range:U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD; }
     @font-face { font-family:'JetBrains Mono'; font-style:normal; font-weight:500; font-display:swap; src:url('fonts/JetBrainsMono-normal-500-cyrillic.woff2') format('woff2'); unicode-range:U+0301,U+0400-045F,U+0490-0491,U+04B0-04B1,U+2116; }
     @font-face { font-family:'JetBrains Mono'; font-style:normal; font-weight:500; font-display:swap; src:url('fonts/JetBrainsMono-normal-500-latin.woff2') format('woff2'); unicode-range:U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD; }
+    /* Файл JetBrains Mono переменный (байт в байт тот же, что Google отдаёт на 700): без этого объявления
+       холст рисовал «bold» поддельным жирным из 400-го. Ширина знаков у моноширинного от веса не зависит. */
+    @font-face { font-family:'JetBrains Mono'; font-style:normal; font-weight:700; font-display:swap; src:url('fonts/JetBrainsMono-normal-400-cyrillic.woff2') format('woff2'); unicode-range:U+0301,U+0400-045F,U+0490-0491,U+04B0-04B1,U+2116; }
+    @font-face { font-family:'JetBrains Mono'; font-style:normal; font-weight:700; font-display:swap; src:url('fonts/JetBrainsMono-normal-400-latin.woff2') format('woff2'); unicode-range:U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD; }
+    /* Шрифты букв на обложках (план Fotor, Ф1) — по одному начертанию, грузятся только когда выбраны */
+    @font-face { font-family:'Montserrat'; font-style:normal; font-weight:900; font-display:swap; src:url('fonts/Montserrat-normal-900-cyrillic.woff2') format('woff2'); unicode-range:U+0301,U+0400-045F,U+0490-0491,U+04B0-04B1,U+2116; }
+    @font-face { font-family:'Montserrat'; font-style:normal; font-weight:900; font-display:swap; src:url('fonts/Montserrat-normal-900-latin.woff2') format('woff2'); unicode-range:U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD; }
+    @font-face { font-family:'Oswald'; font-style:normal; font-weight:700; font-display:swap; src:url('fonts/Oswald-normal-700-cyrillic.woff2') format('woff2'); unicode-range:U+0301,U+0400-045F,U+0490-0491,U+04B0-04B1,U+2116; }
+    @font-face { font-family:'Oswald'; font-style:normal; font-weight:700; font-display:swap; src:url('fonts/Oswald-normal-700-latin.woff2') format('woff2'); unicode-range:U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD; }
+    @font-face { font-family:'Rubik'; font-style:normal; font-weight:700; font-display:swap; src:url('fonts/Rubik-normal-700-cyrillic.woff2') format('woff2'); unicode-range:U+0301,U+0400-045F,U+0490-0491,U+04B0-04B1,U+2116; }
+    @font-face { font-family:'Rubik'; font-style:normal; font-weight:700; font-display:swap; src:url('fonts/Rubik-normal-700-latin.woff2') format('woff2'); unicode-range:U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD; }
+    @font-face { font-family:'Russo One'; font-style:normal; font-weight:400; font-display:swap; src:url('fonts/RussoOne-normal-400-cyrillic.woff2') format('woff2'); unicode-range:U+0301,U+0400-045F,U+0490-0491,U+04B0-04B1,U+2116; }
+    @font-face { font-family:'Russo One'; font-style:normal; font-weight:400; font-display:swap; src:url('fonts/RussoOne-normal-400-latin.woff2') format('woff2'); unicode-range:U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD; }
     :root {
       --bg:       #1a1a2e;
       --card:     #16213e;
@@ -6255,6 +6268,19 @@ const CV_LAYER_TYPES = {
 const CV_STICKER_SHAPES = [['burst','💥 Взрыв'],['circle','⭕ Круг'],['pill','💊 Пилюля'],['badge','🏷 Бейдж'],['hex','⬡ Соты'],['diamond','💎 Ромб']];
 const CV_FONT_MONO = `'JetBrains Mono',monospace`;
 const CV_FONT_SERIF = `Literata,Georgia,serif`;
+// Шрифты букв слоя (25.09.2026, план Fotor, Ф1). mono и serif — прежние: у слоёв без поля font
+// ничего не меняется. У остальных одно начертание (w): «Жирный» им не нужен, иначе браузер
+// дорисует поддельный жирный поверх и без того жирного шрифта.
+const CV_FONTS = [
+  { id: 'mono',       name: 'JetBrains Mono', fam: CV_FONT_MONO },
+  { id: 'serif',      name: 'Literata',       fam: CV_FONT_SERIF },
+  { id: 'montserrat', name: 'Montserrat',     fam: `Montserrat,Arial,sans-serif`, w: 900 },
+  { id: 'oswald',     name: 'Oswald',         fam: `Oswald,'Arial Narrow',sans-serif`, w: 700 },
+  { id: 'rubik',      name: 'Rubik',          fam: `Rubik,Arial,sans-serif`, w: 700 },
+  { id: 'russo',      name: 'Russo One',      fam: `'Russo One',Arial,sans-serif`, w: 400 },
+];
+// Слои, у которых есть буквы: у них шрифт, заливка градиентом, обводка и тень букв
+const CV_TEXT_TYPES = ['sticker', 'ribbon', 'text', 'infog'];
 // Поля оформления, которые свой шаблон запоминает вместе со слоями (фон, эффекты, рамка)
 const CV_TPL_STYLE_KEYS = ['bg','bg2','bgStyle','vignette','grade','neonGap','neonColor','padding','gamePad','gameCorner','gameBorder','gameBorderColor','gameShadow'];
 // Готовые шаблоны. place — куда поставить слой после замера; fromForm — строки инфографики
@@ -6841,14 +6867,25 @@ function cvNewLayerId() { return 'L' + Date.now().toString(36) + (++_cvLid); }
 
 function cvLayerDefaults(type) {
   const b = { id: cvNewLayerId(), type, x: 0.5, y: 0.5, angle: 0, scale: 1, hidden: false };
+  // Буквы: доли — от кегля. Тень по умолчанию — та, что надпись рисовала без подложки до 25.09.
+  const tx = { font: type === 'text' ? 'serif' : 'mono', fill: 'solid', color2: '#facc15',
+    stroke: false, strokeW: 0.08, strokeColor: '#000000',
+    shadow: false, shadowColor: '#000000', shadowOpacity: 0.55, shadowBlur: 0.18, shadowDist: 0.04, shadowDir: 'down' };
   switch (type) {
-    case 'sticker': return { ...b, x: 0.8, y: 0.14, angle: -12, text: 'ХИТ', shape: 'burst', size: 180, bg: '#B45309', color: '#ffffff' };
-    case 'ribbon':  return { ...b, corner: 'tr', text: 'ПРЕДЗАКАЗ', size: 76, bg: '#dc2626', color: '#ffffff' };
-    case 'text':    return { ...b, text: 'Ваш текст', size: 80, color: '#ffffff', bold: true, bgOn: false, bgColor: '#000000', bgOpacity: 0.55 };
-    case 'infog':   return { ...b, text: '', size: 38, bg: '#0f172a', opacity: 0.82, color: '#ffffff', align: 'left' };
+    case 'sticker': return { ...b, ...tx, x: 0.8, y: 0.14, angle: -12, text: 'ХИТ', shape: 'burst', size: 180, bg: '#B45309', color: '#ffffff' };
+    case 'ribbon':  return { ...b, ...tx, corner: 'tr', text: 'ПРЕДЗАКАЗ', size: 76, bg: '#dc2626', color: '#ffffff' };
+    case 'text':    return { ...b, ...tx, shadow: true, text: 'Ваш текст', size: 80, color: '#ffffff', bold: true, bgOn: false, bgColor: '#000000', bgOpacity: 0.55 };
+    case 'infog':   return { ...b, ...tx, text: '', size: 38, bg: '#0f172a', opacity: 0.82, color: '#ffffff', align: 'left' };
     case 'plat':    return { ...b, plats: ['PS5'] };
   }
   return null;
+}
+// Слой, сохранённый до шрифтов и эффектов букв (localStorage, сервер, бэкап, свой шаблон):
+// надпись тогда сама отбрасывала тень, если у неё не было подложки. Переносим это в явный
+// флаг, иначе заводское shadow: true легло бы и на надписи с подложкой — обложка изменилась бы.
+function cvLayerCompat(spec) {
+  if (spec && spec.type === 'text' && !('shadow' in spec)) return { ...spec, shadow: !spec.bgOn };
+  return spec;
 }
 
 // Слой из чужих рук (сервер, бэкап, старая версия) доводим до полного: неизвестный тип
@@ -6856,12 +6893,14 @@ function cvLayerDefaults(type) {
 // к числам: «0.3» строкой после стрелки на клавиатуре склеивалось в «0.30.0009…» → NaN,
 // и слой пропадал с обложки. Текст — к строке, платформы — к списку известных.
 function cvSanitizeLayers() {
-  const NUM = ['x', 'y', 'angle', 'scale', 'size', 'opacity', 'bgOpacity'];
+  const NUM = ['x', 'y', 'angle', 'scale', 'size', 'opacity', 'bgOpacity', 'strokeW', 'shadowOpacity', 'shadowBlur', 'shadowDist'];
   cv.layers = (Array.isArray(cv.layers) ? cv.layers : [])
     .filter(L => L && typeof L === 'object' && CV_LAYER_TYPES[L.type])
     .map(L => {
       const d = cvLayerDefaults(L.type);
-      const o = { ...d, ...L };
+      const o = { ...d, ...cvLayerCompat(L) };
+      if ('font' in d && !CV_FONTS.some(f => f.id === o.font)) o.font = d.font;
+      if ('fill' in d && o.fill !== 'grad') o.fill = 'solid';
       if (!o.id || typeof o.id !== 'string') o.id = cvNewLayerId();
       for (const k of NUM) {
         if (!(k in d)) continue;
@@ -6873,6 +6912,7 @@ function cvSanitizeLayers() {
       if ('text' in d && typeof o.text !== 'string') o.text = o.text == null ? '' : String(o.text);
       if ('plats' in d) o.plats = (Array.isArray(o.plats) ? o.plats : []).filter(id => CV_PLATFORMS.some(p => p.id === id));
       o.hidden = !!o.hidden;
+      if ('stroke' in d) { o.stroke = !!o.stroke; o.shadow = !!o.shadow; }
       return o;
     });
   cv.tpls = (Array.isArray(cv.tpls) ? cv.tpls : []).filter(t => t && t.id && t.name && Array.isArray(t.layers));
@@ -6911,7 +6951,7 @@ function cvLegacyLayers(o) {
     out.push({ ...cvLayerDefaults('text'), hidden: !o.textOverlay, text: o.textOverlayText,
       size: num(o.textOverlaySize) || 80, angle: num(o.textOverlayAngle) || 0,
       color: o.textOverlayColor || '#ffffff', bold: o.textOverlayBold !== false,
-      bgOn: !!o.textOverlayBg, bgColor: o.textOverlayBgColor || '#000000',
+      bgOn: !!o.textOverlayBg, shadow: !o.textOverlayBg, bgColor: o.textOverlayBgColor || '#000000',
       bgOpacity: num(o.textOverlayBgOpacity) ?? 0.55,
       x: x === null ? 0.5 : x / cw, y: y === null ? 0.5 : y / ch });
   }
@@ -6945,6 +6985,35 @@ function cvMctx() {
 }
 function cvLinesOf(text) { return String(text || '').split('\n').map(s => s.trim()).filter(Boolean); }
 
+// Шрифт букв слоя строкой для ctx.font. Без поля font — прежний шрифт своего типа.
+function cvFontOf(L) { return CV_FONTS.find(f => f.id === L.font) || CV_FONTS[L.type === 'text' ? 1 : 0]; }
+function cvFontStr(L, fs) {
+  const f = cvFontOf(L);
+  return `${f.w || (L.type === 'text' && !L.bold ? 400 : 700)} ${fs}px ${f.fam}`;
+}
+// На сколько обводка выносит букву за её контур с каждой стороны — форма и плашка растут на это
+function cvStrokeEx(L, fs) { return L.stroke ? Math.max(0, +L.strokeW || 0) * fs : 0; }
+
+// Шрифт подгружается, только когда он впервые понадобился холсту; до загрузки буквы рисуются
+// запасным, после — перерисовка. Строка в наборе — «уже просили»: сбойный файл не зациклит
+// перерисовку. Образец с кириллицей — иначе грузится только латинский кусок шрифта.
+const _cvFontAsked = new Set();
+const CV_FONT_SAMPLE = 'АяAz';
+function cvEnsureFont(L) {
+  if (!document.fonts || !CV_TEXT_TYPES.includes(L.type)) return;
+  const s = cvFontStr(L, 40);
+  if (_cvFontAsked.has(s)) return;
+  _cvFontAsked.add(s);
+  if (document.fonts.check(s, CV_FONT_SAMPLE)) return;
+  document.fonts.load(s, CV_FONT_SAMPLE).then(() => cvReDraw(), () => {});
+}
+// Перед скачиванием: все шрифты видимых слоёв на месте (иначе в файл уйдёт запасной)
+function cvFontsReady() {
+  if (!document.fonts) return Promise.resolve();
+  const ls = (cv.layers || []).filter(L => L && !L.hidden && CV_TEXT_TYPES.includes(L.type));
+  return Promise.all(ls.map(L => document.fonts.load(cvFontStr(L, 40), CV_FONT_SAMPLE))).catch(() => {});
+}
+
 // Перенос по словам ровно в k строк примерно равной ширины
 function cvWrapWords(ctx, words, k) {
   if (k <= 1 || words.length < 2) return [words.join(' ')];
@@ -6966,9 +7035,9 @@ function cvStickerGeom(L) {
   const ctx = cvMctx();
   const S = +L.size || 180;
   const fs = Math.round(S * 0.3);
-  ctx.font = `bold ${fs}px ${CV_FONT_MONO}`;
-  const lh = fs * 1.12;
-  const meas = lines => ({ lines, tw: lines.length ? Math.max(...lines.map(l => ctx.measureText(l).width)) : 0, th: lines.length * lh });
+  ctx.font = cvFontStr(L, fs);
+  const lh = fs * 1.12, ex = 2 * cvStrokeEx(L, fs);
+  const meas = lines => ({ lines, tw: lines.length ? Math.max(...lines.map(l => ctx.measureText(l).width)) + ex : 0, th: lines.length ? lines.length * lh + ex : 0 });
   const given = cvLinesOf(L.text);
   let t = null;
   if (L.shape === 'pill' || L.shape === 'badge' || given.length !== 1) t = meas(given);
@@ -7003,9 +7072,9 @@ function cvRibbonGeom(L, cw, ch) {
   const ctx = cvMctx();
   const t = (+L.size || 76) * (L.scale || 1);
   const fs = Math.round(t * 0.46);
-  ctx.font = `bold ${fs}px ${CV_FONT_MONO}`;
+  ctx.font = cvFontStr(L, fs);
   const text = cvLinesOf(L.text).join(' ');
-  const tw = text ? ctx.measureText(text).width : 0;
+  const tw = text ? ctx.measureText(text).width + 2 * cvStrokeEx(L, fs) : 0;
   const m = Math.max(t * 1.6, (tw + fs * 1.4 + t) / 2);
   const c = /^[tb][lr]$/.test(L.corner) ? L.corner : 'tr';
   const sx = c[1] === 'r' ? -1 : 1, sy = c[0] === 'b' ? -1 : 1;   // направление внутрь холста
@@ -7018,11 +7087,11 @@ function cvRibbonGeom(L, cw, ch) {
 function cvTextGeom(L) {
   const ctx = cvMctx();
   const fs = +L.size || 80;
-  ctx.font = `${L.bold ? 'bold' : 'normal'} ${fs}px ${CV_FONT_SERIF}`;
+  ctx.font = cvFontStr(L, fs);
   const lines = cvLinesOf(L.text);
-  const lh = fs * 1.28;
+  const lh = fs * 1.28, ex = cvStrokeEx(L, fs);
   const tw = lines.length ? Math.max(...lines.map(l => ctx.measureText(l).width)) : 0;
-  const padX = fs * 0.55, padY = fs * 0.32;
+  const padX = fs * 0.55 + ex, padY = fs * 0.32 + ex;
   return { fs, lines, lh, tw, w: tw + padX * 2, h: lines.length * lh + padY * 2 };
 }
 
@@ -7043,14 +7112,14 @@ function cvInfogGeom(L, cw, shift) {
   const limit = cw * 0.92 / (L.scale || 1);
   let fs = +L.size || 38, widths = [], maxW = 0;
   for (let pass = 0; pass < 2; pass++) {
-    ctx.font = `bold ${fs}px ${CV_FONT_MONO}`;
-    widths = lines.map(l => ctx.measureText(l).width + fs * 1.5);
+    ctx.font = cvFontStr(L, fs);
+    widths = lines.map(l => ctx.measureText(l).width + fs * 1.5 + 2 * cvStrokeEx(L, fs));
     maxW = widths.length ? Math.max(...widths) : 0;
     if (maxW <= limit || pass) break;
     fs = Math.max(12, Math.floor(fs * limit / maxW));
   }
   const bh = fs * 1.75, gap = fs * 0.42;
-  return { lines, fs, padX: fs * 0.75, bh, gap, widths, w: maxW, h: lines.length ? lines.length * bh + (lines.length - 1) * gap : 0 };
+  return { lines, fs, padX: fs * 0.75 + cvStrokeEx(L, fs), bh, gap, widths, w: maxW, h: lines.length ? lines.length * bh + (lines.length - 1) * gap : 0 };
 }
 
 function cvPlatGeom(L) {
@@ -7166,15 +7235,65 @@ function cvStickerPath(ctx, shape, g) {
     default: cvDrawBurst(ctx, 0, 0, g.R, g.inner, 10);
   }
 }
+function cvHexA(hex, a) {
+  const m = /^#?([0-9a-f]{6})$/i.exec(String(hex || '').trim());
+  const n = m ? parseInt(m[1], 16) : 0;
+  return `rgba(${n >> 16 & 255},${n >> 8 & 255},${n & 255},${Math.max(0, Math.min(1, +a || 0))})`;
+}
+// Буквы слоя: заливка цветом или градиентом (сверху вниз по строке), обводка, тень.
+// Размытие и сдвиг тени холст не масштабирует вместе с рисунком, поэтому k — текущий
+// масштаб слоя: тень растёт вместе с буквами. Базовая линия у всех — middle.
+function cvDrawLetters(ctx, L, text, x, y, fs) {
+  const ex = cvStrokeEx(L, fs);
+  const paint = c => {
+    if (ex > 0) {
+      c.lineJoin = 'round';
+      c.lineWidth = 2 * ex;
+      c.strokeStyle = L.strokeColor || '#000000';
+      c.strokeText(text, x, y);
+    }
+    if (L.fill === 'grad') {
+      const gr = c.createLinearGradient(0, y - fs * 0.5, 0, y + fs * 0.5);
+      gr.addColorStop(0, L.color); gr.addColorStop(1, L.color2 || L.color);
+      c.fillStyle = gr;
+    } else c.fillStyle = L.color;
+    c.fillText(text, x, y);
+  };
+  ctx.save();
+  if (!L.shadow) { paint(ctx); ctx.restore(); return; }
+  const t = ctx.getTransform(), k = Math.hypot(t.a, t.b) || 1;
+  const d = Math.max(0, +L.shadowDist || 0) * fs * k, diag = L.shadowDir === 'diag';
+  ctx.shadowColor = cvHexA(L.shadowColor, L.shadowOpacity);
+  ctx.shadowBlur = Math.max(0, +L.shadowBlur || 0) * fs * k;
+  ctx.shadowOffsetX = diag ? d * Math.SQRT1_2 : 0;
+  ctx.shadowOffsetY = diag ? d * Math.SQRT1_2 : d;
+  if (!(ex > 0)) { paint(ctx); ctx.restore(); return; }
+  // С обводкой буквы рисуются двумя слоями, и тень от каждого по отдельности не годится:
+  // от одной обводки выходит пустое кольцо (дефект ревью 25.09), от обоих — двойная темнота
+  // там, где они перекрываются. Поэтому буквы с обводкой собираем на отдельном холсте
+  // (вдвое плотнее — повёрнутая надпись не мылится) и кладём его одним куском с тенью.
+  const m = ctx.measureText(text), pad = ex + 2;
+  const left = x - m.actualBoundingBoxLeft - pad, top = y - m.actualBoundingBoxAscent - pad;
+  const w = m.actualBoundingBoxLeft + m.actualBoundingBoxRight + 2 * pad;
+  const h = m.actualBoundingBoxAscent + m.actualBoundingBoxDescent + 2 * pad;
+  const s = 2 * k, oc = document.createElement('canvas');
+  oc.width = Math.max(1, Math.ceil(w * s)); oc.height = Math.max(1, Math.ceil(h * s));
+  const o = oc.getContext('2d');
+  o.scale(s, s); o.translate(-left, -top);
+  o.font = ctx.font; o.textAlign = ctx.textAlign; o.textBaseline = ctx.textBaseline;
+  paint(o);
+  ctx.drawImage(oc, left, top, oc.width / s, oc.height / s);
+  ctx.restore();
+}
 function cvDrawSticker(ctx, L, g) {
   if (!g.lines.length) return;
   ctx.save();
   ctx.shadowColor = 'rgba(0,0,0,0.35)'; ctx.shadowBlur = g.fs * 0.5; ctx.shadowOffsetY = g.fs * 0.1;
   cvStickerPath(ctx, L.shape, g); ctx.fillStyle = L.bg; ctx.fill();
   ctx.restore();
-  ctx.font = `bold ${g.fs}px ${CV_FONT_MONO}`;
-  ctx.fillStyle = L.color; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-  g.lines.forEach((l, i) => ctx.fillText(l, 0, (i - (g.lines.length - 1) / 2) * g.lh + g.fs * 0.04));
+  ctx.font = cvFontStr(L, g.fs);
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  g.lines.forEach((l, i) => cvDrawLetters(ctx, L, l, 0, (i - (g.lines.length - 1) / 2) * g.lh + g.fs * 0.04, g.fs));
 }
 function cvDrawRibbon(ctx, L, cw, ch) {
   const g = cvRibbonGeom(L, cw, ch);
@@ -7189,9 +7308,9 @@ function cvDrawRibbon(ctx, L, cw, ch) {
   const e = g.t / 2 - g.t * 0.11;
   ctx.strokeStyle = 'rgba(255,255,255,0.35)'; ctx.lineWidth = Math.max(1.5, g.t * 0.035);
   ctx.beginPath(); ctx.moveTo(-len / 2, -e); ctx.lineTo(len / 2, -e); ctx.moveTo(-len / 2, e); ctx.lineTo(len / 2, e); ctx.stroke();
-  ctx.font = `bold ${g.fs}px ${CV_FONT_MONO}`;
-  ctx.fillStyle = L.color; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-  ctx.fillText(g.text, 0, g.fs * 0.05);
+  ctx.font = cvFontStr(L, g.fs);
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  cvDrawLetters(ctx, L, g.text, 0, g.fs * 0.05, g.fs);
   ctx.restore();
 }
 function cvDrawTextLayer(ctx, L, g) {
@@ -7203,17 +7322,16 @@ function cvDrawTextLayer(ctx, L, g) {
     ctx.restore();
   }
   ctx.save();
-  ctx.font = `${L.bold ? 'bold' : 'normal'} ${g.fs}px ${CV_FONT_SERIF}`;
-  ctx.fillStyle = L.color; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-  // без подложки лёгкая тень — надпись читается на пёстрой обложке
-  if (!L.bgOn) { ctx.shadowColor = 'rgba(0,0,0,0.55)'; ctx.shadowBlur = g.fs * 0.18; ctx.shadowOffsetY = g.fs * 0.04; }
-  g.lines.forEach((l, i) => ctx.fillText(l, 0, (i - (g.lines.length - 1) / 2) * g.lh));
+  ctx.font = cvFontStr(L, g.fs);
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  // тень — флагом слоя; прежняя «без подложки — лёгкая тень» переведена в него (cvLayerCompat)
+  g.lines.forEach((l, i) => cvDrawLetters(ctx, L, l, 0, (i - (g.lines.length - 1) / 2) * g.lh, g.fs));
   ctx.restore();
 }
 function cvDrawInfogLayer(ctx, L, g) {
   if (!g.lines.length) return;
   ctx.save();
-  ctx.font = `bold ${g.fs}px ${CV_FONT_MONO}`;
+  ctx.font = cvFontStr(L, g.fs);
   ctx.textBaseline = 'middle'; ctx.textAlign = 'left';
   g.lines.forEach((l, i) => {
     const py = -g.h / 2 + i * (g.bh + g.gap);
@@ -7224,8 +7342,7 @@ function cvDrawInfogLayer(ctx, L, g) {
     cvRR(ctx, px, py, w, g.bh, g.bh / 2); ctx.fillStyle = L.bg; ctx.fill();
     ctx.shadowColor = 'transparent'; ctx.shadowBlur = 0; ctx.shadowOffsetY = 0;
     ctx.globalAlpha = 1;
-    ctx.fillStyle = L.color;
-    ctx.fillText(l, px + g.padX, py + g.bh / 2 + g.fs * 0.04);
+    cvDrawLetters(ctx, L, l, px + g.padX, py + g.bh / 2 + g.fs * 0.04, g.fs);
   });
   ctx.restore();
 }
@@ -7269,6 +7386,7 @@ function cvDrawLayers(ctx, cw, ch, ov) {
   const ovTarget = ov ? (cv.layers || []).find(L => L && !L.hidden && L.type === 'infog') : null;
   for (const L of cv.layers || []) {
     if (!L || L.hidden) continue;
+    cvEnsureFont(L);
     if (L === ovTarget) {
       const V = { ...L, bg: ov.bg || L.bg, align: ov.align || L.align };
       cvPlaceLayer(V, V.align === 'right' ? 'br' : 'bl', cw, ch);
@@ -7524,7 +7642,7 @@ function cvApplyTpl(id) {
   cv.layers = (tpl.layers || []).map(spec => {
     const { place, fromForm, id: _old, ...rest } = spec;
     if (!CV_LAYER_TYPES[spec.type]) return null;
-    const L = { ...cvLayerDefaults(spec.type), ...JSON.parse(JSON.stringify(rest)), id: cvNewLayerId() };
+    const L = { ...cvLayerDefaults(spec.type), ...cvLayerCompat(JSON.parse(JSON.stringify(rest))), id: cvNewLayerId() };
     if (fromForm && L.type === 'infog') { L.text = cvInfogBuildLines().join('\n'); if (!L.text) emptyForm = true; }
     if (fromForm && L.type === 'plat') L.plats = cvFormPlats();
     if (place) cvPlaceLayer(L, place, cw, ch);
@@ -7819,11 +7937,12 @@ function cvGenerateVariations() {
 
   grid.querySelectorAll('[data-cv-dl-var]').forEach(btn => {
     const i = +btn.dataset.cvDlVar;
-    btn.addEventListener('click', () => {
+    // шрифты слоёв должны догрузиться, иначе в файл уйдут буквы запасным шрифтом
+    btn.addEventListener('click', () => cvFontsReady().then(() => {
       const tmp = document.createElement('canvas');
       cvDrawGame(tmp, img, vars[i]);
       cvDownload(tmp, `game-var-${i+1}.jpg`, { variant: i + 1, spec: vars[i] });
-    });
+    }));
   });
 }
 
@@ -7852,11 +7971,11 @@ function cvGenerateCollageVars() {
   });
   grid.querySelectorAll('[data-cv-dl-cvar]').forEach(btn => {
     const i = +btn.dataset.cvDlCvar;
-    btn.addEventListener('click', () => {
+    btn.addEventListener('click', () => cvFontsReady().then(() => {
       const tmp = document.createElement('canvas');
       cvDrawCollage(tmp, { bg: vars[i].bg, padding: vars[i].padding, infog: vars[i].infog });
       cvDownload(tmp, `collage-var-${i+1}.jpg`, { variant: i + 1, spec: vars[i] });
-    });
+    }));
   });
   grid._vars = vars;
 }
@@ -7942,30 +8061,48 @@ function cvLayerEditorHTML(L) {
   const range = (prop, min, max) => `<input type="range" data-cv-lp="${prop}" data-cv-div="100" min="${min}" max="${max}" value="${Math.round((+L[prop] || 0) * 100)}">`;
   const row = (label, inner, top) => `<div class="cv-row"${top ? ' style="align-items:flex-start"' : ''}><label${top ? ' style="padding-top:4px"' : ''}>${label}</label>${inner}</div>`;
   const area = (rows, ph) => `<textarea data-cv-lp="text" rows="${rows}" placeholder="${ph}" style="flex:1;font-size:13px;resize:vertical">${esc(L.text || '')}</textarea>`;
+  // Буквы — общий блок у всех слоёв с текстом (план Fotor, Ф1): шрифт, цвет или градиент,
+  // обводка, тень. Подробности эффекта раскрываются, только когда он включён.
+  const letters = () => {
+    const f = cvFontOf(L), grad = L.fill === 'grad';
+    const fonts = `<div class="cv-layouts" style="flex:1;margin-top:0">${CV_FONTS.map(x => `<button class="cv-layout-btn ${f.id === x.id ? 'active' : ''}" data-cv-lv="font:${x.id}" style="font-family:${x.fam};font-weight:${x.w || 700}">${x.name}</button>`).join('')}</div>`;
+    return `<div class="cv-layout-sep">Буквы</div>`
+      + row('Шрифт', fonts, true)
+      + (L.type === 'text' && !f.w ? row('Жирный', toggle('bold')) : '')
+      + row('Заливка', choice('fill', [['solid', 'Цвет'], ['grad', 'Градиент']]))
+      + row(grad ? 'Сверху' : 'Цвет', swatches('color', CV_STC))
+      + (grad ? row('Снизу', swatches('color2', CV_STC)) : '')
+      + row('Обводка', toggle('stroke'))
+      + (L.stroke ? row('Толщина', range('strokeW', 2, 25)) + row('Цвет', swatches('strokeColor', CV_STC)) : '')
+      + row('Тень', toggle('shadow'))
+      + (L.shadow ? row('Цвет', swatches('shadowColor', CV_STC)) + row('Размытие', range('shadowBlur', 0, 60))
+          + row('Сдвиг', range('shadowDist', 0, 30)) + row('Направл.', choice('shadowDir', [['down', '↓ Вниз'], ['diag', '↘ Наискось']]))
+          + row('Плотность', range('shadowOpacity', 10, 100)) : '');
+  };
   let body = '';
   switch (L.type) {
     case 'sticker':
       body = row('Текст', area(2, 'ХИТ&#10;Enter — новая строка'), true)
         + row('Форма', choice('shape', CV_STICKER_SHAPES))
-        + row('Фон', swatches('bg', CV_SC)) + row('Буквы', swatches('color', CV_STC));
+        + row('Фон', swatches('bg', CV_SC)) + letters();
       break;
     case 'ribbon':
       body = row('Текст', `<input type="text" data-cv-lp="text" value="${esc(L.text || '')}" placeholder="ПРЕДЗАКАЗ" style="flex:1">`)
         + row('Угол', choice('corner', [['tl', '↖'], ['tr', '↗'], ['bl', '↙'], ['br', '↘']]))
-        + row('Фон', swatches('bg', CV_SC)) + row('Буквы', swatches('color', CV_STC));
+        + row('Фон', swatches('bg', CV_SC)) + letters();
       break;
     case 'text':
       body = row('Текст', area(3, 'Ваш текст&#10;Enter — новая строка'), true)
-        + row('Жирный', toggle('bold')) + row('Цвет', swatches('color', CV_STC))
         + row('Подложка', toggle('bgOn'))
-        + (L.bgOn ? row('Цвет', swatches('bgColor', CV_SC)) + row('Плотность', range('bgOpacity', 0, 100)) : '');
+        + (L.bgOn ? row('Цвет', swatches('bgColor', CV_SC)) + row('Плотность', range('bgOpacity', 0, 100)) : '')
+        + letters();
       break;
     case 'infog':
       body = row('Строки', area(4, '✔️ 405+ игр&#10;✔️ PS4 / PS5&#10;(строка = плашка, до 6)'), true)
         + `<button class="btn-sm" data-cv-la="fill" style="margin:6px 0 2px">⚡ Заполнить из формы генератора</button>`
         + row('Выравнив.', choice('align', [['left', '⬅ По левому'], ['right', '➡ По правому']]))
         + row('Плашка', swatches('bg', CV_SC)) + row('Плотность', range('opacity', 20, 100))
-        + row('Буквы', swatches('color', CV_STC));
+        + letters();
       break;
     case 'plat':
       body = row('Какие', `<div class="cv-layouts" style="flex:1;margin-top:0">${CV_PLATFORMS.map(p => {
@@ -10405,11 +10542,14 @@ document.addEventListener('click', e => {
     case 'cv-download': {
       if (!cv.images.length) break;
       cv._selCell = null;
-      const tmp = document.createElement('canvas');
-      // F11: в режиме «Игра» скачиваем основное превью с текущими настройками (рамка/скругление/
-      // обводка/тень/стикер/текст), а не через «4 варианта», которые перетирают их пресетами.
-      if (cv.mode === 'game') { cvDrawGame(tmp, cv.images[0], {}); cvDownload(tmp, 'game.jpg'); }
-      else { cvDrawCollage(tmp); cvDownload(tmp, 'collage.jpg'); }
+      // шрифты слоёв должны догрузиться, иначе в файл уйдут буквы запасным шрифтом
+      cvFontsReady().then(() => {
+        const tmp = document.createElement('canvas');
+        // F11: в режиме «Игра» скачиваем основное превью с текущими настройками (рамка/скругление/
+        // обводка/тень/стикер/текст), а не через «4 варианта», которые перетирают их пресетами.
+        if (cv.mode === 'game') { cvDrawGame(tmp, cv.images[0], {}); cvDownload(tmp, 'game.jpg'); }
+        else { cvDrawCollage(tmp); cvDownload(tmp, 'collage.jpg'); }
+      });
       break;
     }
     case 'cv-gen-vars':
@@ -10423,12 +10563,13 @@ document.addEventListener('click', e => {
       const vars = grid?._vars;
       if (!vars) break;
       // Счётчики сессии канваса относятся ко всей пачке — отдаём их последнему файлу,
-      // остальные помечаем keepCounters, иначе первый забирал бы всё, а трём доставались нули
-      vars.forEach((v,i) => setTimeout(() => {
+      // остальные помечаем keepCounters, иначе первый забирал бы всё, а трём доставались нули.
+      // Шрифты слоёв — догрузить до первого файла.
+      cvFontsReady().then(() => vars.forEach((v,i) => setTimeout(() => {
         const tmp = document.createElement('canvas');
         cvDrawCollage(tmp, { bg: v.bg, padding: v.padding, infog: v.infog });
         cvDownload(tmp, `collage-var-${i+1}.jpg`, { variant: i + 1, spec: v, keepCounters: i < vars.length - 1, batch: true });
-      }, i * 350));
+      }, i * 350)));
       break;
     }
 
@@ -10436,11 +10577,11 @@ document.addEventListener('click', e => {
       const vars = cv._gameVars;
       if (!vars || !cv.images.length) break;
       const img = cv.images[0];
-      vars.forEach((v,i) => setTimeout(() => {
+      cvFontsReady().then(() => vars.forEach((v,i) => setTimeout(() => {
         const tmp = document.createElement('canvas');
         cvDrawGame(tmp, img, v);
         cvDownload(tmp, `game-var-${i+1}.jpg`, { variant: i + 1, spec: v, keepCounters: i < vars.length - 1, batch: true });
-      }, i * 350));
+      }, i * 350)));
       break;
     }
 
