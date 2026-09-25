@@ -664,6 +664,9 @@
     .cv-tz-btn { padding: 1px 7px; border-radius: 4px; border: 1px solid var(--border2); background: var(--card3); color: var(--text); cursor: pointer; font-size: 14px; line-height: 1.5; transition: all .12s; }
     .cv-tz-btn:hover { border-color: var(--teal); color: var(--teal-h); }
     .cv-tz-btn.active { border-color: var(--teal); color: var(--teal-h); background: var(--teal-d); }
+    .cv-icon-pal { display: flex; flex-wrap: wrap; gap: 4px; flex: 1; }
+    .cv-icon-btn { width: 32px; height: 32px; display: inline-flex; align-items: center; justify-content: center; padding: 0; border-radius: var(--rs); background: var(--card2); color: var(--text2); border: 1px solid var(--border2); cursor: pointer; }
+    .cv-icon-btn:hover, .cv-icon-btn.active { border-color: var(--teal); color: var(--teal-h); background: var(--teal-d); }
     .cv-tz-range { flex: 1; min-width: 70px; accent-color: var(--teal); cursor: pointer; }
     .cv-tz-val { font-family: var(--fm); font-size: 10px; color: var(--muted); min-width: 30px; text-align: right; }
     /* Слои оформления: список элементов, редактор выбранного, шаблоны */
@@ -6268,8 +6271,10 @@ const CV_LAYER_TYPES = {
   ribbon:  { icon: '🎗', name: 'Лента в углу' },
   text:    { icon: '🔤', name: 'Надпись' },
   infog:   { icon: '📋', name: 'Инфографика' },
+  icon:    { icon: '⭐', name: 'Значок' },
   plat:    { icon: '🎮', name: 'Платформы' },
 };
+const CV_ICON_SHAPES = [['circle', '⭕ Круг'], ['square', '▢ Квадрат'], ['none', 'Без фона']];
 const CV_STICKER_SHAPES = [['burst','💥 Взрыв'],['circle','⭕ Круг'],['pill','💊 Пилюля'],['badge','🏷 Бейдж'],['hex','⬡ Соты'],['diamond','💎 Ромб']];
 const CV_FONT_MONO = `'JetBrains Mono',monospace`;
 const CV_FONT_SERIF = `Literata,Georgia,serif`;
@@ -6286,6 +6291,71 @@ const CV_FONTS = [
 ];
 // Слои, у которых есть буквы: у них шрифт, заливка градиентом, обводка и тень букв
 const CV_TEXT_TYPES = ['sticker', 'ribbon', 'text', 'infog'];
+
+// ── Значки (план Fotor, Ф5, 25.09.2026): вместо эмодзи в инфографике и отдельным слоем.
+// Эмодзи на холсте рисуется шрифтом системы и выглядит по-разному на Windows, Android и
+// iPhone; значок — одинаково везде и цветом букв. Эмодзи в начале строки остаётся меткой:
+// текст инфографики тот же, выключили значки — на обложке снова эмодзи.
+// Рисунки — из набора Lucide v1.48.0 (lucide-static), фигуры переведены в пути для Path2D.
+// ISC License. Copyright (c) 2026 Lucide Icons and Contributors. Permission to use, copy,
+// modify, and/or distribute this software for any purpose with or without fee is hereby
+// granted, provided that the above copyright notice and this permission notice appear in
+// all copies. THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
+// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS.
+// IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL
+// DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN
+// AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION
+// WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
+const CV_ICON_PATHS = {"badge-check":["M3.85 8.62a4 4 0 0 1 4.78-4.77 4 4 0 0 1 6.74 0 4 4 0 0 1 4.78 4.78 4 4 0 0 1 0 6.74 4 4 0 0 1-4.77 4.78 4 4 0 0 1-6.75 0 4 4 0 0 1-4.78-4.77 4 4 0 0 1 0-6.76Z","m16 9-5.5 5.5L8 12"],"brain":["M12 18V5","M15 13a4.17 4.17 0 0 1-3-4 4.17 4.17 0 0 1-3 4","M17.598 6.5A3 3 0 1 0 12 5a3 3 0 1 0-5.598 1.5","M17.997 5.125a4 4 0 0 1 2.526 5.77","M18 18a4 4 0 0 0 2-7.464","M19.967 17.483A4 4 0 1 1 12 18a4 4 0 1 1-7.967-.517","M6 18a4 4 0 0 1-2-7.464","M6.003 5.125a4 4 0 0 0-2.526 5.77"],"check":["M20 6 9 17l-5-5"],"cloud-download":["M12 13v8l-4-4","m12 21 4-4","M4.393 15.269A7 7 0 1 1 15.71 8h1.79a4.5 4.5 0 0 1 2.436 8.284"],"disc-3":["M2 12a10 10 0 1 0 20 0a10 10 0 1 0 -20 0","M6 12c0-1.7.7-3.2 1.8-4.2","M10 12a2 2 0 1 0 4 0a2 2 0 1 0 -4 0","M18 12c0 1.7-.7 3.2-1.8 4.2"],"flame":["M12 3q1 4 4 6.5t3 5.5a1 1 0 0 1-14 0 5 5 0 0 1 1-3 1 1 0 0 0 5 0c0-2-1.5-3-1.5-5q0-2 2.5-4"],"gamepad-2":["M6 11L10 11","M8 9L8 13","M15 12L15.01 12","M18 10L18.01 10","M17.32 5H6.68a4 4 0 0 0-3.978 3.59c-.006.052-.01.101-.017.152C2.604 9.416 2 14.456 2 16a3 3 0 0 0 3 3c1 0 1.5-.5 2-1l1.414-1.414A2 2 0 0 1 9.828 16h4.344a2 2 0 0 1 1.414.586L17 18c.5.5 1 1 2 1a3 3 0 0 0 3-3c0-1.545-.604-6.584-.685-7.258-.007-.05-.011-.1-.017-.151A4 4 0 0 0 17.32 5z"],"gift":["M12 7v14","M20 11v8a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2v-8","M7.5 7a1 1 0 0 1 0-5A4.8 8 0 0 1 12 7a4.8 8 0 0 1 4.5-5 1 1 0 0 1 0 5","M4 7H20a1 1 0 0 1 1 1V10a1 1 0 0 1 -1 1H4a1 1 0 0 1 -1 -1V8a1 1 0 0 1 1 -1Z"],"guitar":["m11.9 12.1 4.514-4.514","M20.1 2.3a1 1 0 0 0-1.4 0l-1.114 1.114A2 2 0 0 0 17 4.828v1.344a2 2 0 0 1-.586 1.414A2 2 0 0 1 17.828 7h1.344a2 2 0 0 0 1.414-.586L21.7 5.3a1 1 0 0 0 0-1.4z","m6 16 2 2","M8.23 9.85A3 3 0 0 1 11 8a5 5 0 0 1 5 5 3 3 0 0 1-1.85 2.77l-.92.38A2 2 0 0 0 12 18a4 4 0 0 1-4 4 6 6 0 0 1-6-6 4 4 0 0 1 4-4 2 2 0 0 0 1.85-1.23z"],"headphones":["M3 14h3a2 2 0 0 1 2 2v3a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-7a9 9 0 0 1 18 0v7a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3"],"joystick":["M21 17a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v2a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-2Z","M6 15v-2","M12 15V9","M9 6a3 3 0 1 0 6 0a3 3 0 1 0 -6 0"],"key-round":["M2.586 17.414A2 2 0 0 0 2 18.828V21a1 1 0 0 0 1 1h3a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h1a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h.172a2 2 0 0 0 1.414-.586l.814-.814a6.5 6.5 0 1 0-4-4z","M16 7.5a0.5 0.5 0 1 0 1 0a0.5 0.5 0 1 0 -1 0"],"languages":["m5 8 6 6","m4 14 6-6 2-3","M2 5h12","M7 2h1","m22 22-5-10-5 10","M14 18h6"],"message-circle":["M2.992 16.342a2 2 0 0 1 .094 1.167l-1.065 3.29a1 1 0 0 0 1.236 1.168l3.413-.998a2 2 0 0 1 1.099.092 10 10 0 1 0-4.777-4.719"],"monitor":["M4 3H20a2 2 0 0 1 2 2V15a2 2 0 0 1 -2 2H4a2 2 0 0 1 -2 -2V5a2 2 0 0 1 2 -2Z","M8 21L16 21","M12 17L12 21"],"package":["M11 21.73a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73z","M12 22V12","M3.29 7L12 12L20.71 7","m7.5 4.27 9 5.15"],"receipt":["M12 17V7","M16 8h-6a2 2 0 0 0 0 4h4a2 2 0 0 1 0 4H8","M4 3a1 1 0 0 1 1-1 1.3 1.3 0 0 1 .7.2l.933.6a1.3 1.3 0 0 0 1.4 0l.934-.6a1.3 1.3 0 0 1 1.4 0l.933.6a1.3 1.3 0 0 0 1.4 0l.933-.6a1.3 1.3 0 0 1 1.4 0l.934.6a1.3 1.3 0 0 0 1.4 0l.933-.6A1.3 1.3 0 0 1 19 2a1 1 0 0 1 1 1v18a1 1 0 0 1-1 1 1.3 1.3 0 0 1-.7-.2l-.933-.6a1.3 1.3 0 0 0-1.4 0l-.934.6a1.3 1.3 0 0 1-1.4 0l-.933-.6a1.3 1.3 0 0 0-1.4 0l-.933.6a1.3 1.3 0 0 1-1.4 0l-.934-.6a1.3 1.3 0 0 0-1.4 0l-.933.6a1.3 1.3 0 0 1-.7.2 1 1 0 0 1-1-1z"],"recycle":["M7 19H4.815a1.83 1.83 0 0 1-1.57-.881 1.785 1.785 0 0 1-.004-1.784L7.196 9.5","M11 19h8.203a1.83 1.83 0 0 0 1.556-.89 1.784 1.784 0 0 0 0-1.775l-1.226-2.12","m14 16-3 3 3 3","M8.293 13.596 7.196 9.5 3.1 10.598","m9.344 5.811 1.093-1.892A1.83 1.83 0 0 1 11.985 3a1.784 1.784 0 0 1 1.546.888l3.943 6.843","m13.378 9.633 4.096 1.098 1.097-4.096"],"russian-ruble":["M6 11h8a4 4 0 0 0 0-8H9v18","M6 15h8"],"shield-check":["M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z","m9 12 2 2 4-4"],"smartphone":["M7 2H17a2 2 0 0 1 2 2V20a2 2 0 0 1 -2 2H7a2 2 0 0 1 -2 -2V4a2 2 0 0 1 2 -2Z","M12 18h.01"],"sparkles":["M11.017 2.814a1 1 0 0 1 1.966 0l1.051 5.558a2 2 0 0 0 1.594 1.594l5.558 1.051a1 1 0 0 1 0 1.966l-5.558 1.051a2 2 0 0 0-1.594 1.594l-1.051 5.558a1 1 0 0 1-1.966 0l-1.051-5.558a2 2 0 0 0-1.594-1.594l-5.558-1.051a1 1 0 0 1 0-1.966l5.558-1.051a2 2 0 0 0 1.594-1.594z","M20 2v4","M22 4h-4","M2 20a2 2 0 1 0 4 0a2 2 0 1 0 -4 0"],"star":["M11.525 2.295a.53.53 0 0 1 .95 0l2.31 4.679a2.123 2.123 0 0 0 1.595 1.16l5.166.756a.53.53 0 0 1 .294.904l-3.736 3.638a2.123 2.123 0 0 0-.611 1.878l.882 5.14a.53.53 0 0 1-.771.56l-4.618-2.428a2.122 2.122 0 0 0-1.973 0L6.396 21.01a.53.53 0 0 1-.77-.56l.881-5.139a2.122 2.122 0 0 0-.611-1.879L2.16 9.795a.53.53 0 0 1 .294-.906l5.165-.755a2.122 2.122 0 0 0 1.597-1.16z"],"tag":["M12.586 2.586A2 2 0 0 0 11.172 2H4a2 2 0 0 0-2 2v7.172a2 2 0 0 0 .586 1.414l8.704 8.704a2.426 2.426 0 0 0 3.42 0l6.58-6.58a2.426 2.426 0 0 0 0-3.42z","M7 7.5a0.5 0.5 0 1 0 1 0a0.5 0.5 0 1 0 -1 0"],"target":["M2 12a10 10 0 1 0 20 0a10 10 0 1 0 -20 0","M6 12a6 6 0 1 0 12 0a6 6 0 1 0 -12 0","M10 12a2 2 0 1 0 4 0a2 2 0 1 0 -4 0"],"timer":["M10 2L14 2","M12 14L15 11","M4 14a8 8 0 1 0 16 0a8 8 0 1 0 -16 0"],"truck":["M14 18V6a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2v11a1 1 0 0 0 1 1h2","M15 18H9","M19 18h2a1 1 0 0 0 1-1v-3.65a1 1 0 0 0-.22-.624l-3.48-4.35A1 1 0 0 0 17.52 8H14","M15 18a2 2 0 1 0 4 0a2 2 0 1 0 -4 0","M5 18a2 2 0 1 0 4 0a2 2 0 1 0 -4 0"],"zap":["M15.914 4a1.5 1.5 0 00-2.474-1.561l-9 9A1.5 1.5 0 005.5 14h4.002a.5.5 0 01.471.666L8.086 20a1.5 1.5 0 002.475 1.56l9-9A1.5 1.5 0 0018.5 10h-3.997a.5.5 0 01-.472-.667z"]};
+// Метка-эмодзи (без U+FE0F) → значок и подпись в палитре. Первые девять — те, что ставит
+// инфографика из формы генератора (cvInfogBuildLines); остальные — под товары и услуги.
+const CV_ICONS = [
+  ['✔', 'check', 'Галочка'], ['🎮', 'gamepad-2', 'Геймпад'], ['🕹', 'joystick', 'Джойстик'],
+  ['🔥', 'flame', 'Огонь'], ['💲', 'russian-ruble', 'Рубль'], ['🧠', 'brain', 'ИИ'],
+  ['🎯', 'target', 'Цель'], ['⚡', 'zap', 'Быстро'], ['📦', 'package', 'Товар'],
+  ['✅', 'badge-check', 'Проверено'], ['🛡', 'shield-check', 'Гарантия'], ['🚚', 'truck', 'Доставка'],
+  ['🎁', 'gift', 'Подарок'], ['🆕', 'sparkles', 'Новое'], ['♻', 'recycle', 'Б/у'],
+  ['💿', 'disc-3', 'Диск'], ['☁', 'cloud-download', 'Цифра'], ['🗣', 'languages', 'Язык'],
+  ['🧾', 'receipt', 'Чек'], ['⭐', 'star', 'Звезда'], ['⏱', 'timer', 'Время'],
+  ['🎧', 'headphones', 'Звук'], ['📱', 'smartphone', 'Телефон'], ['🖥', 'monitor', 'Экран'],
+  ['🎸', 'guitar', 'Гитара'], ['🏷', 'tag', 'Скидка'], ['💬', 'message-circle', 'На связи'],
+  ['🔑', 'key-round', 'Ключ'],
+];
+// Имя значка приходит и из чужих данных (сервер, бэкап): «toString» или «constructor» —
+// тоже «есть в объекте», и рисование обложки падало бы на каждой перерисовке (ревью Ф5).
+// Поэтому только собственные ключи набора, кэш — Map без унаследованных свойств.
+function cvIconKnown(name) { return typeof name === 'string' && Object.hasOwn(CV_ICON_PATHS, name); }
+function cvIconD(name) { return cvIconKnown(name) ? CV_ICON_PATHS[name] : []; }
+const _cvIconP2D = new Map();
+function cvIconPaths(name) {
+  if (!_cvIconP2D.has(name)) _cvIconP2D.set(name, cvIconD(name).map(d => new Path2D(d)));
+  return _cvIconP2D.get(name);
+}
+// Значок в квадрате size с центром (cx, cy): штрих Lucide — 2 из 24, скруглённый
+function cvDrawIcon(ctx, name, cx, cy, size, color) {
+  const ps = cvIconPaths(name);
+  if (!ps.length) return;
+  ctx.save();
+  ctx.translate(cx - size / 2, cy - size / 2);
+  ctx.scale(size / 24, size / 24);
+  ctx.lineWidth = 2; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+  ctx.strokeStyle = color;
+  for (const p of ps) ctx.stroke(p);
+  ctx.restore();
+}
+// Ведущее эмодзи строки → { icon, text }; нет метки из набора — null (эмодзи остаётся текстом)
+const CV_ICON_LEAD = /^(\p{Extended_Pictographic}️?|[☀-➿]️?)\s*/u;
+const CV_ICON_VS16 = new Set(['✔', '♻', '☁', '⏱', '🛡', '🕹', '🗣', '🖥', '🏷']);
+function cvIconOf(line) {
+  const m = CV_ICON_LEAD.exec(line);
+  if (!m) return null;
+  const hit = CV_ICONS.find(([e]) => e === m[1].replace(/️/g, ''));
+  return hit ? { icon: hit[1], text: line.slice(m[0].length) } : null;
+}
+// Маленький SVG значка для кнопок меню (тот же рисунок, что на холсте)
+function cvIconSvg(name, px = 18) {
+  return `<svg viewBox="0 0 24 24" width="${px}" height="${px}" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:middle">${cvIconD(name).map(d => `<path d="${d}"/>`).join('')}</svg>`;
+}
 // Поля оформления, которые свой шаблон запоминает вместе со слоями (фон, эффекты, рамка)
 const CV_TPL_STYLE_KEYS = ['bg','bg2','bgStyle','vignette','grade','neonGap','neonColor','padding','margin','cellRadius','bgPattern','bgPatternAlpha','gamePad','gameCorner','gameBorder','gameBorderColor','gameShadow'];
 const CV_TPL_STYLE_PRE_F6 = { margin: null, cellRadius: null, bgPattern: 'none', bgPatternAlpha: 0.14 };
@@ -7024,7 +7094,8 @@ function cvLayerDefaults(type) {
     case 'sticker': return { ...b, ...tx, x: 0.8, y: 0.14, angle: -12, text: 'ХИТ', shape: 'burst', size: 180, bg: '#B45309', color: '#ffffff' };
     case 'ribbon':  return { ...b, ...tx, corner: 'tr', text: 'ПРЕДЗАКАЗ', size: 76, bg: '#dc2626', color: '#ffffff' };
     case 'text':    return { ...b, ...tx, shadow: true, text: 'Ваш текст', size: 80, color: '#ffffff', bold: true, bgOn: false, bgColor: '#000000', bgOpacity: 0.55 };
-    case 'infog':   return { ...b, ...tx, text: '', size: 38, bg: '#0f172a', opacity: 0.82, color: '#ffffff', align: 'left' };
+    case 'infog':   return { ...b, ...tx, text: '', size: 38, bg: '#0f172a', opacity: 0.82, color: '#ffffff', align: 'left', icons: true };
+    case 'icon':    return { ...b, x: 0.16, y: 0.13, icon: 'shield-check', size: 150, shape: 'circle', bg: '#0F766E', color: '#ffffff' };
     case 'plat':    return { ...b, plats: ['PS5'] };
   }
   return null;
@@ -7032,8 +7103,10 @@ function cvLayerDefaults(type) {
 // Слой, сохранённый до шрифтов и эффектов букв (localStorage, сервер, бэкап, свой шаблон):
 // надпись тогда сама отбрасывала тень, если у неё не было подложки. Переносим это в явный
 // флаг, иначе заводское shadow: true легло бы и на надписи с подложкой — обложка изменилась бы.
+// Инфографика до значков (Ф5) рисовала эмодзи — у неё значки выключены, вид не меняется.
 function cvLayerCompat(spec) {
   if (spec && spec.type === 'text' && !('shadow' in spec)) return { ...spec, shadow: !spec.bgOn };
+  if (spec && spec.type === 'infog' && !('icons' in spec)) return { ...spec, icons: false };
   return spec;
 }
 
@@ -7062,6 +7135,11 @@ function cvSanitizeLayers() {
       if ('plats' in d) o.plats = (Array.isArray(o.plats) ? o.plats : []).filter(id => CV_PLATFORMS.some(p => p.id === id));
       o.hidden = !!o.hidden;
       if ('stroke' in d) { o.stroke = !!o.stroke; o.shadow = !!o.shadow; }
+      if ('icons' in d) o.icons = !!o.icons;
+      if (L.type === 'icon') {
+        if (!cvIconKnown(o.icon)) o.icon = d.icon;
+        if (!CV_ICON_SHAPES.some(([s]) => s === o.shape)) o.shape = d.shape;
+      }
       return o;
     });
   cv.tpls = (Array.isArray(cv.tpls) ? cv.tpls : []).filter(t => t && t.id && t.name && Array.isArray(t.layers));
@@ -7110,7 +7188,7 @@ function cvLegacyLayers(o) {
     out.push(L);
   }
   if (String(o.infogText || '').trim()) {
-    const L = { ...cvLayerDefaults('infog'), hidden: !o.infog, text: o.infogText, size: num(o.infogSize) || 38,
+    const L = { ...cvLayerDefaults('infog'), icons: false, hidden: !o.infog, text: o.infogText, size: num(o.infogSize) || 38,
       bg: o.infogBg || '#0f172a', opacity: num(o.infogBgOpacity) ?? 0.82, color: o.infogColor || '#ffffff',
       align: o.infogAlign === 'right' ? 'right' : 'left' };
     const x = num(o.infogX), y = num(o.infogY);
@@ -7244,6 +7322,8 @@ function cvTextGeom(L) {
   return { fs, lines, lh, tw, w: tw + padX * 2, h: lines.length * lh + padY * 2 };
 }
 
+// Место значка в строке инфографики в кеглях: сам значок 1.05 + зазор до текста 0.35
+const CV_INFOG_ICON = 1.4;
 // shift вращает строки, но первая (название товара) остаётся на месте — ось антидубля «4 вариантов»
 function cvInfogLinesOf(text, shift) {
   let ls = cvLinesOf(text).slice(0, 6);
@@ -7260,15 +7340,18 @@ function cvInfogGeom(L, cw, shift) {
   const lines = cvInfogLinesOf(L.text, shift);
   const limit = cw * 0.92 / (L.scale || 1);
   let fs = +L.size || 38, widths = [], maxW = 0;
+  // Значки (Ф5): ведущее эмодзи из набора рисуется значком шириной в кегль, дальше — текст.
+  // Строка без метки из набора — как раньше, её ширина считается прежней формулой.
+  const items = lines.map(l => (L.icons && cvIconOf(l)) || null);
   for (let pass = 0; pass < 2; pass++) {
     ctx.font = cvFontStr(L, fs);
-    widths = lines.map(l => ctx.measureText(l).width + fs * 1.5 + 2 * cvStrokeEx(L, fs));
+    widths = lines.map((l, i) => (items[i] ? fs * CV_INFOG_ICON + ctx.measureText(items[i].text).width : ctx.measureText(l).width) + fs * 1.5 + 2 * cvStrokeEx(L, fs));
     maxW = widths.length ? Math.max(...widths) : 0;
     if (maxW <= limit || pass) break;
     fs = Math.max(12, Math.floor(fs * limit / maxW));
   }
   const bh = fs * 1.75, gap = fs * 0.42;
-  return { lines, fs, padX: fs * 0.75 + cvStrokeEx(L, fs), bh, gap, widths, w: maxW, h: lines.length ? lines.length * bh + (lines.length - 1) * gap : 0 };
+  return { lines, items, fs, padX: fs * 0.75 + cvStrokeEx(L, fs), bh, gap, widths, w: maxW, h: lines.length ? lines.length * bh + (lines.length - 1) * gap : 0 };
 }
 
 function cvPlatGeom(L) {
@@ -7288,6 +7371,7 @@ function cvLayerGeom(L, cw, shift) {
     case 'text':    return cvTextGeom(L);
     case 'infog':   return cvInfogGeom(L, cw, shift);
     case 'plat':    return cvPlatGeom(L);
+    case 'icon':    { const S = +L.size || 150; return { w: S, h: S }; }
   }
   return { w: 0, h: 0 };
 }
@@ -7491,7 +7575,11 @@ function cvDrawInfogLayer(ctx, L, g) {
     cvRR(ctx, px, py, w, g.bh, g.bh / 2); ctx.fillStyle = L.bg; ctx.fill();
     ctx.shadowColor = 'transparent'; ctx.shadowBlur = 0; ctx.shadowOffsetY = 0;
     ctx.globalAlpha = 1;
-    cvDrawLetters(ctx, L, l, px + g.padX, py + g.bh / 2 + g.fs * 0.04, g.fs);
+    const it = g.items && g.items[i];
+    if (it) {
+      cvDrawIcon(ctx, it.icon, px + g.padX + g.fs * 0.525, py + g.bh / 2, g.fs * 1.05, L.color);
+      cvDrawLetters(ctx, L, it.text, px + g.padX + g.fs * CV_INFOG_ICON, py + g.bh / 2 + g.fs * 0.04, g.fs);
+    } else cvDrawLetters(ctx, L, l, px + g.padX, py + g.bh / 2 + g.fs * 0.04, g.fs);
   });
   ctx.restore();
 }
@@ -7525,6 +7613,26 @@ function cvDrawLayer(ctx, L, cw, ch, shift) {
   else if (L.type === 'text') cvDrawTextLayer(ctx, L, g);
   else if (L.type === 'infog') cvDrawInfogLayer(ctx, L, g);
   else if (L.type === 'plat') cvDrawPlatLayer(ctx, L, g);
+  else if (L.type === 'icon') cvDrawIconLayer(ctx, L, g);
+  ctx.restore();
+}
+// Слой «Значок» (Ф5): значок в круге или квадрате цвета фона; «без фона» — крупнее, с тенью,
+// чтобы читался на пёстрой обложке
+function cvDrawIconLayer(ctx, L, g) {
+  const S = g.w;
+  ctx.save();
+  if (L.shape === 'none') {
+    ctx.shadowColor = 'rgba(0,0,0,0.55)'; ctx.shadowBlur = S * 0.08; ctx.shadowOffsetY = S * 0.02;
+    cvDrawIcon(ctx, L.icon, 0, 0, S * 0.92, L.color);
+  } else {
+    ctx.save();
+    ctx.shadowColor = 'rgba(0,0,0,0.35)'; ctx.shadowBlur = S * 0.12; ctx.shadowOffsetY = S * 0.03;
+    if (L.shape === 'square') cvRR(ctx, -S / 2, -S / 2, S, S, S * 0.22);
+    else { ctx.beginPath(); ctx.arc(0, 0, S / 2, 0, Math.PI * 2); }
+    ctx.fillStyle = L.bg; ctx.fill();
+    ctx.restore();
+    cvDrawIcon(ctx, L.icon, 0, 0, S * 0.58, L.color);
+  }
   ctx.restore();
 }
 // ov (переопределение для «✨ 4 варианта»): {align, bg, shift} для инфографики — сторона, цвет
@@ -7756,7 +7864,21 @@ function cvLayerClick(el) {
   if (ds.cvLa) return cvLayerAction(ds.cvLa);
   const L = cvSelLayer();
   if (!L) return;
-  if (ds.cvLv) { const i = ds.cvLv.indexOf(':'); L[ds.cvLv.slice(0, i)] = ds.cvLv.slice(i + 1); }
+  if (ds.cvIconIns) {
+    // метка значка — в начало строки, где стоял курсор поля «Строки»; прежняя метка заменяется.
+    // Строку берём из запомненной (cvIcoLineTrack), а не из курсора поля: меню после каждого
+    // щелчка пересобирается, у нового поля курсор в начале — второй щелчок подряд уходил
+    // в первую строку и затирал значок названия (ревью Ф5). Курсор не ставили — последняя строка.
+    // Символам, которые без U+FE0F рисуются чёрно-белым глифом, селектор добавляем —
+    // с выключенными значками строка покажет цветное эмодзи
+    const lines = String(L.text || '').split('\n');
+    const mem = cv._icoLine && cv._icoLine.id === L.id ? cv._icoLine.li : lines.length - 1;
+    const li = Math.max(0, Math.min(lines.length - 1, mem));
+    const e = ds.cvIconIns + (CV_ICON_VS16.has(ds.cvIconIns) ? '️' : '');
+    lines[li] = e + ' ' + lines[li].replace(CV_ICON_LEAD, '');
+    L.text = lines.join('\n');
+  }
+  else if (ds.cvLv) { const i = ds.cvLv.indexOf(':'); L[ds.cvLv.slice(0, i)] = ds.cvLv.slice(i + 1); }
   else if (ds.cvLt) L[ds.cvLt] = !L[ds.cvLt];
   else if (ds.cvLplat) {
     const on = new Set(L.plats || []);
@@ -7785,13 +7907,17 @@ function cvTplAction(a) {
 function cvApplyTpl(id) {
   const tpl = CV_TPL_BUILTIN.find(t => t.id === id) || (cv.tpls || []).find(t => t.id === id);
   if (!tpl) return;
+  const builtin = CV_TPL_BUILTIN.includes(tpl);
   cvLayersSnap(`шаблон «${tpl.name}»`);
   const [cw, ch] = CV_SZ[cv.ratio] || CV_SZ['4:5'];
   let emptyForm = false;
   cv.layers = (tpl.layers || []).map(spec => {
     const { place, fromForm, id: _old, ...rest } = spec;
     if (!CV_LAYER_TYPES[spec.type]) return null;
-    const L = { ...cvLayerDefaults(spec.type), ...cvLayerCompat(JSON.parse(JSON.stringify(rest))), id: cvNewLayerId() };
+    // готовые шаблоны — всегда текущие заводские поля (значки в «Карточке товара»),
+    // перевод старых полей нужен только своим, сохранённым раньше
+    const spec2 = JSON.parse(JSON.stringify(rest));
+    const L = { ...cvLayerDefaults(spec.type), ...(builtin ? spec2 : cvLayerCompat(spec2)), id: cvNewLayerId() };
     if (fromForm && L.type === 'infog') { L.text = cvInfogBuildLines().join('\n'); if (!L.text) emptyForm = true; }
     if (fromForm && L.type === 'plat') L.plats = cvFormPlats();
     if (place) cvPlaceLayer(L, place, cw, ch);
@@ -7806,7 +7932,7 @@ function cvApplyTpl(id) {
   cv._selLayer = null;
   cvLayersSnapDone();
   jCvBump('tpls');
-  jlog('cv_tpl', null, { tpl: tpl.name, builtin: !!CV_TPL_BUILTIN.find(t => t.id === id), layers: cv.layers.length });
+  jlog('cv_tpl', null, { tpl: tpl.name, builtin, layers: cv.layers.length });
   if (emptyForm) toast('Форма генератора пуста — строки инфографики впиши сам');
   render();
 }
@@ -8277,7 +8403,9 @@ function cvLayerRowsHTML() {
   // сверху — верхний слой, как в графических редакторах
   return (cv.layers || []).slice().reverse().map(L => {
     const d = CV_LAYER_TYPES[L.type];
-    const label = L.type === 'plat' ? ((L.plats || []).join(' / ') || '(пусто)') : (cvLinesOf(L.text)[0] || '(пусто)');
+    const label = L.type === 'plat' ? ((L.plats || []).join(' / ') || '(пусто)')
+      : L.type === 'icon' ? ((CV_ICONS.find(x => x[1] === L.icon) || [, , 'Значок'])[2])
+      : (cvLinesOf(L.text)[0] || '(пусто)');
     return `<div class="cv-lrow${L.id === cv._selLayer ? ' active' : ''}${L.hidden ? ' off' : ''}" data-cv-la="sel:${esc(L.id)}" title="${esc(d.name)}">
       <span>${d.icon}</span><span class="cv-lrow-name">${esc(label)}</span>
       <button class="cv-lrow-btn" data-cv-la="hide:${esc(L.id)}" title="${L.hidden ? 'Показать' : 'Скрыть'}">${L.hidden ? '🙈' : '👁'}</button>
@@ -8331,9 +8459,17 @@ function cvLayerEditorHTML(L) {
     case 'infog':
       body = row('Строки', area(4, '✔️ 405+ игр&#10;✔️ PS4 / PS5&#10;(строка = плашка, до 6)'), true)
         + `<button class="btn-sm" data-cv-la="fill" style="margin:6px 0 2px">⚡ Заполнить из формы генератора</button>`
+        + row('Значки', toggle('icons'))
+        + (L.icons ? row('Вставить', `<div class="cv-icon-pal">${CV_ICONS.map(([e, n, t]) => `<button class="cv-icon-btn" data-cv-icon-ins="${e}" title="${t} — в начало строки, где курсор">${cvIconSvg(n)}</button>`).join('')}</div>`, true) : '')
         + row('Выравнив.', choice('align', [['left', '⬅ По левому'], ['right', '➡ По правому']]))
         + row('Плашка', swatches('bg', CV_SC)) + row('Плотность', range('opacity', 20, 100))
         + letters();
+      break;
+    case 'icon':
+      body = row('Значок', `<div class="cv-icon-pal">${CV_ICONS.map(([, n, t]) => `<button class="cv-icon-btn ${L.icon === n ? 'active' : ''}" data-cv-lv="icon:${n}" title="${t}">${cvIconSvg(n)}</button>`).join('')}</div>`, true)
+        + row('Форма', choice('shape', CV_ICON_SHAPES))
+        + (L.shape !== 'none' ? row('Фон', swatches('bg', CV_SC)) : '')
+        + row('Цвет', swatches('color', CV_STC));
       break;
     case 'plat':
       body = row('Какие', `<div class="cv-layouts" style="flex:1;margin-top:0">${CV_PLATFORMS.map(p => {
@@ -8721,6 +8857,14 @@ function bindCoversTab() {
   // карточка элементов перерисовывается при каждой смене выбора и своих слушателей не держит
   if (!window._cvLayerInputBound) {
     window._cvLayerInputBound = true;
+    // Строка под курсором поля «Строки» инфографики — для палитры значков (см. cvLayerClick)
+    const icoTrack = e => {
+      const ta = e.target.closest && e.target.closest('#cv-layers-card [data-cv-lp="text"]');
+      const L = ta && cvSelLayer();
+      if (!L || L.type !== 'infog') return;
+      cv._icoLine = { id: L.id, li: ta.value.slice(0, ta.selectionStart).split('\n').length - 1 };
+    };
+    for (const ev of ['input', 'keyup', 'mouseup', 'focusin', 'select']) document.addEventListener(ev, icoTrack);
     document.addEventListener('input', e => {
       const el = e.target.closest && e.target.closest('[data-cv-lp]');
       if (!el) return;
@@ -10475,7 +10619,7 @@ function reDurs() {
 
 document.addEventListener('click', e => {
   // Обложки: слои оформления и шаблоны
-  const cvLay = e.target.closest('[data-cv-la],[data-cv-lv],[data-cv-lt],[data-cv-lplat],[data-cv-tpl]');
+  const cvLay = e.target.closest('[data-cv-la],[data-cv-lv],[data-cv-lt],[data-cv-lplat],[data-cv-tpl],[data-cv-icon-ins]');
   if (cvLay) { cvLayerClick(cvLay); return; }
   // Covers module — data-cv-* attributes
   const cvEl = e.target.closest('[data-cv-mode],[data-cv-layout],[data-cv-ratio],[data-cv-bg],[data-cv-bg-style],[data-cv-toggle],[data-cv-grade],[data-cv-del],[data-cv-tz],[data-cv-src],[data-cv-game-fit],[data-cv-game-fill],[data-cv-pattern],[data-cv-geo-auto],[data-cv-cell-fit],[data-cv-adj-act]');
