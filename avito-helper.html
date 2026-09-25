@@ -6479,6 +6479,10 @@ async function cvFetchFromPS() {
 function cvRemoveImage(idx) {
   URL.revokeObjectURL(cv.images[idx]?.url);
   cv.images.splice(idx, 1);
+  // Выбор ячейки — номер фото: удалили выбранное — выбора нет, удалили левее — номер сдвигается.
+  // Иначе коррекция и масштаб молча переезжали на соседнее фото (ревью Ф3, 25.09)
+  const s = cv._selCell;
+  if (s !== null && s !== undefined) cv._selCell = s === idx ? null : s > idx ? s - 1 : s;
   cvRenderState();
 }
 
@@ -6513,6 +6517,7 @@ function cvRenderState() {
   if (grid && !grid.querySelector('canvas'))
     grid.innerHTML = `<p class="cv-no-image">${cv.images.length ? 'Нажмите «Сгенерировать 4 варианта»' : 'Загрузите обложку игры'}</p>`;
 
+  cvRefreshAdjCard();   // выбор ячейки или набор картинок сменились — коррекция другого фото
   const tzArea = document.getElementById('cv-tz-area');
   if (tzArea && cv.mode === 'collage') {
     if (cv._selCell !== null && cv._selCell !== undefined && cv.images[cv._selCell]) {
@@ -6632,13 +6637,106 @@ function cvDrawBlurFill(ctx, img, x, y, w, h, r) {
   ctx.restore();
 }
 
+// ── Коррекция фото (план Fotor, Ф3, 25.09.2026) ──
+// У картинки im.adj = { b, c, s, sh }: яркость, контраст, насыщенность ±0.3 и резкость 0…0.3 —
+// мягко, по решению Дениса: вытянуть фото с телефона, а не сделать из него рекламный рендер.
+// Попиксельно, а не ctx.filter: фильтр холста в Safari на iPhone ненадёжен. Исправленная копия
+// кэшируется на картинке и пересчитывается только при смене настроек; крупное фото ужимается
+// до 2000 px по длинной стороне без увеличения кадра, больше — при увеличении (cvAdjCap).
+const CV_ADJ_KEYS = [['b', 'Яркость', -30, 30], ['c', 'Контраст', -30, 30], ['s', 'Насыщенность', -30, 30], ['sh', 'Резкость', 0, 30]];
+function cvAdjActive(a) { return !!a && CV_ADJ_KEYS.some(([k]) => Math.abs(+a[k] || 0) > 0.001); }
+function cvAdjClamp(a) {
+  const out = {};
+  for (const [k, , lo, hi] of CV_ADJ_KEYS) { const v = +(a && a[k]); out[k] = Number.isFinite(v) ? Math.max(lo / 100, Math.min(hi / 100, v)) : 0; }
+  return out;
+}
+// Предел копии по длинной стороне — ступенями от увеличения кадра: при 300 % видна треть
+// фото, и копия в 2000 px мылила бы её (ревью Ф3, 25.09). Ступени, а не точный масштаб,
+// чтобы копия не пересчитывалась на каждом шаге ползунка масштаба.
+function cvAdjCap(im) { const z = im?.transform?.scale || 1; return z <= 1.01 ? 2000 : z <= 2 ? 4000 : 8000; }
+function cvApplyAdj(src, a, cap = 2000) {
+  const W0 = src.naturalWidth || src.width, H0 = src.naturalHeight || src.height;
+  const k = Math.min(1, cap / Math.max(W0, H0));
+  const W = Math.max(1, Math.round(W0 * k)), H = Math.max(1, Math.round(H0 * k));
+  const oc = document.createElement('canvas'); oc.width = W; oc.height = H;
+  const g = oc.getContext('2d');
+  g.drawImage(src, 0, 0, W, H);
+  const id = g.getImageData(0, 0, W, H), d = id.data;
+  const kb = 1 + a.b, kc = 1 + a.c, ks = 1 + a.s;
+  // Контраст разводит тона вокруг средней яркости САМОГО фото, а не середины шкалы: вокруг 128
+  // он утаскивал тёмный снимок ещё глубже в тень и съедал прибавку яркости (так было в первой
+  // версии «Авто»). Среднее — по каждому 16-му пикселю, этого хватает.
+  let ys = 0, yn = 0;
+  for (let i = 0; i < d.length; i += 64) { ys += 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2]; yn++; }
+  const pv = (yn ? ys / yn : 128) * kb;
+  for (let i = 0; i < d.length; i += 4) {
+    let r = d[i] * kb, gg = d[i + 1] * kb, bl = d[i + 2] * kb;
+    r = (r - pv) * kc + pv; gg = (gg - pv) * kc + pv; bl = (bl - pv) * kc + pv;
+    const y = 0.299 * r + 0.587 * gg + 0.114 * bl;
+    d[i] = y + (r - y) * ks; d[i + 1] = y + (gg - y) * ks; d[i + 2] = y + (bl - y) * ks;   // Uint8Clamped сам режет 0…255
+  }
+  if (a.sh > 0.001) {
+    // нерезкое маскирование крестом 3×3: пиксель + доля его разницы с соседями
+    const s = new Uint8ClampedArray(d), q = a.sh * 2, row = W * 4;
+    for (let y = 1; y < H - 1; y++) for (let x = 1; x < W - 1; x++) {
+      const i = y * row + x * 4;
+      for (let c = 0; c < 3; c++) {
+        const v = s[i + c];
+        d[i + c] = v + q * (4 * v - s[i + c - 4] - s[i + c + 4] - s[i + c - row] - s[i + c + row]);
+      }
+    }
+  }
+  g.putImageData(id, 0, 0);
+  oc.naturalWidth = W; oc.naturalHeight = H;   // для cvFit/cvFitSrcRect — как у картинки
+  return oc;
+}
+// Что рисовать вместо картинки: исходник или исправленная копия (из кэша)
+function cvSrc(im) {
+  if (!im || !cvAdjActive(im.adj)) return im?.el;
+  const cap = cvAdjCap(im), key = JSON.stringify(cvAdjClamp(im.adj)) + '@' + cap;
+  if (!im._adjC || im._adjC.key !== key || im._adjC.el !== im.el) im._adjC = { key, el: im.el, canvas: cvApplyAdj(im.el, cvAdjClamp(im.adj), cap) };
+  return im._adjC.canvas;
+}
+// «Авто»: по уменьшенной копии — перцентили яркости 1 %/99 % и средняя яркость, средняя
+// насыщенность. Результат — значения ползунков в тех же мягких пределах, их видно и можно докрутить.
+function cvAutoAdj(im) {
+  const src = im.el, W0 = src.naturalWidth || src.width, H0 = src.naturalHeight || src.height;
+  const k = Math.min(1, 200 / Math.max(W0, H0));
+  const c = document.createElement('canvas'); c.width = Math.max(1, Math.round(W0 * k)); c.height = Math.max(1, Math.round(H0 * k));
+  const g = c.getContext('2d'); g.drawImage(src, 0, 0, c.width, c.height);
+  const d = g.getImageData(0, 0, c.width, c.height).data;
+  const hist = new Array(256).fill(0); let n = 0, sum = 0, sat = 0;
+  for (let i = 0; i < d.length; i += 4) {
+    const y = Math.round(0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2]);
+    hist[y]++; n++; sum += y;
+    const mx = Math.max(d[i], d[i + 1], d[i + 2]), mn = Math.min(d[i], d[i + 1], d[i + 2]);
+    sat += mx ? (mx - mn) / mx : 0;
+  }
+  const pct = p => { let acc = 0; for (let v = 0; v < 256; v++) { acc += hist[v]; if (acc >= n * p) return v; } return 255; };
+  const lo = pct(0.01), hi = pct(0.99), mean = sum / n / 255, msat = sat / n;
+  const r2 = v => Math.round(v * 100) / 100;
+  // яркость — только если фото заметно темнее или светлее середины; контраст — если тона
+  // (с учётом новой яркости) занимают меньше 85 % шкалы. Мягкость — тем же пределом ±30 %.
+  const b = mean < 0.42 ? 0.45 / Math.max(mean, 0.01) - 1 : mean > 0.62 ? 0.6 / mean - 1 : 0;
+  const range = (hi - lo) * (1 + Math.max(-0.3, Math.min(0.3, b))) / 255;
+  return cvAdjClamp({
+    b: r2(b),
+    c: r2(range < 0.85 ? (0.85 / Math.max(range, 0.01) - 1) * 0.6 : 0),
+    // только приглушённому цвету: почти серое фото (чёрная консоль на белом) насыщенность не
+    // получает — усилился бы лишь цветовой шум камеры
+    s: r2(msat > 0.08 && msat < 0.25 ? (0.25 - msat) * 0.8 : 0),
+    sh: 0.1,
+  });
+}
+
 // Картинка в прямоугольной ячейке коллажа: заполнить со срезом или вписать целиком (Ф6) —
 // поля ячейки тогда её же размытая копия, как у обложки в режиме «Игра»
 function cvFitCell(ctx, im, x, y, w, h, r) {
+  const el = cvSrc(im);
   if (im.fit === 'contain') {
-    cvDrawBlurFill(ctx, im.el, x, y, w, h, r);
-    cvFit(ctx, im.el, x, y, w, h, r, im.transform, 'contain');
-  } else cvFit(ctx, im.el, x, y, w, h, r, im.transform);
+    cvDrawBlurFill(ctx, el, x, y, w, h, r);
+    cvFit(ctx, el, x, y, w, h, r, im.transform, 'contain');
+  } else cvFit(ctx, el, x, y, w, h, r, im.transform);
 }
 
 // Рамка, в которую рисуется картинка: нужна, чтобы ограничить сдвиг сразу при действии,
@@ -6807,7 +6905,7 @@ function cvDrawCirc4(ctx, imgs, cw, ch, p, cr) {
   });
   // Круг сверху по центру, перекрывает стык 4 блоков
   const r = Math.floor(Math.min(cw, ch) * 0.30);
-  const img = imgs[0].el;
+  const img = cvSrc(imgs[0]);
   const d = r * 2;
   const { sx, sy, sw, sh } = cvFitSrcRect(img, d, d, imgs[0].transform);
   ctx.save();
@@ -6844,12 +6942,12 @@ function cvDrawCirc4D(ctx, imgs, cw, ch, p, cr) {
     poly.forEach(([x,y], k) => k === 0 ? ctx.moveTo(x,y) : ctx.lineTo(x,y));
     ctx.closePath(); ctx.clip();
     // cvFit с transform, а не cvFitClip: иначе сдвиг и масштаб треугольника игнорировались
-    cvFit(ctx, imgs[i + 1].el, bx, by, bw, bh, 0, imgs[i + 1].transform);
+    cvFit(ctx, cvSrc(imgs[i + 1]), bx, by, bw, bh, 0, imgs[i + 1].transform);
     ctx.restore();
   });
   // Круг сверху по центру, перекрывает стык 4 квадрантов
   const r = Math.floor(Math.min(cw, ch) * 0.30);
-  const img = imgs[0].el;
+  const img = cvSrc(imgs[0]);
   const d = r * 2;
   const { sx, sy, sw, sh } = cvFitSrcRect(img, d, d, imgs[0].transform);
   ctx.save();
@@ -7874,7 +7972,7 @@ function cvDrawDiagStripes(ctx, imgs, cw, ch, p) {
     ctx.closePath(); ctx.clip();
     const xs = poly.map(pt=>pt[0]), ys = poly.map(pt=>pt[1]);
     const bx = Math.min(...xs), by = Math.min(...ys);
-    cvFitClip(ctx, imgs[i].el, bx, by, Math.max(...xs)-bx, Math.max(...ys)-by);
+    cvFitClip(ctx, cvSrc(imgs[i]), bx, by, Math.max(...xs)-bx, Math.max(...ys)-by);
     ctx.restore();
   }
 }
@@ -7898,7 +7996,7 @@ function cvDrawStack(ctx, imgs, cw, ch, p) {
     cvRR(ctx, x, y, cardW, cardH, cr); ctx.fillStyle = '#fff'; ctx.fill();
     ctx.shadowColor = 'transparent'; ctx.shadowBlur = 0; ctx.shadowOffsetY = 0;
     ctx.save(); cvRR(ctx, x, y, cardW, cardH, cr); ctx.clip();
-    cvFitClip(ctx, img.el, x, y, cardW, cardH);
+    cvFitClip(ctx, cvSrc(img), x, y, cardW, cardH);
     ctx.restore();
     ctx.restore();
   });
@@ -8007,8 +8105,9 @@ function cvDrawGame(canvas, imgObj, opts) {
     // Вписанная обложка не закрывает рамку целиком — поля под ней должны быть фоном, а не чёрной подложкой тени
     if (contain && cv.gameFill !== 'blur') { ctx.save(); cvRR(ctx, pad, pad, fw, fh, cr); ctx.fillStyle = bgFill; ctx.fill(); cvPatternInPath(ctx, cvBgTones(opts)); ctx.restore(); }
   }
-  if (contain && cv.gameFill === 'blur') cvDrawBlurFill(ctx, imgObj.el, pad, pad, fw, fh, cr);
-  cvFit(ctx, imgObj.el, pad, pad, fw, fh, cr, imgObj.transform, cv.gameFit);
+  const src = cvSrc(imgObj);   // с коррекцией фото (Ф3), если она задана
+  if (contain && cv.gameFill === 'blur') cvDrawBlurFill(ctx, src, pad, pad, fw, fh, cr);
+  cvFit(ctx, src, pad, pad, fw, fh, cr, imgObj.transform, cv.gameFit);
   // Обводка по краю картинки
   if (cv.gameBorder > 0) {
     ctx.save();
@@ -8278,6 +8377,51 @@ function cvLayersCardHTML() {
   </div>`;
 }
 
+// Карточка «Коррекция фото» (Ф3): в «Игре» — обложка, в коллаже — выбранная щелчком ячейка
+function cvAdjTarget() {
+  if (cv.mode === 'game') return cv.images[0] || null;
+  return (cv._selCell !== null && cv._selCell !== undefined && cv.images[cv._selCell]) || null;
+}
+function cvAdjCardHTML() {
+  const im = cvAdjTarget(), collage = cv.mode === 'collage';
+  const sub = collage && im ? ` <span style="font-size:10px;font-weight:400;color:var(--muted)">— фото ${cv._selCell + 1}</span>` : '';
+  const head = `<div class="card" id="cv-adj-card"><div class="card-title">🎛 Коррекция фото${sub}</div>`;
+  if (!im) return head + `<div style="font-size:12px;color:var(--muted);font-style:italic">${
+    !cv.images.length ? (collage ? 'Загрузи фото' : 'Загрузи обложку') : 'Щёлкни фото на превью — его и поправим'}</div></div>`;
+  const a = cvAdjClamp(im.adj);
+  const pct = v => (v > 0 ? '+' : '') + v + '%';
+  const rows = CV_ADJ_KEYS.map(([k, l, lo, hi]) => { const v = Math.round(a[k] * 100); return `<div class="cv-row"><label>${l}</label>
+    <input type="range" data-cv-adj="${k}" min="${lo}" max="${hi}" value="${v}"><span class="cv-val" data-cv-adj-val="${k}">${pct(v)}</span></div>`; }).join('');
+  return head + rows + `<div class="cv-layouts" style="margin-top:8px">
+    <button class="btn-sm" data-cv-adj-act="auto" title="Подобрать яркость, контраст и насыщенность по этому фото">✨ Авто</button>
+    <button class="btn-sm" data-cv-adj-act="reset" ${cvAdjActive(im.adj) ? '' : 'disabled'}>↺ Сбросить</button>
+    ${collage && cv.images.length > 1 ? `<button class="btn-sm" data-cv-adj-act="all" title="Те же настройки — всем фото коллажа (снимки одной съёмки)">Ко всем фото</button>` : ''}
+  </div></div>`;
+}
+function cvRefreshAdjCard() {
+  const c = document.getElementById('cv-adj-card');
+  if (c) c.outerHTML = cvAdjCardHTML();
+}
+// Пересчёт исправленной копии тяжёлый — ползунок перерисовывает не чаще кадра экрана
+let _cvAdjRaf = 0;
+function cvAdjRedraw() {
+  if (_cvAdjRaf) return;
+  _cvAdjRaf = requestAnimationFrame(() => { _cvAdjRaf = 0; cvReDraw(); });
+}
+function cvAdjAction(act) {
+  const im = cvAdjTarget();
+  if (!im) return;
+  jCvBump('adj');
+  if (act === 'auto') im.adj = cvAutoAdj(im);
+  else if (act === 'reset') im.adj = null;
+  else if (act === 'all') {
+    const a = cvAdjActive(im.adj) ? cvAdjClamp(im.adj) : null;
+    cv.images.forEach(x => { x.adj = a ? { ...a } : null; });
+    toast(`Коррекция применена ко всем фото (${cv.images.length})`);
+  }
+  cvRefreshAdjCard(); cvReDraw();
+}
+
 // Ползунок поля или скругления коллажа (Ф6): null — «как было» (поле = шву, радиус от шва),
 // ползунок тогда показывает текущее расчётное значение; кнопка возвращает к «как было»
 function cvGeoVal(key) { return Math.round(key === 'margin' ? cvMargin() : cvCellRadius()); }
@@ -8368,6 +8512,7 @@ function coversTabHTML() {
           ${cvLayoutButtonsHTML(cv.layout, cv.images.length)}
         </div>
       </div>
+      ${cvAdjCardHTML()}
       ${layersSection}
       ${effectsSection}
       <div class="card">
@@ -8468,6 +8613,7 @@ function coversTabHTML() {
             `<button class="cv-layout-btn ${cv.ratio===r?'active':''}" data-cv-ratio="${r}">${lbl}</button>`).join('')}
         </div>
       </div>
+      ${cvAdjCardHTML()}
       ${layersSection}
       ${effectsSection}
       <button class="btn-gen" id="cv-download" data-act="cv-download" ${!cv.images.length?'disabled':''}>⬇ Скачать JPEG</button>
@@ -8522,9 +8668,25 @@ function bindCoversTab() {
     if (v) v.textContent = e.target.value + '%';
     cvReDraw();
   });
-  // Поле и углы коллажа — делегированием: строки пересоздаются при смене шва и кнопке «как было»
+  // Поле и углы коллажа, ползунки коррекции фото — делегированием: строки и карточка
+  // пересоздаются при смене шва, выборе ячейки и кнопках «как было» / «Авто»
   if (!window._cvGeoBound) {
     window._cvGeoBound = true;
+    document.addEventListener('input', e => {
+      const el = e.target.closest && e.target.closest('[data-cv-adj]');
+      if (!el) return;
+      const im = cvAdjTarget();
+      if (!im) return;
+      const k = el.dataset.cvAdj, v = +el.value;
+      im.adj = { ...cvAdjClamp(im.adj), [k]: v / 100 };
+      const out = document.querySelector(`[data-cv-adj-val="${k}"]`);
+      if (out) out.textContent = (v > 0 ? '+' : '') + v + '%';
+      const rs = document.querySelector('[data-cv-adj-act="reset"]');
+      if (rs) rs.disabled = !cvAdjActive(im.adj);
+      cvAdjRedraw();
+    });
+    // счётчик журнала — раз на движение ползунка, а не на каждый его шаг
+    document.addEventListener('change', e => { if (e.target.closest && e.target.closest('[data-cv-adj]')) jCvBump('adj'); });
     document.addEventListener('input', e => {
       const el = e.target.closest && e.target.closest('[data-cv-geo]');
       if (!el) return;
@@ -10316,8 +10478,9 @@ document.addEventListener('click', e => {
   const cvLay = e.target.closest('[data-cv-la],[data-cv-lv],[data-cv-lt],[data-cv-lplat],[data-cv-tpl]');
   if (cvLay) { cvLayerClick(cvLay); return; }
   // Covers module — data-cv-* attributes
-  const cvEl = e.target.closest('[data-cv-mode],[data-cv-layout],[data-cv-ratio],[data-cv-bg],[data-cv-bg-style],[data-cv-toggle],[data-cv-grade],[data-cv-del],[data-cv-tz],[data-cv-src],[data-cv-game-fit],[data-cv-game-fill],[data-cv-pattern],[data-cv-geo-auto],[data-cv-cell-fit]');
+  const cvEl = e.target.closest('[data-cv-mode],[data-cv-layout],[data-cv-ratio],[data-cv-bg],[data-cv-bg-style],[data-cv-toggle],[data-cv-grade],[data-cv-del],[data-cv-tz],[data-cv-src],[data-cv-game-fit],[data-cv-game-fill],[data-cv-pattern],[data-cv-geo-auto],[data-cv-cell-fit],[data-cv-adj-act]');
   if (cvEl) {
+    if (cvEl.dataset.cvAdjAct) { cvAdjAction(cvEl.dataset.cvAdjAct); return; }
     if (cvEl.dataset.cvPattern) {
       cv.bgPattern = cvEl.dataset.cvPattern;
       render(); cvReDraw(); return;
@@ -10349,6 +10512,7 @@ document.addEventListener('click', e => {
       if (cvEl.classList.contains('dimmed')) return;
       jCvBump('layouts');
       cv.layout = cvEl.dataset.cvLayout; cv._selCell = null;
+      cvRefreshAdjCard();
       const lb = document.getElementById('cv-layouts-box');
       if (lb) lb.innerHTML = cvLayoutButtonsHTML(cv.layout, cv.images.length);
       const c = document.getElementById('cv-canvas');
@@ -10369,6 +10533,7 @@ document.addEventListener('click', e => {
     }
     if (cvEl.dataset.cvRatio) {
       cv.ratio = cvEl.dataset.cvRatio; cv._selCell = null;
+      cvRefreshAdjCard();
       document.querySelectorAll('[data-cv-ratio]').forEach(b => b.classList.toggle('active', b.dataset.cvRatio === cv.ratio));
       cvReDraw(); return;
     }
