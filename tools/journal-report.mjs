@@ -293,7 +293,9 @@ if (unc.length && !picks.length) {
 sub('Товар в интерьере (2б)');
 const staged = ev.filter(e => e.event === 'staged');
 const stGen = staged.filter(e => e.phase === 'generate');
-const stDl = staged.filter(e => e.phase === 'download');
+// скачивания серий — отдельно ниже: иначе доля «дошло до скачивания» по одиночным
+// кадрам смешивалась бы с сериями и могла перевалить за 100 % (ревью серии)
+const stDl = staged.filter(e => e.phase === 'download' && !e.series);
 console.log(`   Сгенерировано: ${stGen.length} · скачано: ${stDl.length}`);
 if (stGen.length) {
   sub('Сцены');
@@ -305,6 +307,17 @@ if (stGen.length) {
   // уже достаточен и «финал» можно не оплачивать.
   console.log(`\n   Дошло до скачивания: ${pct(stDl.length, stGen.length)} генераций`);
   if (!stDl.length) console.log('   ⚠️ Ни одна картинка не скачана — сцены генерируются и выбрасываются.');
+}
+// Серия (с 28.09.2026): phase series — по кадру на ракурс; index 0 — первый кадр,
+// room — шёл ли первый кадр образцом комнаты. Скачивание серии — phase download + series
+const stSer = staged.filter(e => e.phase === 'series');
+if (stSer.length) {
+  const firsts = stSer.filter(e => e.index === 0).length;
+  const rest = stSer.filter(e => e.index > 0);
+  console.log(`\n   Серии: первых кадров ${firsts} · остальных кадров ${rest.length} (с образцом комнаты — ${rest.filter(e => e.room).length})`);
+  const serDl = staged.filter(e => e.phase === 'download' && e.series);
+  console.log(`   «Скачать все» по сериям: ${serDl.length} раз, файлов ${serDl.reduce((a, e) => a + (+e.count || 0), 0)}`);
+  if (firsts && !rest.length) console.log('   ⚠️ Первые кадры есть, остальных нет — комната на первом кадре не устраивает или цена пугает.');
 }
 
 h('8. ОБЛОЖКИ');

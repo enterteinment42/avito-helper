@@ -23,6 +23,7 @@ import { runCollage } from './collage.mjs';
 import { runAdjust } from './adjust.mjs';
 import { runIcons } from './icons.mjs';
 import { runBrand } from './brand.mjs';
+import { runSeries } from './series.mjs';
 
 const only = process.argv[2]; // node run.mjs parity|editor|regress — прогнать одну секцию
 
@@ -43,6 +44,7 @@ try {
   if (!only || only === 'fewshot') await runFewshot(browser, base, t);
   if (!only || only === 'journal') await runJournal(browser, base, t);
   if (!only || only === 'staged')  await runStaged(browser, base, t);
+  if (!only || only === 'series')  await runSeries(browser, base, t);
   if (!only || only === 'backup')  await runBackup(browser, base, t);
   if (!only || only === 'sync')    await runSync(browser, base, t);
   if (!only || only === 'truncate') await runTruncate(browser, base, t);

@@ -476,6 +476,18 @@
        по высоте, а не по ширине — иначе на телефоне она занимает весь экран. */
     .staged-out { display: flex; flex-direction: column; gap: 6px; }
     .staged-out img { max-width: 100%; max-height: 380px; width: auto; border-radius: var(--rs); border: 1px solid var(--border2); display: block; }
+    /* Серия 2б: ракурсы и кадры */
+    .staged-angles { display: flex; flex-wrap: wrap; gap: 6px; }
+    .staged-angle { position: relative; width: 54px; height: 54px; border-radius: var(--rs); border: 1px solid var(--border2); overflow: hidden; display: flex; align-items: center; justify-content: center; flex-direction: column; font-size: 18px; color: var(--muted); box-sizing: border-box; }
+    .staged-angle img { width: 100%; height: 100%; object-fit: cover; }
+    .staged-angle b, .staged-cell b { position: absolute; left: 3px; bottom: 2px; font-size: 10px; color: #fff; background: rgba(0,0,0,.6); border-radius: 4px; padding: 0 4px; }
+    .staged-angle small { font-size: 9px; }
+    .staged-angle-add { cursor: pointer; border-style: dashed; }
+    .staged-angle-add.busy { cursor: not-allowed; opacity: .5; }
+    .staged-angle-del { position: absolute; top: 1px; right: 1px; width: 18px; height: 18px; padding: 0; border: none; border-radius: 50%; background: rgba(0,0,0,.65); color: #fff; font-size: 12px; line-height: 18px; cursor: pointer; }
+    .staged-series { display: grid; grid-template-columns: repeat(auto-fill, minmax(72px, 110px)); gap: 6px; }
+    .staged-cell { position: relative; aspect-ratio: 3 / 4; border-radius: var(--rs); border: 1px solid var(--border2); overflow: hidden; display: flex; align-items: center; justify-content: center; font-size: 11px; color: var(--muted); text-align: center; }
+    .staged-cell img { width: 100%; height: 100%; object-fit: cover; }
 
     .batch-toggle-row { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; }
     .batch-toggle-label { font-size: 13px; color: var(--text2); cursor: pointer; user-select: none; }
@@ -892,8 +904,8 @@ function sceneEnsureValid() {
 // уложилось в вилку 0.016…0.060). Черновик стоит первым и стоит по умолчанию:
 // сцену подбирают несколькими попытками, и платить за них по финальной ставке незачем.
 const STAGED_QUALITIES = [
-  { id: 'medium', label: '✏️ Черновик', hint: 'подобрать сцену, ~$0.02' },
-  { id: 'high',   label: '💎 Финал',    hint: 'кадр в объявление, ~$0.06' },
+  { id: 'medium', label: '✏️ Черновик', hint: 'подобрать сцену, ~$0.02', usd: 0.023 },
+  { id: 'high',   label: '💎 Финал',    hint: 'кадр в объявление, ~$0.06', usd: 0.06 },
 ];
 
 // Чистое состояние карточки распознавания и интерьера. Одно место на всех:
@@ -916,6 +928,11 @@ function freshVision() {
       quality: STAGED_QUALITIES[0].id, // черновик/финал — рычаг цены, см. STAGED_QUALITIES
       extra: '',                       // уточнение сцены словами
       count: 0,                        // сколько раз генерировали (для имени файла)
+      // Серия (28.09.2026): свои ракурсы товара сверх фото распознавания, до STAGED_SERIES_MAX
+      // всего. Есть хоть один — карточка работает сериями: сначала первый кадр, потом остальные
+      angles: [],                      // [{ dataUrl }] — ужатые JPEG, как фото распознавания
+      oneRoom: true,                   // первый кадр — вторым референсом: одна комната на серию
+      series: null,                    // { scene, quality, extra, items: [{ dataUrl, error }] }
     },
   };
 }
@@ -2432,6 +2449,7 @@ const J_UI_ACTS = new Set([
   'db-rotate','db-rot-panel','db-rot-posted','db-show-due',
   'vision-recognize','vision-price','vision-apply-price','vision-covers','vision-undo','vision-pick',
   'staged-gen','staged-covers','staged-download','staged-scene','staged-quality',
+  'staged-series-first','staged-series-rest','staged-series-covers','staged-series-download',
 ]);
 
 // Повторный клик по кнопке, чья операция УЖЕ идёт, — это нетерпение, а не
@@ -2461,8 +2479,9 @@ function jActBusy(act, el) {
       case 'ref-tricks':                                  return !!state._refTricksLoading;
       case 'vision-recognize':                            return state.vision.loading;
       case 'vision-price':                                return state.vision.priceLoading;
-      case 'staged-gen':                                  return state.vision.staged.loading;
-      default:                                            return false;
+      case 'staged-gen': case 'staged-series-first':
+      case 'staged-series-rest':                          return state.vision.staged.loading;
+      default:                                           return false;
     }
   } catch(e) { return false; }
 }
@@ -4368,6 +4387,8 @@ async function visionPick(file) {
     // значило бы показывать сцену чужого товара. Сцену и уточнение сохраняем:
     // это выбор человека, а не результат. Счётчик обнуляем — он про это фото.
     v.staged.img = null; v.staged.error = ''; v.staged.count = 0;
+    // Ракурсы и серия — тоже про прежний товар
+    v.staged.angles = []; v.staged.series = null;
     reForm();
   } catch (e) {
     v.error = e.message || 'Не удалось прочитать фото';
@@ -4632,8 +4653,9 @@ const STAGED_ASPECT = '3:4';
 
 function stagedScene(id) { return sceneById(id); }
 
-function stagedPrompt() {
-  const st = state.vision.staged;
+// o — снимок { scene, extra } серии; без него — то, что выбрано в карточке сейчас
+function stagedPrompt(o) {
+  const st = o || state.vision.staged;
   const sc = stagedScene(st.scene);
   const extra = st.extra.trim();
   // Название товара даём как подсказку, а не как задание «нарисуй такой товар»:
@@ -4697,6 +4719,40 @@ function stagedExtractImage(d) {
   throw new Error(`Картинки нет в ответе (получено: ${keys}${inner})`);
 }
 
+// Один запрос к /api/image → data-URL картинки. refs — data-URL референсов по порядку.
+// Лимит тела у маршрута свой, 4 МБ (OPENROUTER_IMAGE_BODY_LIMIT): считаем ДО отправки,
+// иначе серия получала бы 413 уже после выбора и ожидания.
+const STAGED_BODY_MAX = 3500000;
+async function stagedRequest(prompt, refs, quality) {
+  const body = JSON.stringify({
+    prompt,
+    // Форма референса — единственная, которую принимает вендор; см. комментарий
+    // к /api/image в poigraem-backend. Имена ниже — в ЕДИНСТВЕННОМ числе:
+    // множественные вендор молча выбрасывал, и кадр приходил квадратом
+    // дефолтного качества (замер 13.09).
+    input_references: refs.map(url => ({ type: 'image_url', image_url: { url } })),
+    aspect_ratio: STAGED_ASPECT,
+    quality,
+  });
+  if (body.length > STAGED_BODY_MAX) throw new Error(`Запрос слишком тяжёлый для сервера (${Math.round(body.length / 1e6 * 10) / 10} МБ из 4) — фото не отправлено, деньги не списаны`);
+  const r = await fetch(PROXY_IMAGE, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + getProxyToken() },
+    body,
+  });
+  if (!r.ok) {
+    // 401 — токен: чистим, как в callAI (F13), чтобы следующий запрос переспросил.
+    // 503 — ключа OpenRouter нет на сервере: токен тут НИ ПРИ ЧЁМ, трогать его
+    // нельзя, иначе Денис будет вводить админ-токен заново на каждый клик.
+    if (r.status === 401) localStorage.removeItem('avito_admin_token');
+    const text = await r.text();
+    throw new Error(r.status === 503
+      ? 'Ключ OpenRouter не заведён на сервере — генерация картинок пока недоступна'
+      : `Картинка ${r.status}: ${text.slice(0, 300)}`);
+  }
+  return stagedExtractImage(await r.json());
+}
+
 async function doStagedPhoto() {
   const v = state.vision;
   const st = v.staged;
@@ -4712,31 +4768,7 @@ async function doStagedPhoto() {
   const jCategory = state.form.category;
   const jProduct = currentProductName(state.form);
   try {
-    const r = await fetch(PROXY_IMAGE, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + getProxyToken() },
-      body: JSON.stringify({
-        prompt: stagedPrompt(),
-        // Форма референса — единственная, которую принимает вендор; см. комментарий
-        // к /api/image в poigraem-backend. Имена ниже — в ЕДИНСТВЕННОМ числе:
-        // множественные вендор молча выбрасывал, и кадр приходил квадратом
-        // дефолтного качества (замер 13.09).
-        input_references: [{ type: 'image_url', image_url: { url: v.dataUrl } }],
-        aspect_ratio: STAGED_ASPECT,
-        quality,
-      }),
-    });
-    if (!r.ok) {
-      // 401 — токен: чистим, как в callAI (F13), чтобы следующий запрос переспросил.
-      // 503 — ключа OpenRouter нет на сервере: токен тут НИ ПРИ ЧЁМ, трогать его
-      // нельзя, иначе Денис будет вводить админ-токен заново на каждый клик.
-      if (r.status === 401) localStorage.removeItem('avito_admin_token');
-      const body = await r.text();
-      throw new Error(r.status === 503
-        ? 'Ключ OpenRouter не заведён на сервере — генерация картинок пока недоступна'
-        : `Картинка ${r.status}: ${body.slice(0, 300)}`);
-    }
-    const dataUrl = stagedExtractImage(await r.json());
+    const dataUrl = await stagedRequest(stagedPrompt(), [v.dataUrl], quality);
     st.img = { dataUrl, scene, quality };
     st.count++;
     sceneUsed(scene);   // сцена уходит наверх списка — им и пользуются чаще всего
@@ -4790,6 +4822,216 @@ function stagedDownload() {
   jlog('staged', null, { ok: true, phase: 'download', scene: st.img.scene, quality: st.img.quality, attempt: st.count });
 }
 
+// ── Серия (28.09.2026): несколько ракурсов товара → по кадру на каждый, в одной комнате ──
+// Порядок решён Денисом: сначала первый кадр (им выбирают комнату), остальные — отдельной
+// кнопкой с числом генераций и ценой. Одна комната держится вторым референсом: первый
+// готовый кадр, ужатый до JPEG — PNG вендора в base64 сам по себе под лимит тела маршрута.
+// Первый кадр серии — тот же запрос, что одиночный: тот же промпт, один референс.
+const STAGED_SERIES_MAX = 5;
+const STAGED_ROOM_PX = 1024;
+// ⚠️ Как вендор ведёт себя с двумя картинками, на момент написания живьём не проверено.
+// Главный риск — товар с кадра-комнаты (другой ракурс) вместо товара с фото, поэтому
+// порядок и роли картинок названы прямо.
+const STAGED_ROOM_RULE = [
+  '',
+  'К ЗАПРОСУ ПРИЛОЖЕНЫ ДВЕ КАРТИНКИ:',
+  '- Первая — фото товара. Товар бери ТОЛЬКО с неё, с этого ракурса.',
+  '- Вторая — уже готовый кадр этой же серии. С неё бери ТОЛЬКО комнату: мебель, стены, пол, свет, время суток. Покажи ту же комнату с другой точки, как ещё один снимок того же фотографа.',
+  '- Товар со второй картинки не копируй и второй экземпляр товара не добавляй.',
+].join('\n');
+
+let _stagedAid = 0;
+function stagedShots() {
+  const v = state.vision;
+  return v.dataUrl ? [v.dataUrl, ...(v.staged.angles || []).map(a => a.dataUrl)] : [];
+}
+function stagedSeriesPending() {
+  const s = state.vision.staged.series;
+  return s ? s.items.filter((it, i) => i > 0 && !it.dataUrl).length : 0;
+}
+// Цена одного кадра — с тремя знаками: округлённая до центов, она не сходилась бы с итогом
+// в подтверждении («4 × $0.02 ≈ $0.09», ревью серии)
+function stagedUsd(quality, n) {
+  const q = STAGED_QUALITIES.find(x => x.id === quality) || STAGED_QUALITIES[0];
+  return '$' + (q.usd * n).toFixed(n === 1 ? 3 : 2);
+}
+
+async function stagedAddAngle(file) {
+  const st = state.vision.staged;
+  if (visionBusy()) { toast('Дождитесь окончания — генерация ещё идёт'); return; }
+  if (stagedShots().length >= STAGED_SERIES_MAX) { toast(`В серии не больше ${STAGED_SERIES_MAX} фото`); return; }
+  try {
+    const prep = await visionPrepFile(file);
+    // Ракурс и его кадр связаны номером, а не содержимым: одно и то же фото, добавленное
+    // дважды, иначе путало кадры при удалении (ревью серии)
+    const a = { id: ++_stagedAid, dataUrl: prep.dataUrl };
+    // ошибка одиночного режима к серии не относится (ревью серии)
+    if (!st.angles.length) st.error = '';
+    st.angles.push(a);
+    // серия уже идёт — новый ракурс встаёт в очередь «остальных»
+    if (st.series) st.series.items.push({ aid: a.id, src: a.dataUrl, dataUrl: null, error: '' });
+    reForm();
+  } catch (e) { toast(e.message || 'Не удалось прочитать фото'); }
+}
+function stagedDelAngle(i) {
+  const st = state.vision.staged;
+  if (visionBusy() || !st.angles[i]) return;
+  const aid = st.angles[i].id;
+  const it = st.series && st.series.items.find((x, k) => k > 0 && x.aid === aid);
+  if (it && it.dataUrl && !confirm('По этому ракурсу кадр уже нарисован — убрать и его?')) return;
+  st.angles.splice(i, 1);
+  if (st.series) st.series.items = st.series.items.filter((x, k) => k === 0 || x !== it);
+  if (!st.angles.length) {
+    // Один ракурс — снова одиночный режим. Оплаченный первый кадр серии — тот же одиночный
+    // результат (тот же промпт, то же фото): остаётся на карточке, а не пропадает (ревью серии)
+    const s = st.series, f = s && s.items[0].dataUrl;
+    if (f) { st.img = { dataUrl: f, scene: s.scene, quality: s.quality0 || s.quality }; st.count++; }
+    st.series = null; st.error = '';
+  }
+  reForm();
+}
+
+// Кадр-комната для второго референса: JPEG, длинная сторона STAGED_ROOM_PX
+function stagedJpeg(dataUrl, px) {
+  return new Promise((resolve, reject) => {
+    const im = new Image();
+    im.onload = () => {
+      const k = Math.min(1, px / Math.max(im.naturalWidth || 1, im.naturalHeight || 1));
+      const c = document.createElement('canvas');
+      c.width = Math.max(1, Math.round((im.naturalWidth || 1) * k)); c.height = Math.max(1, Math.round((im.naturalHeight || 1) * k));
+      c.getContext('2d').drawImage(im, 0, 0, c.width, c.height);
+      resolve(c.toDataURL('image/jpeg', 0.85));
+    };
+    im.onerror = () => reject(new Error('Не удалось подготовить первый кадр как образец комнаты'));
+    im.src = dataUrl;
+  });
+}
+
+// which: 'first' — первый кадр (серия начинается заново), 'rest' — все недостающие после него.
+// Ошибка останавливает серию: следующий запрос почти наверняка упадёт так же (токен, ключ,
+// лимит), а «Доделать» подхватит с того же места.
+async function doStagedSeries(which) {
+  const v = state.vision, st = v.staged;
+  if (st.loading || !v.dataUrl) return;
+  let s = st.series;
+  if (which === 'first') {
+    if (s && s.items.some((it, i) => i > 0 && it.dataUrl) && !confirm('Начать серию заново? Готовые кадры серии будут убраны.')) return;
+    // quality0 — качество первого кадра: остальные могут пойти другим (см. 'rest')
+    s = st.series = { scene: st.scene, quality: st.quality, quality0: st.quality, extra: st.extra, oneRoom: st.oneRoom,
+      items: [{ aid: 0, src: v.dataUrl }, ...st.angles.map(a => ({ aid: a.id, src: a.dataUrl }))].map(x => ({ ...x, dataUrl: null, error: '' })) };
+  } else {
+    if (!s || !s.items[0].dataUrl) return;
+    // Сцена и уточнение — от первого кадра (комната уже выбрана), а качество и «одну комнату»
+    // берём текущие: первый кадр подбирают черновиком, остальные можно делать финалом
+    s.quality = st.quality; s.oneRoom = st.oneRoom;
+    const n = stagedSeriesPending();
+    if (!n) return;
+    if (!confirm(`Сделать ещё ${n} ${n === 1 ? 'кадр' : n < 5 ? 'кадра' : 'кадров'} серии?\n\n${n} × ${stagedUsd(s.quality, 1)} ≈ ${stagedUsd(s.quality, n)} (${(STAGED_QUALITIES.find(q => q.id === s.quality) || {}).label || s.quality}).\n${s.oneRoom ? 'Комната — как на первом кадре.' : 'Комната у каждого кадра — своя (галочка «Одна комната» снята).'}`)) return;
+  }
+  st.loading = true; st.error = '';
+  reForm();
+  const jCategory = state.form.category, jProduct = currentProductName(state.form);
+  const idxs = which === 'first' ? [0] : s.items.map((it, i) => i).filter(i => i > 0 && !s.items[i].dataUrl);
+  try {
+    const room = which === 'rest' && s.oneRoom ? await stagedJpeg(s.items[0].dataUrl, STAGED_ROOM_PX) : null;
+    for (const i of idxs) {
+      const it = s.items[i];
+      if (!it || st.series !== s) break;   // ракурс убрали или серию начали заново
+      const jT0 = Date.now();
+      it.error = ''; s.running = i; reForm();
+      try {
+        it.dataUrl = await stagedRequest(stagedPrompt(s) + (room ? '\n' + STAGED_ROOM_RULE : ''), room ? [it.src, room] : [it.src], s.quality);
+        if (i === 0) sceneUsed(s.scene);
+        jlog('staged', null, { ok: true, phase: 'series', index: i, of: s.items.length, room: !!room,
+          scene: s.scene, quality: s.quality, extra: s.extra.trim().slice(0, 200),
+          category: jCategory, product: jProduct, latencyMs: Date.now() - jT0 });
+      } catch (e) {
+        it.error = e.message || String(e);
+        st.error = `Кадр ${i + 1}: ${it.error}`;
+        jlog('error', null, { stage: 'staged_series', index: i, scene: s.scene, message: String(e.message || '').slice(0, 300), latencyMs: Date.now() - jT0 });
+        break;
+      }
+    }
+  } catch (e) {
+    st.error = e.message || String(e);
+  } finally {
+    s.running = null;
+    st.loading = false;
+    reForm();
+  }
+}
+
+function stagedSeriesDone() {
+  const s = state.vision.staged.series;
+  return s ? s.items.map((it, i) => ({ ...it, i })).filter(it => it.dataUrl) : [];
+}
+function stagedSeriesDownload() {
+  const s = state.vision.staged.series, done = stagedSeriesDone();
+  if (!done.length) return;
+  // по одному с паузой: браузер режет пачку одновременных скачиваний
+  done.forEach((it, k) => setTimeout(() => {
+    const a = document.createElement('a');
+    a.href = it.dataUrl;
+    const mt = (it.dataUrl.match(/^data:(image\/[a-z]+)/) || [])[1] || 'image/png';
+    a.download = `staged-${s.scene}-series-${it.i + 1}.${mt.split('/')[1].replace('jpeg', 'jpg')}`;
+    a.click();
+  }, k * 350));
+  jlog('staged', null, { ok: true, phase: 'download', series: true, count: done.length, scene: s.scene, quality: s.quality });
+}
+// Серия — в коллаж: в «Игре» картинка одна, поэтому режим переключается (с вопросом, если там уже что-то есть)
+function stagedSeriesToCovers() {
+  const done = stagedSeriesDone();
+  if (!done.length) return;
+  if (cv.mode === 'game') {
+    if (cv.images.length && !confirm('Серия уйдёт в коллаж. Переключить «Обложки» на коллаж? Картинка режима «Игра» будет убрана.')) return;
+    cvRevokeGameBlobs(); cv.mode = 'collage'; cv.images = []; cv._selCell = null;
+  }
+  const room = 10 - cv.images.length;
+  if (room <= 0) { toast('Уже 10 картинок — удалите лишние в конструкторе'); return; }
+  const take = done.slice(0, room);
+  Promise.all(take.map(it => new Promise(res => {
+    const el = new Image();
+    el.onload = () => res({ id: ++_cvId, url: it.dataUrl, el, transform: { scale: 1, ox: 0, oy: 0 } });
+    el.onerror = () => res(null);
+    el.src = it.dataUrl;
+  }))).then(list => {
+    const ok = list.filter(Boolean);
+    cv.images.push(...ok);
+    jlog('cv_images', null, { source: 'staged_series', mode: cv.mode, added: ok.length, scene: state.vision.staged.series?.scene });
+    if (take.length < done.length) toast(`В коллаж ушло ${take.length} из ${done.length} — больше 10 картинок не помещается`);
+    state.tab = 'covers';
+    render();
+  });
+}
+
+// Ракурсы и серия внутри карточки «Товар в интерьере»
+function stagedSeriesHTML(busy) {
+  const st = state.vision.staged, shots = stagedShots(), s = st.series;
+  const thumbs = shots.map((u, i) => `<span class="staged-angle"><img src="${esc(u)}" alt="ракурс ${i + 1}"><b>${i + 1}</b>${i > 0 ? `<button class="staged-angle-del" data-act="staged-angle-del" data-i="${i - 1}" title="Убрать ракурс" ${busy ? 'disabled' : ''}>×</button>` : ''}</span>`).join('');
+  const add = shots.length < STAGED_SERIES_MAX
+    ? `<label class="staged-angle staged-angle-add ${busy ? 'busy' : ''}" ${busy ? '' : 'for="staged-angle-file"'} title="Ещё фото товара с другой стороны">＋<small>ракурс</small></label><input type="file" id="staged-angle-file" accept="image/*" style="display:none" ${busy ? 'disabled' : ''}>`
+    : '';
+  const row = `<div class="staged-angles">${thumbs}${add}</div>`;
+  if (!st.angles.length) return `${row}<div class="vision-hint">Добавь ракурсы (до ${STAGED_SERIES_MAX} фото) — получится серия кадров в одной комнате</div>`;
+  const q = st.quality, first = s && s.items[0].dataUrl, pending = stagedSeriesPending(), done = stagedSeriesDone().length;
+  const btns = [
+    !first
+      ? `<button class="vision-btn vision-btn-main" data-act="staged-series-first" ${busy ? 'disabled' : ''}>${busy && s && s.running === 0 ? '⏳ Рисую первый кадр…' : `🏠 Первый кадр серии (~${stagedUsd(st.quality, 1)})`}</button>`
+      : pending
+        ? `<button class="vision-btn vision-btn-main" data-act="staged-series-rest" ${busy ? 'disabled' : ''}>${busy ? `⏳ Кадр ${(s.running ?? 0) + 1} из ${s.items.length}…` : `▶ ${s.items.slice(1).some(it => it.error) ? 'Доделать' : 'Сделать остальные'} ${pending} (~${stagedUsd(q, pending)})`}</button>`
+        : '',
+    first ? `<button class="vision-btn" data-act="staged-series-first" ${busy ? 'disabled' : ''} title="Другая комната — серия начнётся заново">↻ Первый кадр заново</button>` : '',
+    done ? `<button class="vision-btn" data-act="staged-series-covers" ${busy ? 'disabled' : ''}>🖼 Все в коллаж</button>` : '',
+    done ? `<button class="vision-btn" data-act="staged-series-download" ${busy ? 'disabled' : ''}>⬇ Скачать все (${done})</button>` : '',
+  ].filter(Boolean).join('');
+  const grid = s ? `<div class="staged-series">${s.items.map((it, i) => `<div class="staged-cell">${it.dataUrl ? `<img src="${esc(it.dataUrl)}" alt="кадр ${i + 1}">` : `<span>${s.running === i ? '⏳' : it.error ? '⚠' : i === 0 ? 'первый кадр' : 'ждёт'}</span>`}<b>${i + 1}</b></div>`).join('')}</div>` : '';
+  return `${row}
+    <div class="vision-ask-opts"><button class="chip ${st.oneRoom ? 'on' : ''}" data-act="staged-oneroom" ${busy ? 'disabled' : ''} title="Первый кадр идёт образцом комнаты для остальных">🛋 Одна комната</button></div>
+    <div class="vision-btns">${btns}</div>
+    ${grid}
+    ${s && first ? `<div class="vision-hint">Серия: «${esc(stagedScene(s.scene).label)}», ${esc((STAGED_QUALITIES.find(x => x.id === s.quality) || {}).label || s.quality)}. ⚠ Сверьте каждый кадр с его фото: модель, цвет, надписи и комплектация должны совпадать.</div>` : ''}`;
+}
+
 function stagedCardHTML() {
   const v = state.vision;
   const st = v.staged;
@@ -4818,7 +5060,8 @@ function stagedCardHTML() {
     <div class="vision-ask-opts">
       ${STAGED_QUALITIES.map(q => `<button class="chip ${st.quality === q.id ? 'on' : ''}" data-act="staged-quality" data-k="${q.id}" title="${esc(q.hint)}" ${busy ? 'disabled' : ''}>${esc(q.label)}</button>`).join('')}
     </div>
-    <div class="vision-btns">
+    ${stagedSeriesHTML(busy)}
+    ${st.angles.length ? '' : `<div class="vision-btns">
       <button class="vision-btn vision-btn-main" data-act="staged-gen" ${busy ? 'disabled' : ''}>
         ${st.loading ? '⏳ Рисую сцену…' : st.img ? '↻ Ещё вариант' : '🏠 Поставить в интерьер'}
       </button>
@@ -4830,7 +5073,8 @@ function stagedCardHTML() {
     <div class="staged-out">
       <img src="${esc(st.img.dataUrl)}" alt="товар в интерьере">
       <div class="vision-hint">Сцена «${esc(stagedScene(st.img.scene).label)}», ${STAGED_ASPECT}, ${esc((STAGED_QUALITIES.find(q => q.id === st.img.quality) || {}).label || st.img.quality || '')}. ⚠ Сверьте с исходным фото: модель, цвет, надписи и комплектация должны совпадать — иначе объявление введёт покупателя в заблуждение.</div>
-    </div>` : ''}
+    </div>` : ''}`}
+    ${st.angles.length && st.error ? `<div class="vision-err">⚠ ${esc(st.error)}</div>` : ''}
   </div>`;
 }
 
@@ -10991,6 +11235,14 @@ document.addEventListener('click', e => {
     case 'staged-quality':
       if (!visionBusy()) { state.vision.staged.quality = el.dataset.k; reForm(); }
       break;
+    case 'staged-series-first':    doStagedSeries('first'); break;
+    case 'staged-series-rest':     doStagedSeries('rest'); break;
+    case 'staged-series-covers':   stagedSeriesToCovers(); break;
+    case 'staged-series-download': stagedSeriesDownload(); break;
+    case 'staged-angle-del':       stagedDelAngle(+el.dataset.i); break;
+    case 'staged-oneroom':
+      if (!visionBusy()) { state.vision.staged.oneRoom = !state.vision.staged.oneRoom; reForm(); }
+      break;
 
     case 'title-pick': {
       const id = +el.dataset.id;
@@ -11892,6 +12144,13 @@ document.addEventListener('change', e => {
     const f = el.files && el.files[0];
     el.value = '';
     if (f) visionPick(f);
+    return;
+  }
+  // Ракурс товара для серии 2б
+  if (el.id === 'staged-angle-file') {
+    const f = el.files && el.files[0];
+    el.value = '';
+    if (f) stagedAddAngle(f);
     return;
   }
 

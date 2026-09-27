@@ -22,7 +22,11 @@ export async function runTruncate(browser, base, t) {
   // Токен кладём заранее: callAI зовёт getProxyToken(), а тот при пустом
   // хранилище открывает prompt() и подвесил бы прогон.
   const { ctx, page, consoleErrors } = await openApp(browser, `${base}/avito-helper.html`, {
-    storage: { avito_admin_token: 'test-token' },
+    // С токеном страница при старте шла на боевой сервер (синхронизация, журнал) и ловила
+    // CORS-ошибки в консоль — успевали ли они прийти до конца секции, решала скорость
+    // браузера (28.09 проверка консоли упала, когда перед секцией встала другая). Журнал
+    // здесь ловится обёрткой jlog, отправка на сервер секции не нужна.
+    storage: { avito_admin_token: 'test-token', avito_sync_off: '1', avito_journal_off: '1' },
   });
   try {
     // Дальше callAI не раз подменяется стабом — держим настоящий под рукой,
