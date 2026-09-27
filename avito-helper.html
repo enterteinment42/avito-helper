@@ -5753,6 +5753,7 @@ function settingsTabHTML() {
         <div style="font-size:12px;color:var(--muted);margin-bottom:4px">
           Объявления в Истории помечаются аккаунтом — так учитываются размещения со всех профилей, включая те, что ты делаешь без генератора.
           Эталоны, избранное, категории и каталоги у аккаунтов ОБЩИЕ.
+          Цвета, шрифт и логотип аккаунта задаются во вкладке «🖼️ Обложки», карточка «🏷 Стиль аккаунта».
         </div>
         <div style="display:flex;flex-direction:column;gap:7px">
           ${accList().map((a, i) => {
@@ -6248,6 +6249,8 @@ const cv = {
   margin:null, cellRadius:null, bgPattern:'none', bgPatternAlpha:0.14,
   // Слои оформления (стикеры, ленты, надписи, инфографика, платформы) и свои шаблоны — см. «Слои оформления»
   layers:[], tpls:[],
+  // Аккаунт, для которого делаем обложку (план Fotor, Ф4): его стиль и логотип. '' — первый
+  acc:'',
   // рамка одиночной картинки (режим Игра)
   gamePad:0, gameCorner:0, gameBorder:0, gameBorderColor:'#B45309', gameShadow:false,
   // кадр обложки: cover — заполнить рамку со срезом; contain — вписать целиком, поля: blur (размытая обложка) | bg (цвет фона)
@@ -6273,6 +6276,7 @@ const CV_LAYER_TYPES = {
   infog:   { icon: '📋', name: 'Инфографика' },
   icon:    { icon: '⭐', name: 'Значок' },
   plat:    { icon: '🎮', name: 'Платформы' },
+  logo:    { icon: '🏷', name: 'Логотип' },
 };
 const CV_ICON_SHAPES = [['circle', '⭕ Круг'], ['square', '▢ Квадрат'], ['none', 'Без фона']];
 const CV_STICKER_SHAPES = [['burst','💥 Взрыв'],['circle','⭕ Круг'],['pill','💊 Пилюля'],['badge','🏷 Бейдж'],['hex','⬡ Соты'],['diamond','💎 Ромб']];
@@ -6291,6 +6295,93 @@ const CV_FONTS = [
 ];
 // Слои, у которых есть буквы: у них шрифт, заливка градиентом, обводка и тень букв
 const CV_TEXT_TYPES = ['sticker', 'ribbon', 'text', 'infog'];
+
+// ── Стиль аккаунта (план Fotor, Ф4, 27.09.2026): три цвета, шрифт и логотип у каждого
+// аккаунта. Хранится в самом аккаунте (settings.accounts[i].style) — едет в бэкап и на сервер
+// вместе с настройками. Нет style — стиля нет, обложки как раньше. Стиль получают НОВЫЕ слои;
+// готовую обложку перекрашивает кнопка «В стиль аккаунта» (с «↶ Отменить»), сделанное молча
+// не меняется. Шаблоны остаются в своих цветах: красная лента «Предзаказ» — смысл, а не стиль.
+const CV_ACC_ROLES = [['main', 'Основной', 'фон стикеров, лент, плашек и значков'], ['text', 'Буквы', 'цвет букв и значков'], ['accent', 'Акцент', 'второй цвет градиента букв']];
+const CV_ACC_STYLE_DEF = { main: '#b45309', text: '#ffffff', accent: '#facc15', font: 'mono', logo: '' };
+// Логотип — картинкой в самом документе настроек, поэтому ужимаем: длинная сторона до 400 px,
+// а если PNG всё равно тяжёлый — меньше. Строка сверх предела с чужих рук не принимается.
+const CV_LOGO_SIDES = [400, 300, 200];
+const CV_LOGO_MAX_CHARS = 200000;
+const CV_LOGO_RE = /^data:image\/(png|jpeg|webp);base64,[A-Za-z0-9+/=]+$/;
+const CV_HEX_RE = /^#[0-9a-f]{6}$/i;
+// Стиль аккаунта, доведённый до полного (с сервера и из бэкапа может прийти что угодно); null — не задан
+function cvAccStyle(id) {
+  const a = accList().find(x => x.id === accPick(id));
+  const s = a && a.style;
+  if (!s || typeof s !== 'object') return null;
+  const o = { ...CV_ACC_STYLE_DEF };
+  for (const [k] of CV_ACC_ROLES) if (CV_HEX_RE.test(s[k])) o[k] = s[k].toLowerCase();
+  if (CV_FONTS.some(f => f.id === s.font)) o.font = s.font;
+  if (typeof s.logo === 'string' && s.logo.length <= CV_LOGO_MAX_CHARS && CV_LOGO_RE.test(s.logo)) o.logo = s.logo;
+  return o;
+}
+function cvCurStyle() { return cvAccStyle(cv.acc); }
+// Правка стиля: список аккаунтов мог быть заводским (accList отдаёт константу) — тогда
+// сначала своя копия, иначе правка легла бы в DEF_ACCOUNTS. patch === null — стиль снять.
+function cvAccStyleSet(id, patch) {
+  const aid = accPick(id);
+  state.settings.accounts = accList().map(a => ({ ...a }));
+  const a = state.settings.accounts.find(x => x.id === aid);
+  if (patch === null) delete a.style;
+  else a.style = { ...(cvAccStyle(aid) || CV_ACC_STYLE_DEF), ...patch };
+  save();
+}
+// Цвета аккаунта — первыми в образцах цвета у слоёв
+function cvAccColors() {
+  const s = cvCurStyle();
+  return s ? [...new Set(CV_ACC_ROLES.map(([k]) => s[k]))] : [];
+}
+// Перекраска слоя в стиль: буквы — шрифт, цвет и второй цвет градиента, формы — основной цвет.
+// Платформы (цвета платформ — их узнаваемость) и логотип не трогаем.
+function cvStyleLayer(L, s) {
+  if (CV_TEXT_TYPES.includes(L.type)) { L.font = s.font; L.color = s.text; L.color2 = s.accent; }
+  if (L.type === 'sticker' || L.type === 'ribbon' || L.type === 'infog') L.bg = s.main;
+  if (L.type === 'text') L.bgColor = s.main;
+  if (L.type === 'icon') { L.bg = s.main; L.color = s.text; }
+  return L;
+}
+// Логотип картинкой: Image на каждую строку data-URL; загрузился — перерисовка
+const _cvLogoImgs = new Map();
+function cvLogoImg(url) {
+  if (!url) return null;
+  let im = _cvLogoImgs.get(url);
+  if (!im) {
+    im = new Image();
+    im.onload = () => cvReDraw();
+    im.src = url;
+    _cvLogoImgs.set(url, im);
+  }
+  return im.complete && im.naturalWidth ? im : null;
+}
+function cvCurLogo() { const s = cvCurStyle(); return s && s.logo ? cvLogoImg(s.logo) : null; }
+// Файл → PNG data-URL в пределах CV_LOGO_MAX_CHARS (прозрачность сохраняется)
+function cvLogoFromFile(file) {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file), im = new Image();
+    im.onload = () => {
+      URL.revokeObjectURL(url);
+      const w0 = im.naturalWidth, h0 = im.naturalHeight;
+      if (!w0 || !h0) return reject(new Error('пустая картинка'));
+      for (const side of CV_LOGO_SIDES) {
+        const k = Math.min(1, side / Math.max(w0, h0));
+        const c = document.createElement('canvas');
+        c.width = Math.max(1, Math.round(w0 * k)); c.height = Math.max(1, Math.round(h0 * k));
+        const g = c.getContext('2d'); g.imageSmoothingQuality = 'high';
+        g.drawImage(im, 0, 0, c.width, c.height);
+        const d = c.toDataURL('image/png');
+        if (d.length <= CV_LOGO_MAX_CHARS) return resolve(d);
+      }
+      reject(new Error('логотип слишком тяжёлый даже в 200 px'));
+    };
+    im.onerror = () => { URL.revokeObjectURL(url); reject(new Error('не картинка')); };
+    im.src = url;
+  });
+}
 
 // ── Значки (план Fotor, Ф5, 25.09.2026): вместо эмодзи в инфографике и отдельным слоем.
 // Эмодзи на холсте рисуется шрифтом системы и выглядит по-разному на Windows, Android и
@@ -7097,6 +7188,9 @@ function cvLayerDefaults(type) {
     case 'infog':   return { ...b, ...tx, text: '', size: 38, bg: '#0f172a', opacity: 0.82, color: '#ffffff', align: 'left', icons: true };
     case 'icon':    return { ...b, x: 0.16, y: 0.13, icon: 'shield-check', size: 150, shape: 'circle', bg: '#0F766E', color: '#ffffff' };
     case 'plat':    return { ...b, plats: ['PS5'] };
+    // Картинки в слое нет: рисуется логотип аккаунта, выбранного во вкладке, — один шаблон
+    // с логотипом годится для всех аккаунтов. size — длинная сторона.
+    case 'logo':    return { ...b, size: 220, opacity: 1 };
   }
   return null;
 }
@@ -7234,11 +7328,14 @@ function cvEnsureFont(L) {
   if (document.fonts.check(s, CV_FONT_SAMPLE)) return;
   document.fonts.load(s, CV_FONT_SAMPLE).then(() => cvReDraw(), () => {});
 }
-// Перед скачиванием: все шрифты видимых слоёв на месте (иначе в файл уйдёт запасной)
-function cvFontsReady() {
-  if (!document.fonts) return Promise.resolve();
-  const ls = (cv.layers || []).filter(L => L && !L.hidden && CV_TEXT_TYPES.includes(L.type));
-  return Promise.all(ls.map(L => document.fonts.load(cvFontStr(L, 40), CV_FONT_SAMPLE))).catch(() => {});
+// Перед скачиванием: все шрифты видимых слоёв на месте (иначе в файл уйдёт запасной),
+// логотип аккаунта раскодирован (иначе файл уйдёт без него)
+function cvAssetsReady() {
+  const ls = (cv.layers || []).filter(L => L && !L.hidden);
+  const fonts = document.fonts ? ls.filter(L => CV_TEXT_TYPES.includes(L.type)).map(L => document.fonts.load(cvFontStr(L, 40), CV_FONT_SAMPLE)) : [];
+  const s = ls.some(L => L.type === 'logo') ? cvCurStyle() : null;
+  if (s && s.logo) { cvLogoImg(s.logo); fonts.push(_cvLogoImgs.get(s.logo).decode()); }
+  return Promise.all(fonts.map(p => p.catch(() => {})));
 }
 
 // Перенос по словам ровно в k строк примерно равной ширины
@@ -7372,6 +7469,13 @@ function cvLayerGeom(L, cw, shift) {
     case 'infog':   return cvInfogGeom(L, cw, shift);
     case 'plat':    return cvPlatGeom(L);
     case 'icon':    { const S = +L.size || 150; return { w: S, h: S }; }
+    case 'logo': {
+      // без логотипа (не загружен или ещё грузится) — рамка-заглушка, чтобы слой можно было найти
+      const S = +L.size || 220, im = cvCurLogo();
+      if (!im) return { w: S, h: S / 2, img: null };
+      const k = S / Math.max(im.naturalWidth, im.naturalHeight);
+      return { w: im.naturalWidth * k, h: im.naturalHeight * k, img: im };
+    }
   }
   return { w: 0, h: 0 };
 }
@@ -7614,6 +7718,10 @@ function cvDrawLayer(ctx, L, cw, ch, shift) {
   else if (L.type === 'infog') cvDrawInfogLayer(ctx, L, g);
   else if (L.type === 'plat') cvDrawPlatLayer(ctx, L, g);
   else if (L.type === 'icon') cvDrawIconLayer(ctx, L, g);
+  else if (L.type === 'logo' && g.img) {
+    ctx.globalAlpha = Math.max(0.1, Math.min(1, +L.opacity || 1));
+    ctx.drawImage(g.img, -g.w / 2, -g.h / 2, g.w, g.h);
+  }
   ctx.restore();
 }
 // Слой «Значок» (Ф5): значок в круге или квадрате цвета фона; «без фона» — крупнее, с тенью,
@@ -7798,12 +7906,34 @@ function cvAddLayer(type) {
   const L = cvLayerDefaults(type);
   if (!L) return;
   const [cw, ch] = CV_SZ[cv.ratio] || CV_SZ['4:5'];
+  // новый элемент — сразу в стиле аккаунта (Ф4); стиль не задан — заводские цвета, как раньше.
+  // До постановки в угол: шрифт аккаунта меняет ширину, и отступ от края считался бы по чужой
+  const st = cvCurStyle();
+  if (st) cvStyleLayer(L, st);
+  let place = null;
   if (type === 'infog') {
     L.text = cvInfogBuildLines().join('\n') || '✔️ Первая характеристика\n✔️ Вторая';
-    cvPlaceLayer(L, 'bl', cw, ch);
-  } else if (type === 'plat') { L.plats = cvFormPlats(); cvPlaceLayer(L, 'tl', cw, ch); }
+    place = 'bl';
+  } else if (type === 'plat') { L.plats = cvFormPlats(); place = 'tl'; }
   // занятый угол не перекрываем: новая лента встаёт в первый свободный
   else if (type === 'ribbon') L.corner = ['tr', 'tl', 'br', 'bl'].find(c => !(cv.layers || []).some(x => x.type === 'ribbon' && !x.hidden && x.corner === c)) || 'tr';
+  else if (type === 'logo') place = 'br';
+  if (place) {
+    cvPlaceLayer(L, place, cw, ch);
+    // Размер ещё может поменяться: логотип впервые за сессию только грузится (рамка — заглушка),
+    // шрифт аккаунта не скачан (меряется запасным). Догрузилось, а элемент не трогали — ставим заново (ревью Ф4)
+    const wait = type === 'logo' ? (st && st.logo && !cvCurLogo() ? _cvLogoImgs.get(st.logo).decode() : null)
+      : st && document.fonts && CV_TEXT_TYPES.includes(type) && !document.fonts.check(cvFontStr(L, 40), CV_FONT_SAMPLE) ? document.fonts.load(cvFontStr(L, 40), CV_FONT_SAMPLE) : null;
+    if (wait) {
+      const x0 = L.x, y0 = L.y;
+      wait.then(() => {
+        if (!cv.layers.includes(L) || L.x !== x0 || L.y !== y0) return;
+        const [w2, h2] = CV_SZ[cv.ratio] || CV_SZ['4:5'];
+        cvPlaceLayer(L, place, w2, h2);
+        cvReDraw();
+      }, () => {});
+    }
+  }
   cv.layers.push(L);
   cv._selLayer = L.id;
   jCvBump('layers');
@@ -7858,9 +7988,37 @@ function cvLayerAction(a) {
   cvLayersChanged();
 }
 
+// ── Стиль аккаунта: действия карточки «🏷 Стиль аккаунта» ──
+function cvAccAction(a) {
+  const aid = accPick(cv.acc), name = accName(aid);
+  switch (a) {
+    case 'create': cvAccStyleSet(aid, {}); break;
+    case 'drop':
+      if (!confirm(`Снять стиль аккаунта «${name}»? Цвета, шрифт и логотип будут забыты, уже сделанные обложки не изменятся.`)) return;
+      cvAccStyleSet(aid, null); break;
+    case 'logo-pick': document.getElementById('cv-acc-logo-file')?.click(); return;
+    case 'logo-del': cvAccStyleSet(aid, { logo: '' }); break;
+    case 'apply': {
+      const s = cvAccStyle(aid);
+      if (!s) return;
+      if (!(cv.layers || []).length) { toast('На обложке пока нет элементов — новые сразу будут в стиле аккаунта'); return; }
+      cvLayersSnap(`стиль «${name}»`);
+      cv.layers.forEach(L => cvStyleLayer(L, s));
+      cvLayersSnapDone();
+      jlog('cv_acc_style', null, { layers: cv.layers.length, logo: !!s.logo, font: s.font });
+      break;
+    }
+    default:
+      if (a.startsWith('font:')) cvAccStyleSet(aid, { font: a.slice(5) });
+      else return;
+  }
+  render();
+}
+
 function cvLayerClick(el) {
   const ds = el.dataset;
   if (ds.cvTpl) return cvTplAction(ds.cvTpl);
+  if (ds.cvAcc) return cvAccAction(ds.cvAcc);
   if (ds.cvLa) return cvLayerAction(ds.cvLa);
   const L = cvSelLayer();
   if (!L) return;
@@ -8295,7 +8453,7 @@ function cvGenerateVariations() {
   grid.querySelectorAll('[data-cv-dl-var]').forEach(btn => {
     const i = +btn.dataset.cvDlVar;
     // шрифты слоёв должны догрузиться, иначе в файл уйдут буквы запасным шрифтом
-    btn.addEventListener('click', () => cvFontsReady().then(() => {
+    btn.addEventListener('click', () => cvAssetsReady().then(() => {
       const tmp = document.createElement('canvas');
       cvDrawGame(tmp, img, vars[i]);
       cvDownload(tmp, `game-var-${i+1}.jpg`, { variant: i + 1, spec: vars[i] });
@@ -8328,7 +8486,7 @@ function cvGenerateCollageVars() {
   });
   grid.querySelectorAll('[data-cv-dl-cvar]').forEach(btn => {
     const i = +btn.dataset.cvDlCvar;
-    btn.addEventListener('click', () => cvFontsReady().then(() => {
+    btn.addEventListener('click', () => cvAssetsReady().then(() => {
       const tmp = document.createElement('canvas');
       cvDrawCollage(tmp, { bg: vars[i].bg, padding: vars[i].padding, margin: vars[i].margin, radius: vars[i].radius, infog: vars[i].infog });
       cvDownload(tmp, `collage-var-${i+1}.jpg`, { variant: i + 1, spec: vars[i] });
@@ -8387,6 +8545,36 @@ function cvLayoutButtonsHTML(activeLayout, imgCount) {
 }
 
 // ── Слои: панель ──
+// Карточка «🏷 Стиль аккаунта» (Ф4): для кого обложка, его цвета, шрифт и логотип
+function cvAccCardHTML() {
+  const list = accList(), aid = accPick(cv.acc), s = cvAccStyle(aid);
+  const pick = list.length > 1
+    ? `<select data-cv-acc-sel style="flex:1">${list.map(a => `<option value="${esc(a.id)}"${a.id === aid ? ' selected' : ''}>${esc(a.name)}</option>`).join('')}</select>`
+    : `<span style="flex:1">${esc(accName(aid))}</span>`;
+  const head = `<div class="card-title">🏷 Стиль аккаунта</div>
+    <div class="cv-row"><label>Аккаунт</label>${pick}</div>`;
+  if (!s) return `<div class="card" id="cv-acc-card">${head}
+    <div style="font-size:11px;color:var(--muted);margin:4px 0 8px">Свои цвета, шрифт и логотип — новые элементы сразу в них, а готовую обложку перекрасит одна кнопка.</div>
+    <button class="btn-sm" data-cv-acc="create">🎨 Задать стиль аккаунта</button>
+  </div>`;
+  const cols = CV_ACC_ROLES.map(([k, l, t]) => `<div class="cv-row"><label title="${t}">${l}</label><input type="color" data-cv-acc-col="${k}" value="${s[k]}" title="${t}" style="width:32px;height:28px;border:none;border-radius:8px;cursor:pointer;padding:0"><span style="font-size:11px;color:var(--muted);margin-left:6px">${t}</span></div>`).join('');
+  const fonts = `<div class="cv-layouts" style="flex:1;margin-top:0">${CV_FONTS.map(x => `<button class="cv-layout-btn ${s.font === x.id ? 'active' : ''}" data-cv-acc="font:${x.id}" style="font-family:${x.fam};font-weight:${x.w || 700}">${x.name}</button>`).join('')}</div>`;
+  const logo = s.logo
+    ? `<img src="${s.logo}" alt="логотип" style="max-width:120px;max-height:60px;border-radius:6px;background:repeating-conic-gradient(#888 0 25%,#ccc 0 50%) 0 0/12px 12px"><button class="btn-sm" data-cv-acc="logo-pick" style="margin-left:8px">Заменить</button><button class="btn-sm" data-cv-acc="logo-del" style="margin-left:4px">Убрать</button>`
+    : `<button class="btn-sm" data-cv-acc="logo-pick">⬆ Загрузить PNG</button><span style="font-size:11px;color:var(--muted);margin-left:6px">лучше с прозрачным фоном</span>`;
+  return `<div class="card" id="cv-acc-card">${head}
+    ${cols}
+    <div class="cv-row" style="align-items:flex-start"><label style="padding-top:4px">Шрифт</label>${fonts}</div>
+    <div class="cv-row"><label>Логотип</label><div style="flex:1;display:flex;align-items:center;flex-wrap:wrap;gap:4px">${logo}</div></div>
+    <input type="file" id="cv-acc-logo-file" accept="image/png,image/jpeg,image/webp" style="display:none">
+    <div style="font-size:11px;color:var(--muted);margin:6px 0">Новые элементы — сразу в стиле аккаунта. Логотип на обложку — «+ 🏷 Логотип» в карточке элементов.</div>
+    <div style="display:flex;gap:6px;flex-wrap:wrap">
+      <button class="btn-sm" data-cv-acc="apply">🎨 Перекрасить обложку в стиль</button>
+      <button class="btn-sm" data-cv-acc="drop" style="color:var(--warn)">Снять стиль</button>
+    </div>
+  </div>`;
+}
+
 function cvTplCardHTML() {
   const b = CV_TPL_BUILTIN.map(t => `<button class="cv-layout-btn" data-cv-tpl="apply:${t.id}">${t.icon} ${esc(t.name)}</button>`).join('');
   const u = (cv.tpls || []).map(t => `<span class="cv-tpl-own"><button class="cv-layout-btn" data-cv-tpl="apply:${esc(t.id)}">⭐ ${esc(t.name)}</button><button class="cv-tpl-del" data-cv-tpl="del:${esc(t.id)}" title="Удалить шаблон">×</button></span>`).join('');
@@ -8405,6 +8593,7 @@ function cvLayerRowsHTML() {
     const d = CV_LAYER_TYPES[L.type];
     const label = L.type === 'plat' ? ((L.plats || []).join(' / ') || '(пусто)')
       : L.type === 'icon' ? ((CV_ICONS.find(x => x[1] === L.icon) || [, , 'Значок'])[2])
+      : L.type === 'logo' ? `Логотип · ${accName(accPick(cv.acc))}`
       : (cvLinesOf(L.text)[0] || '(пусто)');
     return `<div class="cv-lrow${L.id === cv._selLayer ? ' active' : ''}${L.hidden ? ' off' : ''}" data-cv-la="sel:${esc(L.id)}" title="${esc(d.name)}">
       <span>${d.icon}</span><span class="cv-lrow-name">${esc(label)}</span>
@@ -8414,7 +8603,9 @@ function cvLayerRowsHTML() {
 }
 
 function cvLayerEditorHTML(L) {
-  const swatches = (prop, list) => `<div class="cv-bg-row" style="margin-top:0">${list.map(c => `<button class="cv-color ${L[prop] === c ? 'active' : ''}" data-cv-lv="${prop}:${c}" style="background:${c};${c === '#ffffff' ? 'border:1px solid #555' : ''}"></button>`).join('')}<input type="color" data-cv-lp="${prop}" value="${esc(L[prop] || '#000000')}" title="Свой цвет" style="width:28px;height:28px;border:none;border-radius:50%;cursor:pointer;padding:0"></div>`;
+  // цвета аккаунта (Ф4) — первыми, без повторов в заводском наборе
+  const acc = cvAccColors();
+  const swatches = (prop, list) => `<div class="cv-bg-row" style="margin-top:0">${[...acc, ...list.filter(c => !acc.includes(c.toLowerCase()))].map(c => `<button class="cv-color ${L[prop] === c ? 'active' : ''}" data-cv-lv="${prop}:${c}" style="background:${c};${c === '#ffffff' ? 'border:1px solid #555' : ''}"></button>`).join('')}<input type="color" data-cv-lp="${prop}" value="${esc(L[prop] || '#000000')}" title="Свой цвет" style="width:28px;height:28px;border:none;border-radius:50%;cursor:pointer;padding:0"></div>`;
   const choice = (prop, opts) => `<div class="cv-layouts" style="flex:1;margin-top:0">${opts.map(([v, l]) => `<button class="cv-layout-btn ${L[prop] === v ? 'active' : ''}" data-cv-lv="${prop}:${v}">${l}</button>`).join('')}</div>`;
   const toggle = prop => `<button class="toggle-btn ${L[prop] ? 'on' : ''}" data-cv-lt="${prop}">${L[prop] ? 'Вкл' : 'Выкл'}</button>`;
   const range = (prop, min, max) => `<input type="range" data-cv-lp="${prop}" data-cv-div="100" min="${min}" max="${max}" value="${Math.round((+L[prop] || 0) * 100)}">`;
@@ -8471,6 +8662,14 @@ function cvLayerEditorHTML(L) {
         + (L.shape !== 'none' ? row('Фон', swatches('bg', CV_SC)) : '')
         + row('Цвет', swatches('color', CV_STC));
       break;
+    case 'logo': {
+      const s = cvCurStyle(), name = esc(accName(accPick(cv.acc)));
+      body = (s && s.logo
+          ? `<div class="cv-lhint" style="margin-top:0">Логотип аккаунта «${name}». Сменишь аккаунт в карточке «🏷 Стиль аккаунта» — сменится и логотип.</div>`
+          : `<div class="cv-lhint" style="margin-top:0;color:var(--warn)">У аккаунта «${name}» нет логотипа — загрузи PNG в карточке «🏷 Стиль аккаунта».</div>`)
+        + row('Плотность', range('opacity', 20, 100));
+      break;
+    }
     case 'plat':
       body = row('Какие', `<div class="cv-layouts" style="flex:1;margin-top:0">${CV_PLATFORMS.map(p => {
         const on = (L.plats || []).includes(p.id);
@@ -8621,7 +8820,7 @@ function coversTabHTML() {
     </div>
   </div>`;
 
-  const layersSection = cvTplCardHTML() + cvLayersCardHTML();
+  const layersSection = cvAccCardHTML() + cvTplCardHTML() + cvLayersCardHTML();
 
   if (cv.mode === 'collage') return `<div class="cv-wrap">
     <div class="cv-controls">
@@ -8865,6 +9064,23 @@ function bindCoversTab() {
       cv._icoLine = { id: L.id, li: ta.value.slice(0, ta.selectionStart).split('\n').length - 1 };
     };
     for (const ev of ['input', 'keyup', 'mouseup', 'focusin', 'select']) document.addEventListener(ev, icoTrack);
+    // Стиль аккаунта (Ф4): выбор аккаунта, цвета, файл логотипа. Цвет пишется по «change» —
+    // палитра браузера шлёт input на каждое движение, а каждая запись ставит отправку на сервер.
+    document.addEventListener('change', e => {
+      const t = e.target;
+      if (!t.closest) return;
+      if (t.closest('[data-cv-acc-sel]')) { cv.acc = t.value; cvSave(); render(); return; }
+      const col = t.closest('[data-cv-acc-col]');
+      if (col) { if (CV_HEX_RE.test(col.value)) cvAccStyleSet(cv.acc, { [col.dataset.cvAccCol]: col.value.toLowerCase() }); cvRefreshLayersCard(); return; }
+      if (t.id === 'cv-acc-logo-file' && t.files && t.files[0]) {
+        const f = t.files[0]; t.value = '';
+        cvLogoFromFile(f).then(logo => {
+          cvAccStyleSet(cv.acc, { logo });
+          toast('Логотип сохранён');
+          render();
+        }, err => toast('Логотип не загружен: ' + err.message));
+      }
+    });
     document.addEventListener('input', e => {
       const el = e.target.closest && e.target.closest('[data-cv-lp]');
       if (!el) return;
@@ -10619,7 +10835,7 @@ function reDurs() {
 
 document.addEventListener('click', e => {
   // Обложки: слои оформления и шаблоны
-  const cvLay = e.target.closest('[data-cv-la],[data-cv-lv],[data-cv-lt],[data-cv-lplat],[data-cv-tpl],[data-cv-icon-ins]');
+  const cvLay = e.target.closest('[data-cv-la],[data-cv-lv],[data-cv-lt],[data-cv-lplat],[data-cv-tpl],[data-cv-acc],[data-cv-icon-ins]');
   if (cvLay) { cvLayerClick(cvLay); return; }
   // Covers module — data-cv-* attributes
   const cvEl = e.target.closest('[data-cv-mode],[data-cv-layout],[data-cv-ratio],[data-cv-bg],[data-cv-bg-style],[data-cv-toggle],[data-cv-grade],[data-cv-del],[data-cv-tz],[data-cv-src],[data-cv-game-fit],[data-cv-game-fill],[data-cv-pattern],[data-cv-geo-auto],[data-cv-cell-fit],[data-cv-adj-act]');
@@ -11051,7 +11267,7 @@ document.addEventListener('click', e => {
       if (!cv.images.length) break;
       cv._selCell = null;
       // шрифты слоёв должны догрузиться, иначе в файл уйдут буквы запасным шрифтом
-      cvFontsReady().then(() => {
+      cvAssetsReady().then(() => {
         const tmp = document.createElement('canvas');
         // F11: в режиме «Игра» скачиваем основное превью с текущими настройками (рамка/скругление/
         // обводка/тень/стикер/текст), а не через «4 варианта», которые перетирают их пресетами.
@@ -11073,7 +11289,7 @@ document.addEventListener('click', e => {
       // Счётчики сессии канваса относятся ко всей пачке — отдаём их последнему файлу,
       // остальные помечаем keepCounters, иначе первый забирал бы всё, а трём доставались нули.
       // Шрифты слоёв — догрузить до первого файла.
-      cvFontsReady().then(() => vars.forEach((v,i) => setTimeout(() => {
+      cvAssetsReady().then(() => vars.forEach((v,i) => setTimeout(() => {
         const tmp = document.createElement('canvas');
         cvDrawCollage(tmp, { bg: v.bg, padding: v.padding, margin: v.margin, radius: v.radius, infog: v.infog });
         cvDownload(tmp, `collage-var-${i+1}.jpg`, { variant: i + 1, spec: v, keepCounters: i < vars.length - 1, batch: true });
@@ -11085,7 +11301,7 @@ document.addEventListener('click', e => {
       const vars = cv._gameVars;
       if (!vars || !cv.images.length) break;
       const img = cv.images[0];
-      cvFontsReady().then(() => vars.forEach((v,i) => setTimeout(() => {
+      cvAssetsReady().then(() => vars.forEach((v,i) => setTimeout(() => {
         const tmp = document.createElement('canvas');
         cvDrawGame(tmp, img, v);
         cvDownload(tmp, `game-var-${i+1}.jpg`, { variant: i + 1, spec: v, keepCounters: i < vars.length - 1, batch: true });

@@ -32,6 +32,8 @@ const KNOWN_EVENTS = [
   'staged',
   // сессия 2026-09-24: шаблон оформления обложки (tpl, builtin, layers)
   'cv_tpl',
+  // сессия 2026-09-27: обложка перекрашена в стиль аккаунта (layers, logo, font)
+  'cv_acc_style',
   // сессия 2026-09-16: ротация выдохшегося объявления (mode light | mid)
   'rotate',
 ];

@@ -22,6 +22,7 @@ import { runLetters } from './letters.mjs';
 import { runCollage } from './collage.mjs';
 import { runAdjust } from './adjust.mjs';
 import { runIcons } from './icons.mjs';
+import { runBrand } from './brand.mjs';
 
 const only = process.argv[2]; // node run.mjs parity|editor|regress — прогнать одну секцию
 
@@ -53,6 +54,7 @@ try {
   if (!only || only === 'collage') await runCollage(browser, base, t);
   if (!only || only === 'adjust')  await runAdjust(browser, base, t);
   if (!only || only === 'icons')   await runIcons(browser, base, t);
+  if (!only || only === 'brand')   await runBrand(browser, base, t);
   if (!only || only === 'regress') await runRegress(browser, base, t);
 } catch (e) {
   console.error('\nСтенд упал:', e);
