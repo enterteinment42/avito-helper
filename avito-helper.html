@@ -98,6 +98,38 @@
     .tab-btn.active { color: var(--accent-h); background: var(--accent-d); font-weight: 600; }
     .tab-btn.dimmed { opacity: .45; cursor: default; }
 
+    /* Телефон: шесть вкладок в строку не помещаются (~690 px) и растягивали страницу
+       вширь на всех разделах — там вместо строки кнопка текущего раздела и аккордеон
+       разделов, как в админке магазина. На ПК ни кнопки, ни аккордеона нет. */
+    .nav-cur, .nav-acc, .nav-acc-back { display: none; }
+    @media (max-width: 720px) {
+      header { padding: 0 12px; }
+      .header-inner { gap: 8px; }
+      nav { display: none; }
+      .nav-cur {
+        display: flex; align-items: center; gap: 6px; margin-left: auto; min-width: 0;
+        background: var(--accent-d); color: var(--accent-h); border: 1px solid var(--accent);
+        border-radius: var(--rs); padding: 6px 10px; cursor: pointer;
+        font-family: var(--ft); font-size: 14px; font-weight: 600; white-space: nowrap;
+      }
+      .nav-ar { color: var(--muted); font-size: 16px; line-height: 1; transition: transform .2s; }
+      .nav-cur .nav-ar { color: inherit; }
+      .nav-cur.open .nav-ar { transform: rotate(90deg); }
+      .nav-acc-back { display: block; position: fixed; inset: 54px 0 0 0; background: rgba(0,0,0,.45); z-index: 1; }
+      .nav-acc {
+        display: flex; flex-direction: column; gap: 6px; position: absolute; left: 0; right: 0; top: 100%;
+        z-index: 2; background: var(--bg); border-bottom: 1px solid var(--border);
+        padding: 8px 12px 12px; box-shadow: 0 8px 20px rgba(0,0,0,.5);
+      }
+      .nav-acc-row {
+        display: flex; align-items: center; justify-content: space-between; width: 100%;
+        background: var(--card); border: 1px solid var(--border); border-radius: 8px;
+        padding: 12px; cursor: pointer; text-align: left;
+        font-family: var(--ft); font-size: 15px; font-weight: 600; color: var(--text);
+      }
+      .nav-acc-row.active { border-color: var(--accent); background: var(--accent-d); color: var(--accent-h); }
+    }
+
     .ai-btn {
       background: none; border: 1px solid var(--border2); color: var(--muted);
       cursor: pointer; padding: 4px 10px; border-radius: var(--rs);
@@ -11006,6 +11038,20 @@ function bindScannerTab() {
 // FULL RENDER
 // ══════════════════════════════════════════
 
+// Разделы инструмента — один список на две разметки: строка вкладок на ПК
+// и аккордеон за кнопкой текущего раздела на телефоне.
+function navTabs() {
+  const q = state.postQueue.length;
+  return [
+    { id: 'generator', html: '✨ Генератор' },
+    { id: 'covers',    html: '🖼️ Обложки' },
+    { id: 'queue',     html: `🚀 Очередь${q ? ` <span style="background:var(--accent-d);color:var(--accent-h);border-radius:8px;font-size:10px;padding:1px 6px;margin-left:3px">${q}</span>` : ''}` },
+    { id: 'database',  html: '🗂 История' },
+    { id: 'scanner',   html: '🔍 Сканер' },
+    { id: 'settings',  html: '⚙ Настройки' },
+  ];
+}
+
 function render() {
   // У колонок обложек своя прокрутка (на ПК), и innerHTML сбросил бы её в ноль при каждом
   // переключателе — меню прыгало бы наверх. Запоминаем и возвращаем.
@@ -11016,15 +11062,15 @@ function render() {
   <div class="header-inner">
     <div class="logo" title="Версия файла: ${esc(buildStamp())}">avito<span>-</span>helper</div>
     <nav>
-      <button class="tab-btn ${state.tab==='generator'?'active':''}" data-tab="generator">✨ Генератор</button>
-      <button class="tab-btn ${state.tab==='covers'?'active':''}" data-tab="covers">🖼️ Обложки</button>
-      <button class="tab-btn ${state.tab==='queue'?'active':''}" data-tab="queue">🚀 Очередь${state.postQueue.length?` <span style="background:var(--accent-d);color:var(--accent-h);border-radius:8px;font-size:10px;padding:1px 6px;margin-left:3px">${state.postQueue.length}</span>`:''}</button>
-      <button class="tab-btn ${state.tab==='database'?'active':''}" data-tab="database">🗂 История</button>
-      <button class="tab-btn ${state.tab==='scanner'?'active':''}" data-tab="scanner">🔍 Сканер</button>
-      <button class="tab-btn ${state.tab==='settings'?'active':''}" data-tab="settings">⚙ Настройки</button>
+      ${navTabs().map(t => `<button class="tab-btn ${state.tab===t.id?'active':''}" data-tab="${t.id}">${t.html}</button>`).join('')}
     </nav>
+    <button class="nav-cur ${state.navOpen?'open':''}" data-act="toggle-nav">${navTabs().find(t => t.id === state.tab)?.html || 'Разделы'} <span class="nav-ar">›</span></button>
     ${state.tab !== 'generator' ? `<button class="ai-btn ${state.aiOpen?'active':''}" data-act="toggle-ai">⚙ AI</button>` : ''}
   </div>
+  ${state.navOpen ? `<div class="nav-acc-back" data-act="toggle-nav"></div>
+  <div class="nav-acc">
+    ${navTabs().map(t => `<button class="nav-acc-row ${state.tab===t.id?'active':''}" data-tab="${t.id}"><span>${t.html}</span><span class="nav-ar">›</span></button>`).join('')}
+  </div>` : ''}
 </header>
 
 <main>
@@ -11255,7 +11301,7 @@ document.addEventListener('click', e => {
   if (tab) {
     if (el.classList.contains('dimmed')) return;
     if (tab !== state.tab) jlog('tab_open', null, { tab }); // журнал: перепись использования вкладок
-    state.tab = tab; render(); return;
+    state.tab = tab; state.navOpen = false; render(); return;
   }
 
   // Журнал: перепись кликов по крупным функциям — мёртвые видны нулями при разборе.
@@ -11266,6 +11312,10 @@ document.addEventListener('click', e => {
   switch (act) {
     case 'toggle-ai':
       state.aiOpen = !state.aiOpen; render(); break;
+
+    // Телефон: разделы в аккордеоне за кнопкой текущего (затемнение под ним тоже закрывает)
+    case 'toggle-nav':
+      state.navOpen = !state.navOpen; render(); break;
 
     case 'gen': doGenerate(); break;
     case 'gen-titles': doGenTitlesOnly(); break;
