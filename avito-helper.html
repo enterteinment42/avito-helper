@@ -1658,24 +1658,62 @@ function save() {
     // Упёрлись в квоту localStorage: часть ключей записана, часть нет — на F5 это
     // потеря результатов/очереди/истории. Журнал самообучения делит ту же квоту и
     // всегда уступает: сбрасываем его буфер и повторяем запись целиком.
-    try { jPurgeBuffer(); _saveAll(); } catch(e2) {}
+    try { jPurgeBuffer(); _saveAll(); } catch(e2) { saveFailed(e2); }
   }
 }
 
+// Повторная запись тоже упала — молчать нельзя (К9 консилиума): человек продолжает
+// работать, а на F5 всё несохранённое пропадёт. Тост не чаще раза в минуту, чтобы
+// каждый клик не перекрывал экран одним и тем же.
+let _saveFailAt = 0;
+function saveFailed(err) {
+  try { jlog('error', null, { stage: 'save', message: String(err && (err.name || err.message) || '').slice(0, 300) }); } catch(e) {}
+  const now = Date.now();
+  if (now - _saveFailAt < 60000) return;
+  _saveFailAt = now;
+  try { toast('⚠️ Хранилище браузера переполнено — последние изменения НЕ сохранены. Сделай «⬇ Бэкап JSON» в Истории и очисти старые результаты'); } catch(e) {}
+}
+
+// Соседняя вкладка что-то записала. Сырьё (История, эталоны, избранное) пишется
+// слиянием и не пострадает, но настройки (там и свой системный промпт), категории,
+// очередь и пресеты пишутся целиком — следующий save этой вкладки положит поверх
+// свой устаревший снимок. Поэтому сразу говорим об этом и предлагаем обновиться.
+const _OTHER_TAB_KEYS = new Set(['avito_settings', 'avito_catalogs', 'avito_cats', 'avito_scenes',
+  'avito_favorites', 'avito_db', 'avito_refs', 'avito_queue', 'avito_presets']);
+window.addEventListener('storage', e => {
+  if (!e.key || !_OTHER_TAB_KEYS.has(e.key) || document.getElementById('other-tab-bar')) return;
+  const bar = document.createElement('div');
+  bar.id = 'other-tab-bar';
+  bar.style.cssText = 'position:fixed;left:50%;bottom:16px;transform:translateX(-50%);z-index:9999;max-width:calc(100vw - 32px);box-sizing:border-box;background:var(--card,#222);color:var(--text,#eee);border:1px solid var(--accent,#f90);border-radius:10px;padding:10px 14px;font-size:13px;display:flex;gap:10px;align-items:center;flex-wrap:wrap;box-shadow:0 4px 16px rgba(0,0,0,.4)';
+  bar.innerHTML = `<span>⚠️ Данные изменены в другой вкладке. Настройки и очередь этой вкладки устарели — обнови её, чтобы не затереть чужие правки.</span>
+    <button class="btn-sm" data-other-tab="reload">↻ Обновить</button>
+    <button class="btn-sm" data-other-tab="close" title="Скрыть">✕</button>`;
+  bar.addEventListener('click', ev => {
+    const a = ev.target.closest('[data-other-tab]')?.dataset.otherTab;
+    if (a === 'reload') location.reload();
+    else if (a === 'close') bar.remove();
+  });
+  document.body.appendChild(bar);
+});
+
 function _saveAll() {
+    // Три набора сырья — единственное невосполнимое, поэтому они пишутся слиянием
+    // с тем, что уже лежит в хранилище (см. saveMerged), а не поверх него. И ПЕРВЫМИ:
+    // setItem при переполнении бросает исключение, и всё, что стоит после упавшего
+    // ключа, не записывается. Раньше впереди шли результаты генерации и прочее
+    // транзитное — при упоре в квоту они отрезали от диска сырьё (К9 консилиума).
+    state.favorites = saveMerged('avito_favorites', state.favorites, SYNC_KIND.fav);
+    state.db        = saveMerged('avito_db',        state.db,        SYNC_KIND.db);
+    state.refs      = saveMerged('avito_refs',      state.refs,      SYNC_KIND.ref);
+    // Следом настройки (в них свой системный промпт) и конфигурация, набитая руками
     localStorage.setItem('avito_settings', JSON.stringify(state.settings));
+    localStorage.setItem('avito_catalogs',  JSON.stringify(state.catalogs));
+    localStorage.setItem('avito_cats',      JSON.stringify(state.catsCfg));
+    localStorage.setItem('avito_scenes',    JSON.stringify(state.scenesCfg));
     localStorage.setItem('avito_form',     JSON.stringify(state.form));
     localStorage.setItem('avito_results',  JSON.stringify(state.results));
     localStorage.setItem('avito_extra_results', JSON.stringify(state.extraResults));
     localStorage.setItem('avito_results_form', JSON.stringify(state.resultsForm ?? null)); // F12: снимок формы для ↻/↻×5 после F5
-    localStorage.setItem('avito_catalogs',  JSON.stringify(state.catalogs));
-    localStorage.setItem('avito_cats',      JSON.stringify(state.catsCfg));
-    localStorage.setItem('avito_scenes',    JSON.stringify(state.scenesCfg));
-    // Три набора сырья — единственное невосполнимое, поэтому они пишутся слиянием
-    // с тем, что уже лежит в хранилище (см. saveMerged), а не поверх него.
-    state.favorites = saveMerged('avito_favorites', state.favorites, SYNC_KIND.fav);
-    state.db        = saveMerged('avito_db',        state.db,        SYNC_KIND.db);
-    state.refs      = saveMerged('avito_refs',      state.refs,      SYNC_KIND.ref);
     localStorage.setItem('avito_queue',     JSON.stringify(state.postQueue));
     localStorage.setItem('avito_presets',   JSON.stringify(state.presets));
     // F10: пакет по регионам переживает F5 (был только в памяти — случайное обновление сжигало токены)
@@ -4617,24 +4655,35 @@ function visionUndoForm() {
   toast('Форма возвращена к состоянию до распознавания');
 }
 
+// Общий перенос одной картинки в конструктор обложек — для фото товара (2а)
+// и готовой staged-картинки (2б). Различаются только тексты, source в журнале
+// и доп. поля события (extra дописываются после added — порядок полей прежний).
+function pushImageToCovers(dataUrl, { source, confirmText, errorText, extra }) {
+  if (cv.mode === 'game' && cv.images.length && !confirm(confirmText)) return;
+  if (cv.mode === 'collage' && cv.images.length >= 10) { toast('Уже 10 картинок — удалите лишние в конструкторе'); return; }
+  const el = new Image();
+  el.onload = () => {
+    if (cv.mode === 'game') { cvRevokeGameBlobs(); cv.images = []; }
+    cv.images.push({ id: ++_cvId, url: dataUrl, el, transform: { scale: 1, ox: 0, oy: 0 } });
+    jlog('cv_images', null, { source, mode: cv.mode, added: 1, ...extra });
+    state.tab = 'covers';
+    render();
+  };
+  el.onerror = () => toast(errorText);
+  el.src = dataUrl;
+}
+
 // Фото товара чаще всего и есть будущая обложка — переносим в конструктор явно,
 // по кнопке: автоматический перенос затирал бы уже загруженную картинку в режиме
 // «Игра» и молча занимал бы слот в коллаже.
 function visionToCovers() {
   const v = state.vision;
   if (!v.dataUrl) return;
-  if (cv.mode === 'game' && cv.images.length && !confirm('В режиме «Игра» картинка одна — заменить текущую фотографией товара?')) return;
-  if (cv.mode === 'collage' && cv.images.length >= 10) { toast('Уже 10 картинок — удалите лишние в конструкторе'); return; }
-  const el = new Image();
-  el.onload = () => {
-    if (cv.mode === 'game') { cvRevokeGameBlobs(); cv.images = []; }
-    cv.images.push({ id: ++_cvId, url: v.dataUrl, el, transform: { scale: 1, ox: 0, oy: 0 } });
-    jlog('cv_images', null, { source: 'vision', mode: cv.mode, added: 1 });
-    state.tab = 'covers';
-    render();
-  };
-  el.onerror = () => toast('Не удалось перенести фото в обложки');
-  el.src = v.dataUrl;
+  pushImageToCovers(v.dataUrl, {
+    source: 'vision',
+    confirmText: 'В режиме «Игра» картинка одна — заменить текущую фотографией товара?',
+    errorText: 'Не удалось перенести фото в обложки',
+  });
 }
 
 // ══════════════════════════════════════════
@@ -4795,18 +4844,12 @@ async function doStagedPhoto() {
 function stagedToCovers() {
   const st = state.vision.staged;
   if (!st.img) return;
-  if (cv.mode === 'game' && cv.images.length && !confirm('В режиме «Игра» картинка одна — заменить текущую?')) return;
-  if (cv.mode === 'collage' && cv.images.length >= 10) { toast('Уже 10 картинок — удалите лишние в конструкторе'); return; }
-  const el = new Image();
-  el.onload = () => {
-    if (cv.mode === 'game') { cvRevokeGameBlobs(); cv.images = []; }
-    cv.images.push({ id: ++_cvId, url: st.img.dataUrl, el, transform: { scale: 1, ox: 0, oy: 0 } });
-    jlog('cv_images', null, { source: 'staged', mode: cv.mode, added: 1, scene: st.img.scene });
-    state.tab = 'covers';
-    render();
-  };
-  el.onerror = () => toast('Не удалось перенести картинку в обложки');
-  el.src = st.img.dataUrl;
+  pushImageToCovers(st.img.dataUrl, {
+    source: 'staged',
+    confirmText: 'В режиме «Игра» картинка одна — заменить текущую?',
+    errorText: 'Не удалось перенести картинку в обложки',
+    extra: { scene: st.img.scene },
+  });
 }
 
 function stagedDownload() {
@@ -5974,6 +6017,16 @@ function scenesEditorHTML() {
   </div>`;
 }
 
+// Сборки у файла нет, поэтому версия — время его последнего изменения: страница
+// открывается локально, и браузер отдаёт в lastModified дату файла на диске. Нужна,
+// чтобы после Ctrl+F5 было видно, подхватилась ли свежая правка (К10 консилиума).
+function buildStamp() {
+  const d = new Date(document.lastModified);
+  if (isNaN(d)) return 'неизвестна';
+  const p = n => String(n).padStart(2, '0');
+  return `${p(d.getDate())}.${p(d.getMonth() + 1)}.${d.getFullYear()} ${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+
 function settingsTabHTML() {
   const isCustom = !!state.settings.customSys;
   return `<div style="max-width:860px">
@@ -5988,6 +6041,7 @@ function settingsTabHTML() {
           <button class="btn-gen" id="page-name-save" style="width:auto;padding:9px 22px">Сохранить</button>
         </div>
         <div style="font-size:12px;color:var(--muted)">Отображается в шапке базы.</div>
+        <div style="font-size:12px;color:var(--muted)" id="build-stamp">Версия файла: ${esc(buildStamp())}</div>
       </div>
     </div>
     ${scenesEditorHTML()}
@@ -10960,7 +11014,7 @@ function render() {
   document.getElementById('app').innerHTML = `
 <header>
   <div class="header-inner">
-    <div class="logo">avito<span>-</span>helper</div>
+    <div class="logo" title="Версия файла: ${esc(buildStamp())}">avito<span>-</span>helper</div>
     <nav>
       <button class="tab-btn ${state.tab==='generator'?'active':''}" data-tab="generator">✨ Генератор</button>
       <button class="tab-btn ${state.tab==='covers'?'active':''}" data-tab="covers">🖼️ Обложки</button>

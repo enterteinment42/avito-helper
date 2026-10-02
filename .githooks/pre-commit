@@ -1,0 +1,36 @@
+#!/bin/sh
+# Страховка от обнулённого или урезанного avito-helper.html (К10 консилиума 29.09).
+# 25.09.2026 запись через .NET с пустым чтением обнулила файл — такой коммит
+# не должен пройти незамеченным. Подключается один раз: git config core.hooksPath .githooks
+
+F=avito-helper.html
+
+# Файл в этом коммите не трогали — проверять нечего
+git diff --cached --name-only --diff-filter=ACMRD | grep -qx "$F" || exit 0
+
+if git diff --cached --name-only --diff-filter=D | grep -qx "$F"; then
+  echo "pre-commit: $F удаляется из репозитория — коммит остановлен." >&2
+  exit 1
+fi
+
+new=$(git cat-file -s ":$F" 2>/dev/null || echo 0)
+old=$(git cat-file -s "HEAD:$F" 2>/dev/null || echo 0)
+
+if [ "$new" -lt 100000 ]; then
+  echo "pre-commit: $F весит $new байт (в HEAD — $old). Похоже на обнулённый файл — коммит остановлен." >&2
+  exit 1
+fi
+
+# Урезан больше чем на треть за один коммит — так рефакторинг не выглядит
+if [ "$old" -gt 0 ] && [ $((new * 3)) -lt $((old * 2)) ]; then
+  echo "pre-commit: $F уменьшился с $old до $new байт (больше чем на треть) — коммит остановлен." >&2
+  echo "Если так и задумано, закоммить с --no-verify." >&2
+  exit 1
+fi
+
+if ! git show ":$F" | tail -c 200 | grep -q "</html>"; then
+  echo "pre-commit: в конце $F нет </html> — файл обрезан, коммит остановлен." >&2
+  exit 1
+fi
+
+exit 0

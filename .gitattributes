@@ -1,0 +1,2 @@
+# Хуки исполняет sh из Git for Windows — с CRLF он их не запустит
+.githooks/* text eol=lf

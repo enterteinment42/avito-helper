@@ -24,6 +24,7 @@ import { runAdjust } from './adjust.mjs';
 import { runIcons } from './icons.mjs';
 import { runBrand } from './brand.mjs';
 import { runSeries } from './series.mjs';
+import { runStorage } from './storage.mjs';
 
 const only = process.argv[2]; // node run.mjs parity|editor|regress — прогнать одну секцию
 
@@ -46,6 +47,7 @@ try {
   if (!only || only === 'staged')  await runStaged(browser, base, t);
   if (!only || only === 'series')  await runSeries(browser, base, t);
   if (!only || only === 'backup')  await runBackup(browser, base, t);
+  if (!only || only === 'storage') await runStorage(browser, base, t);
   if (!only || only === 'sync')    await runSync(browser, base, t);
   if (!only || only === 'truncate') await runTruncate(browser, base, t);
   if (!only || only === 'history')  await runHistory(browser, base, t);

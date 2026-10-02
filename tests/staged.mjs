@@ -370,6 +370,60 @@ export async function runStaged(browser, base, t) {
     t.eq('журнал знает источник', toCovers.source, 'staged');
     t.eq('и сцену', toCovers.scene, 'desk');
 
+    // ── «В обложки» из 2а и 2б — один общий хелпер ─────────
+    // Тексты, поля события и проверки режимов у обоих путей должны остаться
+    // прежними: confirm/toast — по словам, событие журнала — по полям и их порядку.
+    const both = await page.evaluate(async url => {
+      const confirms = [], toasts = [];
+      const origC = window.confirm, origT = window.toast;
+      window.confirm = m => { confirms.push(m); return false; };
+      window.toast = m => { toasts.push(m); };
+      const wait = () => new Promise(r => setTimeout(r, 300));
+      // jlog к этому моменту обёрнут перехватчиком не раз — одно событие пишется
+      // в __jlog несколько раз подряд, поэтому дубли схлопываем
+      const evs = () => [...new Set(window.__jlog.filter(x => x.ev === 'cv_images').map(x => JSON.stringify(x.data)))];
+      const r = {};
+      try {
+        state.vision.dataUrl = url;
+        state.vision.staged.img = { dataUrl: url, scene: 'desk' };
+        // Коллаж: оба кладут картинку и пишут событие со своим source
+        cv.mode = 'collage'; cv.images = []; window.__jlog = [];
+        visionToCovers(); await wait();
+        stagedToCovers(); await wait();
+        r.collage = { n: cv.images.length, urls: cv.images.every(i => i.url === url), evs: evs() };
+        // Игра с картинкой: спрашивают каждый своим текстом, отказ ничего не меняет
+        cv.mode = 'game'; cv.images = [{ id: 98, url: 'x', el: new Image(), transform: { scale: 1, ox: 0, oy: 0 } }];
+        window.__jlog = [];
+        visionToCovers(); stagedToCovers(); await wait();
+        r.game = { confirms: confirms.slice(), n: cv.images.length, url: cv.images[0].url, evs: evs() };
+        // Лимит коллажа — 10 картинок
+        cv.mode = 'collage'; cv.images = Array.from({ length: 10 }, (_, i) => ({ id: 200 + i, url: 'x', el: new Image(), transform: { scale: 1, ox: 0, oy: 0 } }));
+        visionToCovers(); stagedToCovers(); await wait();
+        r.limit = { toasts: toasts.slice(), n: cv.images.length };
+        // Битая картинка — свой toast у каждого пути, в конструктор ничего не попадает
+        toasts.length = 0; cv.images = []; window.__jlog = [];
+        state.vision.dataUrl = 'data:image/png;base64,AA';
+        state.vision.staged.img = { dataUrl: 'data:image/png;base64,AA', scene: 'desk' };
+        visionToCovers(); await wait();
+        stagedToCovers(); await wait();
+        r.broken = { toasts: toasts.slice(), n: cv.images.length, evs: evs() };
+      } finally {
+        window.confirm = origC; window.toast = origT;
+      }
+      return r;
+    }, PNG_1x1);
+    t.eq('коллаж: обе кнопки положили по картинке', both.collage.n, 2);
+    t.ok('и это та самая картинка', both.collage.urls);
+    t.eq('событие 2а — прежние поля и порядок', both.collage.evs[0], '{"source":"vision","mode":"collage","added":1}');
+    t.eq('событие 2б — прежние поля и порядок', both.collage.evs[1], '{"source":"staged","mode":"collage","added":1,"scene":"desk"}');
+    t.eq('«Игра»: вопрос 2а — прежний текст', both.game.confirms[0], 'В режиме «Игра» картинка одна — заменить текущую фотографией товара?');
+    t.eq('«Игра»: вопрос 2б — прежний текст', both.game.confirms[1], 'В режиме «Игра» картинка одна — заменить текущую?');
+    t.ok('отказ — картинка «Игры» на месте, событий нет', both.game.n === 1 && both.game.url === 'x' && both.game.evs.length === 0, JSON.stringify(both.game));
+    t.eq('лимит 10: оба пути предупреждают одинаково', JSON.stringify(both.limit.toasts), JSON.stringify(Array(2).fill('Уже 10 картинок — удалите лишние в конструкторе')));
+    t.eq('и одиннадцатая не добавлена', both.limit.n, 10);
+    t.eq('битая картинка: у каждого пути свой toast', JSON.stringify(both.broken.toasts), JSON.stringify(['Не удалось перенести фото в обложки', 'Не удалось перенести картинку в обложки']));
+    t.ok('и ничего не добавлено, событий нет', both.broken.n === 0 && both.broken.evs.length === 0, JSON.stringify(both.broken));
+
     // ── Ничего из этого не персистится ──────────────────────
     // Картинка — сотни КБ base64; журнал самообучения делит квоту с реальными
     // данными продавца и всегда им уступает, здесь то же правило.
