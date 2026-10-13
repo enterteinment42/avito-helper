@@ -260,6 +260,73 @@ else {
   if (es.med > 0.3) console.log(`   ⚠️ Медиана ${es.med.toFixed(2)} > 0.3 — промпт систематически не попадает, правки стоит вносить в SYS.`);
   else console.log(`   Медиана ${es.med.toFixed(2)} — правки точечные, порог тревоги (0.3) не превышен.`);
 }
+// ─── Три числа вместо одного (разбор 12.09.2026) ───
+// Одно editShare завышает правки: Денис дописывает в конец постоянный блок-подпись
+// («зачем обращаться ко мне…»), и он считается переписанным телом. У Росомахи
+// 34 % общего числа распадались на 13 % по телу и 84 % удержанных слов бота.
+// Хвост ищем по выравниванию, а не по тексту подписи: она переписывается в каждом
+// объявлении (правило Дениса), шаблон её не поймает. Хвост = слова финала после
+// последнего слова, совпавшего с ботом, если их не меньше TAIL_MIN — иначе это
+// обычная правка концовки. Дописанное в конец по делу (фичи, цены) тоже уйдёт
+// в «хвост», поэтому ниже печатается каждая пара — проверять глазами.
+const TAIL_MIN = 20;
+const words = (s) => String(s || '').toLowerCase().split(/\s+/).filter(Boolean).slice(0, 800);
+function lcsAlign(wa, wb) {
+  const m = wa.length, n = wb.length;
+  const d = Array.from({ length: m + 1 }, () => new Uint16Array(n + 1));
+  for (let i = 1; i <= m; i++) for (let j = 1; j <= n; j++)
+    d[i][j] = wa[i-1] === wb[j-1] ? d[i-1][j-1] + 1 : Math.max(d[i-1][j], d[i][j-1]);
+  // Последнее совпавшее слово финала — с конца, по таблице
+  let i = m, j = n, lastB = -1;
+  while (i > 0 && j > 0) {
+    if (wa[i-1] === wb[j-1]) { if (lastB < 0) lastB = j - 1; i--; j--; }
+    else if (d[i-1][j] >= d[i][j-1]) i--; else j--;
+  }
+  return { lcs: d[m][n], lastB };
+}
+const share = (lcs, a, b) => (a + b ? 1 - (2 * lcs) / (a + b) : 0);
+function splitPair(bot, fin) {
+  const wa = words(bot), wb = words(fin);
+  const { lcs, lastB } = lcsAlign(wa, wb);
+  const trailing = wb.length - 1 - lastB;
+  const tail = trailing >= TAIL_MIN ? trailing : 0;
+  const body = wb.slice(0, wb.length - tail);
+  const bodyLcs = tail ? lcsAlign(wa, body).lcs : lcs;
+  return {
+    bot: wa.length, fin: wb.length, tail,
+    total: share(lcs, wa.length, wb.length),
+    body: share(bodyLcs, wa.length, body.length),
+    kept: wa.length ? lcs / wa.length : 0,
+  };
+}
+// Повторный донос той же записи — последний побеждает, иначе пара считается дважды
+const pairs = new Map();
+for (const e of pasted) {
+  if (!e.botDescription || !e.finalDescription) continue;
+  pairs.set(`${e.product}|${e.region}|${e.botDescription}`, e);
+}
+if (pasted.length) {
+  sub('Три числа: правки по телу · хвост-подпись · удержание слов бота');
+  if (!pairs.size) console.log('   (в событиях нет botDescription/finalDescription — считать не из чего)');
+  else {
+    const rs = [...pairs.values()].map(e => ({ e, r: splitPair(e.botDescription, e.finalDescription) }));
+    console.log(`   Пар «бот → финал»: ${rs.length}  (повторные доносы одной записи схлопнуты; хвост — от ${TAIL_MIN} слов в конце без совпадений)\n`);
+    console.log(`   ${'товар · регион'.padEnd(30)} ${'слов'.padStart(11)} ${'хвост'.padStart(6)} ${'всего'.padStart(6)} ${'тело'.padStart(6)} ${'удерж.'.padStart(7)}`);
+    const p0 = (x) => (x * 100).toFixed(0).padStart(5) + '%';
+    for (const { e, r } of rs) {
+      const name = `${e.product || '?'} · ${e.region || '—'}`.slice(0, 30);
+      console.log(`   ${name.padEnd(30)} ${`${r.bot}→${r.fin}`.padStart(11)} ${String(r.tail || '—').padStart(6)} ${p0(r.total)} ${p0(r.body)} ${p0(r.kept).padStart(7)}`);
+    }
+    const qs = (k) => quantiles(rs.map(x => x.r[k]));
+    const qb = qs('body'), qk = qs('kept');
+    const withTail = rs.filter(x => x.r.tail);
+    console.log(`\n   Медиана правок по телу : ${qb.med.toFixed(2)}   (общий editShare без разделения: ${qs('total').med.toFixed(2)})`);
+    console.log(`   Медиана удержания бота : ${qk.med.toFixed(2)}`);
+    console.log(`   С хвостом-подписью     : ${withTail.length} из ${rs.length}${withTail.length ? `, медиана хвоста ${quantiles(withTail.map(x => x.r.tail)).med} слов` : ''}`);
+    if (qb.med > 0.3) console.log(`   ⚠️ По телу медиана ${qb.med.toFixed(2)} > 0.3 — промпт не попадает и без учёта подписи.`);
+  }
+}
+
 // Заголовок правят отдельно от описания: он короткий, и его переписывают чаще
 const titleChanged = edited.filter(e => e.titleChanged === true).length;
 if (edited.length) console.log(`\n   Заголовок переписан: ${titleChanged} из ${edited.length}  (${pct(titleChanged, edited.length)})`);

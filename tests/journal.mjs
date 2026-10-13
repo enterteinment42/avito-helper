@@ -233,4 +233,27 @@ export async function runJournal(browser, base, t) {
   t.ok('в консоли только ожидаемое сообщение об отвергнутом батче',
     unexpected.length === 0, unexpected.join('\n'));
   await ctx.close();
+
+  // ── Разбор журнала: правки по телу отдельно от хвоста-подписи (разбор 12.09) ──
+  {
+    const fs = await import('node:fs'), os = await import('node:os'), path = await import('node:path'), cp = await import('node:child_process');
+    const w = (n, p) => Array.from({ length: n }, (_, i) => `${p}${i}`).join(' ');
+    const bot = w(100, 'b');
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'jr-'));
+    const ev = (i, o) => JSON.stringify({ ts: `2026-10-14T10:00:0${i}Z`, device: 't', eid: 'e' + i, event: 'edited', descPasted: true, ...o });
+    fs.writeFileSync(path.join(dir, 'j.jsonl'), [
+      ev(1, { product: 'A', region: 'R', botDescription: bot, finalDescription: 'старый финал' }),
+      // 90 слов бота + 10 замен в конце + подпись 50 слов
+      ev(2, { product: 'A', region: 'R', botDescription: bot, finalDescription: `${w(90, 'b')} ${w(10, 'x')} ${w(50, 't')}` }),
+      // правка концовки на 5 слов — не хвост
+      ev(3, { product: 'B', region: 'R', botDescription: bot, finalDescription: `${w(95, 'b')} ${w(5, 'z')}` }),
+    ].join('\n') + '\n');
+    const out = cp.execFileSync(process.execPath, [path.resolve('../tools/journal-report.mjs'), dir], { encoding: 'utf8' });
+    fs.rmSync(dir, { recursive: true, force: true });
+    const sec = out.slice(out.indexOf('Три числа'), out.indexOf('7. РАСПОЗНАВАНИЕ'));
+    t.ok('отчёт: повторный донос одной записи схлопнут — пар 2, не 3', /Пар «бот → финал»: 2/.test(sec), sec);
+    t.ok('отчёт: подпись в конце ушла в хвост, тело 5 %, удержание 90 %', /A · R\s+100→150\s+60\s+28%\s+5%\s+90%/.test(sec), sec);
+    t.ok('отчёт: короткая правка концовки хвостом не считается', /B · R\s+100→100\s+—\s+5%\s+5%\s+95%/.test(sec), sec);
+    t.ok('отчёт: медианы по телу и удержанию', /по телу : 0\.05\s+\(общий editShare без разделения: 0\.28\)/.test(sec) && /удержания бота : 0\.95/.test(sec), sec);
+  }
 }
