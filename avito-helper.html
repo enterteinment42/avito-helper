@@ -2178,11 +2178,20 @@ async function syncFetch(doc, body) {
   try { r = await fetch(SYNC_URL + doc, opts); } catch(e) { return null; }
   // 401 токен НЕ чистим: в отличие от генерации, синхронизация фоновая, и
   // выкидывать человека из работы из-за неё нельзя.
+  // 409 — документ на сервере новее версии, поверх которой сделано слияние (F21):
+  // не ошибка, а сигнал «забери и повтори»
+  if (r.status === 409) return { conflict: true };
   if (!r.ok) return null;
   try { return await r.json(); } catch(e) { return null; }
 }
 
 let _syncT = null, _syncBusy = false;
+// F21: когда в ЭТОЙ сессии последний раз удалось забрать voice с сервера, и какая
+// версия сервера при этом пришла. Только в памяти: новая загрузка страницы обязана
+// забрать заново, прежде чем что-то отправлять.
+let _voicePullAt = 0, _voiceBase = null;
+const SYNC_PULL_FRESH = 2 * 60 * 1000;
+const syncVoiceFresh = () => _voicePullAt > 0 && Date.now() - _voicePullAt < SYNC_PULL_FRESH;
 function syncPushSoon() {
   try { clearTimeout(_syncT); _syncT = setTimeout(syncPush, SYNC_DEBOUNCE); } catch(e) {}
 }
@@ -2216,14 +2225,32 @@ async function syncPush(force) {
   let sent = false;
   try {
     _syncBusy = true;
+    // F21: документ voice уходит на сервер ЦЕЛИКОМ и заменяет там всё. Значит,
+    // отправлять его можно только поверх свежего слияния с серверным: иначе новый
+    // или очищенный браузер (забрать при старте не смог — токена ещё не было)
+    // первым же ☆ заменял 150+ эталонов одним избранным, а вкладка, открытая
+    // неделями, затирала всё, что за это время пришло с телефона. Забираем перед
+    // отправкой, если последнее успешное забирание старше SYNC_PULL_FRESH
+    // (решение Дениса 15.10: не перед каждой отправкой — трафик телефона).
+    if (!syncVoiceFresh()) await syncPullVoice();
     const meta = syncMeta();
     const voice = syncVoiceDoc();
     // Пустой клиент не имеет права стереть сырьё на сервере: так выглядит первый
     // запуск в новом браузере ДО того, как он успел забрать данные.
     const voiceEmpty = !voice.refs.length && !voice.favorites.length && !voice.db.length;
     const vStamp = syncStamp(voice);
-    if (!voiceEmpty && (force || vStamp !== meta.voiceStamp)) {
-      if (await syncFetch('voice', { data: voice, device: _jDevice() })) {
+    // Забрать не вышло (нет сети, сервер лежит) — сырьё не отправляем вовсе:
+    // правки лежат локально и уйдут следующей отправкой после удачного забирания
+    if (syncVoiceFresh() && !voiceEmpty && (force || vStamp !== meta.voiceStamp)) {
+      // base — версия сервера, поверх которой сделано слияние. Сервер с защитой
+      // (задача VPS, 15.10) отвечает 409, если документ с тех пор обновился.
+      const got = await syncFetch('voice', { data: voice, device: _jDevice(), base: _voiceBase });
+      if (got && got.conflict) {
+        // Кто-то успел отправить между нашими «забрал» и «отправил»: забираем
+        // заново и повторяем в следующем цикле
+        _voicePullAt = 0; syncPushSoon();
+      } else if (got) {
+        if (got.updated) _voiceBase = got.updated;
         syncSetMeta({ voiceStamp: vStamp, voiceAt: new Date().toISOString() });
         sent = true;
       }
@@ -2246,7 +2273,9 @@ async function syncPush(force) {
 async function syncPullVoice() {
   try {
     const got = await syncFetch('voice');
-    if (!got || got.empty || !got.data) return null;
+    if (!got || got.conflict) return null;   // не забрали — отправлять сырьё нельзя (F21)
+    // Сервер ответил — пусть и пустым документом: перезаписать нечего, отправка разрешена
+    if (got.empty || !got.data) { _voicePullAt = Date.now(); _voiceBase = got.updated || null; return null; }
     const d = got.data;
     const arr = v => Array.isArray(v) ? v : [];
     // Кладбища объединяем: удалённое на другом устройстве должно уйти и здесь.
@@ -2310,6 +2339,7 @@ async function syncPullVoice() {
     const changed = added || finalsMerged
       || before !== JSON.stringify([state.refs.length, state.favorites.length, state.db.length]);
     syncSetMeta({ pulledAt: new Date().toISOString() });
+    _voicePullAt = Date.now(); _voiceBase = got.updated || null;
     if (changed) {
       save(); render();
       // После слияния локальный набор БОГАЧЕ серверного (наши записи там ещё не
@@ -2902,7 +2932,9 @@ function getProxyToken() {
   let t = localStorage.getItem('avito_admin_token') || '';
   if (!t) {
     t = (prompt('Введите админ-токен (тот же, что в админке магазина Поиграем):') || '').trim();
-    if (t) localStorage.setItem('avito_admin_token', t);
+    // Токен появился — сырьё с сервера забираем сразу: при старте без токена
+    // забрать было нечем, а отправлять, не забрав, нельзя (F21)
+    if (t) { localStorage.setItem('avito_admin_token', t); syncPullVoice().catch(() => {}); }
   }
   return t;
 }
@@ -11341,7 +11373,7 @@ function bindAISettings() {
     const input = prompt('Админ-токен (оставьте пустым и нажмите OK, чтобы удалить):', cur);
     if (input === null) return; // отмена — ничего не трогаем
     const val = input.trim();
-    if (val) { localStorage.setItem('avito_admin_token', val); toast('Токен сохранён'); }
+    if (val) { localStorage.setItem('avito_admin_token', val); toast('Токен сохранён'); syncPullVoice().catch(() => {}); }
     else { localStorage.removeItem('avito_admin_token'); toast('Токен удалён — при следующем запросе спросит заново'); }
     const c = aiSettingsContainer(); if (c) c.innerHTML = settingsHTML();
     bindAISettings();
@@ -12563,6 +12595,11 @@ jFlush();
 // почистил данные сайта, эталоны и финалы приедут обратно сами. Ошибки молчат:
 // нет токена, нет сети или эндпоинт ещё не раскатан — работаем как раньше.
 syncPullVoice().catch(() => {});
+// Вернулись на вкладку, пролежавшую в фоне, — сначала забираем, что пришло с других
+// устройств (F21); отправка и сама заберёт, но так новое видно сразу
+document.addEventListener('visibilitychange', () => {
+  try { if (document.visibilityState === 'visible' && !syncVoiceFresh()) syncPullVoice().catch(() => {}); } catch(e) {}
+});
 
 // GFX-13: шрифты грузятся асинхронно — если канвас с текстом успел отрисоваться
 // на системном fallback раньше, чем догрузился self-host шрифт, перерисовать заново

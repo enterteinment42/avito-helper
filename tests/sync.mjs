@@ -71,10 +71,13 @@ export async function runSync(browser, base, t) {
       window.__srv.voice = { updated: '2026-09-11T10:00:00Z', device: 'pc', data: { refs: [a], favorites: [], db: [] } };
       state.refs = []; state.favorites = []; state.db = []; save();
       await syncPush(true);
-      return { onServer: window.__srv.voice.data.refs.length, posts: window.__calls.filter(c => c.doc === 'voice' && c.method === 'POST').length };
+      return { onServer: window.__srv.voice.data.refs.length, local: state.refs.length,
+               firstCall: window.__calls.find(c => c.doc === 'voice')?.method };
     }, [REF_A]);
     t.eq('сырьё на сервере цело', r.onServer, 1);
-    t.eq('пустой документ вообще не отправлялся', r.posts, 0);
+    // С F21 отправка сначала забирает серверное и шлёт объединение, а не пустоту
+    t.eq('пустой клиент сначала забрал сервер (первый запрос — GET)', r.firstCall, 'GET');
+    t.eq('эталон с сервера появился локально', r.local, 1);
     await ctx.close();
   }
 
@@ -465,6 +468,105 @@ export async function runSync(browser, base, t) {
     t.ok('кнопка возврата настроек на месте', r.pull);
     t.ok('статус показывается', r.status);
     t.ok('тумблер переключается', r.before !== r.after && r.back === r.before, JSON.stringify(r));
+    await ctx.close();
+  }
+
+  // ── F21: сервер не затирается устройством, которое ничего не забрало ──
+  {
+    const { ctx, page, consoleErrors } = await openApp(browser, base + '/avito-helper.html');
+    await stubNet(page);
+    // Тела POST и подмена ответа 409 — поверх общей заглушки
+    await page.evaluate(() => {
+      const inner = window.fetch;
+      window.__posts = []; window.__conflictOnce = false;
+      window.fetch = async (url, opts = {}) => {
+        if (opts.method === 'POST' && String(url).includes('/voice')) {
+          window.__posts.push(JSON.parse(opts.body));
+          if (window.__conflictOnce) { window.__conflictOnce = false; window.__calls.push({ doc: 'voice', method: 'POST' }); return { ok: false, status: 409, json: async () => ({}) }; }
+        }
+        return inner(url, opts);
+      };
+    });
+    const FAV = { _fid: 77, title: 'Одно избранное', description: 'Текст' };
+    const SRV = (refs) => ({ updated: '2026-10-15T10:00:00.000Z', device: 'phone', data: { refs, favorites: [], db: [] } });
+
+    // 1. Новый браузер: забрать не вышло (сеть) — сырьё не отправляется вовсе
+    const r1 = await page.evaluate(async ([fav, srv]) => {
+      _voicePullAt = 0;
+      window.__srv.voice = srv;
+      state.refs = []; state.db = []; state.favorites = [fav]; save();
+      window.__fail = 'throw';
+      const sent = await syncPush(true);
+      window.__fail = null;
+      return { sent, posts: window.__posts.length, onServer: window.__srv.voice.data.refs.length };
+    }, [FAV, SRV([REF_A, REF_B])]);
+    t.ok('F21: забрать не вышло — voice не отправлен, сервер цел', r1.posts === 0 && r1.onServer === 2, JSON.stringify(r1));
+
+    // 2. Сеть есть: отправка сначала забирает и шлёт объединение, а не одно избранное
+    const r2 = await page.evaluate(async () => {
+      window.__calls = [];
+      await syncPush(true);
+      const v = window.__srv.voice.data;
+      return { first: window.__calls[0], refs: v.refs.length, favs: v.favorites.length, base: window.__posts[window.__posts.length - 1]?.base };
+    });
+    t.ok('F21: первый запрос отправки — GET', r2.first && r2.first.doc === 'voice' && r2.first.method === 'GET', JSON.stringify(r2.first));
+    t.ok('F21: на сервере и 2 эталона, и новое избранное', r2.refs === 2 && r2.favs === 1, JSON.stringify(r2));
+    t.eq('F21: в отправке — версия сервера, поверх которой слито (base)', r2.base, '2026-10-15T10:00:00.000Z');
+
+    // 3. Свежее забирание (< 2 мин) — лишнего GET нет
+    const r3 = await page.evaluate(async () => {
+      window.__calls = [];
+      state.favorites = [...state.favorites, { _fid: 78, title: 'Ещё', description: 'Т' }]; save();
+      await syncPush();
+      return window.__calls.filter(c => c.doc === 'voice').map(c => c.method).join(',');
+    });
+    t.eq('F21: в окне свежести отправка без повторного GET', r3, 'POST');
+
+    // 4. Вкладка, пролежавшая неделю: с телефона пришёл эталон — не затирается
+    const r4 = await page.evaluate(async (c) => {
+      const v = window.__srv.voice;
+      v.data = { ...v.data, refs: [...v.data.refs, c] }; v.updated = '2026-10-22T10:00:00.000Z';
+      _voicePullAt = Date.now() - 3 * 60 * 1000;     // окно свежести истекло
+      state.favorites = [...state.favorites, { _fid: 79, title: 'Старая вкладка', description: 'Т' }]; save();
+      await syncPush();
+      return { refs: window.__srv.voice.data.refs.map(r => r.title), local: state.refs.length };
+    }, { id: 3, source: 'mine', category: 'phys', title: 'С телефона', desc: 'ТЕКСТ В' });
+    t.ok('F21: эталон с телефона остался на сервере и пришёл во вкладку', r4.refs.includes('С телефона') && r4.local === 3, JSON.stringify(r4));
+
+    // 5. 409 — сервер новее: не считаем отправленным, следующая отправка заберёт заново
+    const r5 = await page.evaluate(async () => {
+      window.__conflictOnce = true;
+      const before = syncMeta().voiceStamp;
+      state.favorites = [...state.favorites, { _fid: 80, title: 'Конфликт', description: 'Т' }]; save();
+      const sent = await syncPush();
+      return { sent, pullAt: _voicePullAt, stampKept: syncMeta().voiceStamp === before };
+    });
+    t.ok('F21: 409 — отправка не засчитана, окно свежести сброшено', r5.sent === false && r5.pullAt === 0 && r5.stampKept, JSON.stringify(r5));
+    const r5b = await page.evaluate(async () => {
+      window.__calls = [];
+      await syncPush();
+      return { methods: window.__calls.filter(c => c.doc === 'voice').map(c => c.method).join(','), has: window.__srv.voice.data.favorites.some(f => f.title === 'Конфликт') };
+    });
+    t.ok('F21: после 409 — GET, затем POST, правка доехала', r5b.methods === 'GET,POST' && r5b.has, JSON.stringify(r5b));
+
+    // 6. Ввод токена и возврат на вкладку забирают сразу
+    const r6 = await page.evaluate(async () => {
+      _voicePullAt = 0; window.__calls = [];
+      localStorage.removeItem('avito_admin_token');
+      window.prompt = () => 'новый-токен';
+      getProxyToken();
+      await new Promise(r => setTimeout(r, 50));
+      const afterToken = window.__calls.filter(c => c.doc === 'voice' && c.method === 'GET').length;
+      _voicePullAt = 0; window.__calls = [];
+      Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'visible' });
+      document.dispatchEvent(new Event('visibilitychange'));
+      await new Promise(r => setTimeout(r, 50));
+      const afterVisible = window.__calls.filter(c => c.doc === 'voice' && c.method === 'GET').length;
+      return { afterToken, afterVisible };
+    });
+    t.ok('F21: ввод токена сразу забирает сырьё', r6.afterToken === 1, JSON.stringify(r6));
+    t.ok('F21: возврат на вкладку с устаревшим забиранием — забирает', r6.afterVisible === 1, JSON.stringify(r6));
+    t.ok('F21: консоль чистая', consoleErrors.length === 0, consoleErrors.join('\n'));
     await ctx.close();
   }
 }
