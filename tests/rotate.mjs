@@ -298,7 +298,7 @@ export async function runRotate(browser, base, t) {
 
       state.dbForm = { product: 'PS Plus Deluxe', region: 'Пермь', status: 'active', note: 'со второго',
                        account: 'a2', title: 'Ручной заголовок', desc: 'Ручное описание объявления, набранное без генератора.',
-                       toRefs: true, postedAt: '2026-09-01' };
+                       toRefs: true, postedAt: '2026-09-01', refCat: 'gaming_sub' };  // категорию эталона — явно (F27)
       document.querySelector('[data-act="db-add"]').click();
       const rec = state.db[0];
       out.rec = { product: rec.product, acc: rec.account, title: rec.title, desc: rec.description,
@@ -310,7 +310,7 @@ export async function runRotate(browser, base, t) {
 
       // Тот же текст второй раз не двоит сырьё
       state.dbForm = { ...state.dbForm, product: 'PS Plus Deluxe', region: 'Омск',
-                       title: 'Ручной заголовок', desc: 'Ручное описание объявления, набранное без генератора.', toRefs: true };
+                       title: 'Ручной заголовок', desc: 'Ручное описание объявления, набранное без генератора.', toRefs: true, refCat: 'gaming_sub' };
       document.querySelector('[data-act="db-add"]').click();
       out.refsAfter = state.refs.length;
       out.dbAfter = state.db.length;
@@ -638,7 +638,7 @@ export async function runRotate(browser, base, t) {
       document.querySelector('[data-act="db-add"]').click();
       out.refCat = state.refs[0]?.category;
 
-      // Селект в форме есть и по умолчанию показывает категорию генератора
+      // Селект в форме есть (по умолчанию — «выбери», см. секцию rawsafe, F27)
       out.hasSelect = !!document.getElementById('db-f-refcat');
       return out;
     });

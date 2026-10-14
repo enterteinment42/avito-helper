@@ -28,40 +28,60 @@ async function importFile(page, name, payload, answers) {
 export async function runRawsafe(browser, base, t) {
   t.section('rawsafe — аудит №3: сырьё и промпт не теряются молча');
 
-  // ── F27: эталон из формы Истории ложится в ту категорию, что видна в селекте ──
+  // ── F27: категория эталона из формы Истории — только явным выбором (решение 15.10) ──
   {
     const { ctx, page, consoleErrors } = await openApp(browser, base + '/avito-helper.html', { storage: OFF });
     try {
-      const r = await page.evaluate(() => {
-        state.form.category = 'game';
+      const form = (o) => ({ product: 'GTA 5', region: 'Пермь', status: 'active', note: '', account: '',
+                             title: 'GTA 5 PS4 PS5', desc: 'Текст объявления руками', toRefs: true, postedAt: '', refCat: '', ...o });
+      const r = await page.evaluate((f) => {
+        state.form.category = 'game';   // генератор стоит на играх — подставляться это не должно
         state.tab = 'database'; render();
         const shown = document.getElementById('db-f-refcat')?.value;
-        state.dbForm = { product: 'GTA 5', region: 'Пермь', status: 'active', note: '', account: '',
-                         title: 'GTA 5 PS4 PS5', desc: 'Текст объявления руками', toRefs: true, postedAt: '', refCat: '' };
+        const label = document.getElementById('db-f-refcat')?.selectedOptions[0]?.textContent || '';
+        const nDb = state.db.length, nRefs = state.refs.length;
+        state.dbForm = f;
         document.querySelector('[data-act="db-add"]')?.click();
-        return { shown, saved: state.refs[state.refs.length - 1]?.category };
-      });
-      t.eq('F27: селект показывает категорию генератора', r.shown, 'game');
-      t.eq('F27: эталон сохранён в показанной категории, а не в «Другое»', r.saved, 'game');
+        return { shown, label, db: state.db.length - nDb, refs: state.refs.length - nRefs, toast: document.getElementById('toast')?.textContent || '' };
+      }, form());
+      t.eq('F27: по умолчанию категория не выбрана', r.shown, '');
+      t.ok('F27: в списке видно «— выбери категорию —»', /выбери категорию/.test(r.label), r.label);
+      t.ok('F27: без выбора не сохраняется ни запись, ни эталон (нет полузаписи)', r.db === 0 && r.refs === 0, JSON.stringify(r));
+      t.ok('F27: тост объясняет, что сделать', /Выбери категорию эталона/.test(r.toast), r.toast);
 
-      // Правка записи без _category: показано и сохранено — одно и то же
+      const ok = await page.evaluate((f) => {
+        const nDb = state.db.length;
+        state.dbForm = f;
+        document.querySelector('[data-act="db-add"]')?.click();
+        return { db: state.db.length - nDb, cat: state.refs[state.refs.length - 1]?.category, next: state.dbForm.refCat,
+                 shownNext: document.getElementById('db-f-refcat')?.value };
+      }, form({ refCat: 'gaming_sub' }));
+      t.eq('F27: с выбором — запись добавлена', ok.db, 1);
+      t.eq('F27: эталон в выбранной категории, а не в категории генератора', ok.cat, 'gaming_sub');
+      t.ok('F27: для следующего эталона выбор снова пуст', ok.next === '' && ok.shownNext === '', JSON.stringify(ok));
+
+      // Галочка снята — категория не нужна
+      const noRef = await page.evaluate((f) => {
+        const nDb = state.db.length, nRefs = state.refs.length;
+        state.dbForm = f;
+        document.querySelector('[data-act="db-add"]')?.click();
+        return { db: state.db.length - nDb, refs: state.refs.length - nRefs };
+      }, form({ toRefs: false, title: 'Другой', desc: 'Другой текст' }));
+      t.ok('F27: без галочки «в эталоны» запись сохраняется и без категории', noRef.db === 1 && noRef.refs === 0, JSON.stringify(noRef));
+
+      // Правка записи: категория записи подставлена — она её собственная, не генератора
       const e = await page.evaluate(() => {
-        state.form.category = 'gaming_sub';
-        const rec = state.db[state.db.length - 1];
-        delete rec._category;
+        const rec = state.db.find(r => r.title === 'Другой');
+        rec._category = 'ai_sub';
         document.body.insertAdjacentHTML('beforeend', `<button id="__edit" data-act="db-edit" data-id="${rec.id}"></button>`);
         document.getElementById('__edit').click();
         const shown = document.getElementById('db-f-refcat')?.value;
         state.dbForm.title = 'Новый заголовок'; state.dbForm.desc = 'Новый текст'; state.dbForm.toRefs = true;
         document.querySelector('[data-act="db-save"]')?.click();
-        return { shown, saved: state.refs[state.refs.length - 1]?.category, n: state.refs.length };
+        return { shown, saved: state.refs[state.refs.length - 1]?.category };
       });
-      t.eq('F27: при правке записи без категории эталон — в показанной категории', e.saved, e.shown);
-
-      // Категория генератора, которой нет среди категорий, — первая строка, как выбирает браузер
-      const h = await page.evaluate(() => { state.form.category = 'нет-такой'; return { pick: dbRefCat({ refCat: '' }), first: CATS[0].id, other: dbRefCat({ refCat: 'other' }) }; });
-      t.eq('F27: неизвестная категория генератора → первая строка селекта', h.pick, h.first);
-      t.eq('F27: явный выбор «Другое» уважается', h.other, 'other');
+      t.ok('F27: при правке — категория самой записи', e.shown === 'ai_sub' && e.saved === 'ai_sub', JSON.stringify(e));
+      t.eq('F27: явный выбор «Другое» уважается', await page.evaluate(() => dbRefCat({ refCat: 'other' })), 'other');
       t.ok('F27: консоль чистая', consoleErrors.length === 0, consoleErrors.join(' | '));
     } finally { await ctx.close(); }
   }
@@ -85,37 +105,51 @@ export async function runRawsafe(browser, base, t) {
       t.eq('F24: «Сбросить» с отменой промпт не трогает', kept.sys, 'Мой промпт: без эмодзи, дефис вместо тире.');
       t.ok('F24: вопрос называет длину текста', /\(42 знаков\)/.test(kept.asked), kept.asked);
 
+      const MINE = 'Мой промпт: без эмодзи, дефис вместо тире.';
       await answerConfirms(page, [true]);
       await page.click('#sys-reset');
       const reset = await page.evaluate(() => ({
-        sys: state.settings.customSys, prev: state.settings.customSysPrev,
-        stored: JSON.parse(localStorage.getItem('avito_settings')).customSysPrev,
-        undo: document.getElementById('sys-undo')?.textContent || '',
+        sys: state.settings.customSys, hist: state.settings.customSysHist.map(h => h.text),
+        at: state.settings.customSysHist[0]?.at,
+        stored: JSON.parse(localStorage.getItem('avito_settings')).customSysHist?.map(h => h.text),
+        list: document.querySelectorAll('[data-sys-hist]').length,
+        summary: document.querySelector('[data-sys-hist]')?.closest('details')?.querySelector('summary')?.textContent || '',
         logged: window.__jl.find(e => e.event === 'sys_changed'),
       }));
       t.eq('F24: сброс подтверждён — промпт пуст', reset.sys, '');
-      t.eq('F24: прежняя версия сохранена', reset.prev, 'Мой промпт: без эмодзи, дефис вместо тире.');
-      t.eq('F24: прежняя версия записана на диск (едет в бэкап и на сервер)', reset.stored, 'Мой промпт: без эмодзи, дефис вместо тире.');
-      t.ok('F24: кнопка «↩ Вернуть прежний» видна', /Вернуть прежний \(42 зн\.\)/.test(reset.undo), reset.undo);
-      t.ok('F24: журнал получил обе версии', reset.logged && reset.logged.via === 'reset' && reset.logged.prev.startsWith('Мой промпт') && reset.logged.next === '', JSON.stringify(reset.logged));
+      t.ok('F24: прежняя версия в истории, с датой', reset.hist.length === 1 && reset.hist[0] === MINE && !!reset.at, JSON.stringify(reset));
+      t.ok('F24: история записана на диск (едет в бэкап и на сервер)', reset.stored?.[0] === MINE, JSON.stringify(reset.stored));
+      t.ok('F24: список «Прежние версии» виден', reset.list === 1 && /Прежние версии — 1 из 5/.test(reset.summary), reset.summary);
+      t.ok('F24: журнал получил обе версии', reset.logged && reset.logged.via === 'reset' && reset.logged.prev === MINE && reset.logged.next === '', JSON.stringify(reset.logged));
 
-      await page.click('#sys-undo');
-      const back = await page.evaluate(() => ({ sys: state.settings.customSys, undo: !!document.getElementById('sys-undo') }));
-      t.eq('F24: «↩ Вернуть прежний» возвращает текст', back.sys, 'Мой промпт: без эмодзи, дефис вместо тире.');
-      t.ok('F24: после возврата кнопка прячется (версии совпали)', !back.undo);
+      await page.evaluate(() => document.querySelector('[data-sys-hist]').closest('details').open = true);
+      await page.click('[data-sys-hist="0"]');
+      const back = await page.evaluate(() => ({ sys: state.settings.customSys, hist: state.settings.customSysHist.length }));
+      t.eq('F24: «↩ вернуть» возвращает текст', back.sys, MINE);
+      t.eq('F24: вернувшаяся версия ушла из списка (пустой текст в историю не кладётся)', back.hist, 0);
+
+      // Семь правок подряд: хранятся пять последних, свежие первыми, без повторов
+      const many = await page.evaluate(() => {
+        for (const s of ['в1', 'в2', 'в3', 'в2', 'в4', 'в5', 'в6', 'в7']) sysReplace(s, 'save');
+        return state.settings.customSysHist.map(h => h.text);
+      });
+      t.eq('F24: хранятся 5 последних версий, свежие первыми, без повторов', many.join(','), 'в6,в5,в4,в2,в3');
+      const mid = await page.evaluate(() => { sysReplace(state.settings.customSysHist[3].text, 'undo'); return { sys: state.settings.customSys, hist: state.settings.customSysHist.map(h => h.text) }; });
+      t.ok('F24: возврат версии из середины — текущая уходит в историю первой', mid.sys === 'в2' && mid.hist.join(',') === 'в7,в6,в5,в4,в3', JSON.stringify(mid));
+      await page.evaluate((m) => { sysReplace(m, 'undo'); render(); }, MINE);
 
       // «Сохранить» с пустым полем — тоже стирание, тоже спрашивает
       await page.fill('#sys-prompt', '   ');
       await answerConfirms(page, [false]);
       await page.click('#sys-save');
-      t.eq('F24: «Сохранить» пустого поля с отменой ничего не стирает', await page.evaluate(() => state.settings.customSys), 'Мой промпт: без эмодзи, дефис вместо тире.');
+      t.eq('F24: «Сохранить» пустого поля с отменой ничего не стирает', await page.evaluate(() => state.settings.customSys), MINE);
 
       // Обычная замена текста — без вопроса, но с прежней версией
       await page.fill('#sys-prompt', 'Новый промпт');
       await answerConfirms(page, []);
       await page.click('#sys-save');
-      const sv = await page.evaluate(() => ({ sys: state.settings.customSys, prev: state.settings.customSysPrev, asked: window.__asked.length }));
-      t.ok('F24: замена текста не спрашивает и помнит прежний', sv.sys === 'Новый промпт' && sv.prev.startsWith('Мой промпт') && sv.asked === 0, JSON.stringify(sv));
+      const sv = await page.evaluate(() => ({ sys: state.settings.customSys, prev: state.settings.customSysHist[0]?.text, asked: window.__asked.length }));
+      t.ok('F24: замена текста не спрашивает и помнит прежний', sv.sys === 'Новый промпт' && sv.prev === 'Мой промпт: без эмодзи, дефис вместо тире.' && sv.asked === 0, JSON.stringify(sv));
       t.ok('F24: консоль чистая', consoleErrors.length === 0, consoleErrors.join(' | '));
     } finally { await ctx.close(); }
   }

@@ -1433,15 +1433,53 @@ function rotInputToTs(s) {
 // Положить текст объявления в эталоны. Повторный вызов с тем же текстом ничего
 // не делает: тот же текст двумя строками ушёл бы в промпт дважды и перевесил бы
 // остальной корпус — та же ошибка, что была с бот-близнецом из избранного.
-// Категория эталона из формы Истории — РОВНО та, что видна в селекте (F27): пока
-// селект не трогали, refCat пуст, на экране выбрана категория генератора (или,
-// если её нет среди категорий, первая строка списка — так выбирает сам браузер),
-// а сохранялось пустое значение → «Другое», и эталон выпадал из примеров своей
-// категории. При правке записи refCat заранее заполнен её _category.
+// Свой промпт — невосполнимое (F24): раньше «Сбросить» стирал его без вопроса,
+// а через 5 с затиралась и серверная копия. Теперь любая замена кладёт прежний
+// текст в settings.customSysHist — до SYS_HIST_MAX версий, свежие первыми (решение
+// Дениса 15.10: одной версии мало — три правки подряд, и лучший первый вариант
+// уже не вернуть). История едет в бэкап и на сервер вместе с настройками; обе
+// версии каждой замены пишутся и в журнал — он вторая копия сырья.
+const SYS_HIST_MAX = 5;
+function sysReplace(next, via) {
+  const prev = state.settings.customSys || '';
+  if (next === prev) return false;
+  const hist = Array.isArray(state.settings.customSysHist) ? state.settings.customSysHist : [];
+  // Текст, ставший текущим, из списка уходит; одинаковые версии не копятся
+  state.settings.customSysHist = [
+    ...(prev ? [{ text: prev, at: new Date().toISOString() }] : []),
+    ...hist.filter(h => h && h.text && h.text !== prev && h.text !== next),
+  ].slice(0, SYS_HIST_MAX);
+  state.settings.customSys = next;
+  jlog('sys_changed', null, { via, prev, next });
+  save();
+  return true;
+}
+function sysHistHTML() {
+  const hist = (state.settings.customSysHist || []).filter(h => h && h.text);
+  if (!hist.length) return '';
+  const rows = hist.map((h, i) => {
+    const when = h.at ? new Date(h.at).toLocaleString('ru', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '';
+    return `<div class="preset-item">
+      <span class="preset-item-meta" style="flex-shrink:0">${esc(when)}</span>
+      <span class="preset-item-name" title="${esc(h.text)}" style="cursor:help;min-width:0;overflow-wrap:anywhere">${esc(h.text.slice(0, 90))}${h.text.length > 90 ? '…' : ''} <span style="color:var(--muted)">(${h.text.length} зн.)</span></span>
+      <button class="btn-sm" data-sys-hist="${i}" style="padding:2px 7px;font-size:11px">↩ вернуть</button>
+    </div>`;
+  }).join('');
+  return `<details style="margin-top:12px">
+    <summary style="cursor:pointer;font-size:12px;color:var(--muted)">🕘 Прежние версии — ${hist.length} из ${SYS_HIST_MAX}</summary>
+    <div style="display:flex;flex-direction:column;gap:6px;margin-top:8px">${rows}</div>
+  </details>`;
+}
+
+// Категория эталона из формы Истории выбирается ЯВНО (F27, решение Дениса 15.10).
+// Раньше селект показывал категорию генератора, а сохранял пустое → «Другое»; а
+// подстановка категории генератора по умолчанию клала бы объявление про подписку
+// в игры, если генератор с утра стоит на играх, — тихий перекос примеров голоса.
+// Поэтому по умолчанию «— выбери —», и без выбора в эталоны не сохраняется.
+// При правке записи refCat заранее заполнен её собственной _category.
 function dbRefCat(f) {
-  const c = (f && f.refCat) || state.form.category;
-  if (c === 'other' || CATS.some(x => x.id === c)) return c;
-  return CATS[0]?.id || 'other';
+  const c = (f && f.refCat) || '';
+  return (c === 'other' || CATS.some(x => x.id === c)) ? c : '';
 }
 
 function addRefFromText(title, desc, source = 'mine', category = null) {
@@ -1469,7 +1507,7 @@ const DEF_SETTINGS = {
   model: 'claude-sonnet-5',
   orModel: 'anthropic/claude-3.5-sonnet',
   customSys: '',
-  customSysPrev: '',  // прежняя версия своего промпта — для «↩ Вернуть прежний» (F24)
+  customSysHist: [],  // прежние версии своего промпта, свежие первыми, до 5: [{ text, at }] (F24)
   pageName:  'Страница 1',
   regions:   [...REGIONS],
   // Ротация: через сколько дней объявление считается выдохшимся. Число общее, но
@@ -6240,9 +6278,8 @@ function settingsTabHTML() {
           ${isCustom ? `<button class="btn-add" id="sys-reset">Сбросить до дефолтного</button>
           <span style="font-size:12px;color:var(--warn)">⚠ Используется кастомный промпт</span>` :
           `<span style="font-size:12px;color:var(--muted)">Дефолтный промпт активен</span>`}
-          ${state.settings.customSysPrev && state.settings.customSysPrev !== state.settings.customSys
-            ? `<button class="btn-add" id="sys-undo" title="${esc(state.settings.customSysPrev.slice(0, 300))}">↩ Вернуть прежний (${state.settings.customSysPrev.length} зн.)</button>` : ''}
         </div>
+        ${sysHistHTML()}
       </div>
     </div>
     <div class="card" style="margin-top:16px">
@@ -6542,41 +6579,30 @@ function bindSettingsTab() {
   }
   regionAddBtn?.addEventListener('click', doAddRegion);
   regionInput?.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); doAddRegion(); } });
-  // Свой промпт — невосполнимое (F24): раньше «Сбросить» стирал его без вопроса,
-  // а через 5 с затиралась и серверная копия. Теперь любая замена кладёт прежнюю
-  // версию в customSysPrev (едет в бэкап и на сервер вместе с настройками) и пишет
-  // обе версии в журнал — он вторая копия сырья.
-  const sysReplace = (next, via) => {
-    const prev = state.settings.customSys || '';
-    if (next === prev) return false;
-    if (prev) state.settings.customSysPrev = prev;
-    state.settings.customSys = next;
-    jlog('sys_changed', null, { via, prev, next });
-    save();
-    return true;
-  };
   document.getElementById('sys-save')?.addEventListener('click', () => {
     const val = (document.getElementById('sys-prompt')?.value || '').trim();
     const prev = state.settings.customSys || '';
     if (val === prev) { toast('Промпт не изменился'); return; }
-    if (!val && !confirm(`Поле пустое — сохранить значит стереть своё дополнение к промпту (${prev.length} знаков).\n\nПрежний текст можно будет вернуть кнопкой «↩ Вернуть прежний».`)) return;
+    if (!val && !confirm(`Поле пустое — сохранить значит стереть своё дополнение к промпту (${prev.length} знаков).\n\nПрежний текст останется в списке «Прежние версии» — вернуть можно.`)) return;
     sysReplace(val, 'save');
     toast(val ? 'Промпт сохранён' : 'Промпт сброшен до дефолтного');
     render();
   });
   document.getElementById('sys-reset')?.addEventListener('click', () => {
     const prev = state.settings.customSys || '';
-    if (!confirm(`Сбросить своё дополнение к промпту (${prev.length} знаков) до дефолтного?\n\nПрежний текст можно будет вернуть кнопкой «↩ Вернуть прежний».`)) return;
+    if (!confirm(`Сбросить своё дополнение к промпту (${prev.length} знаков) до дефолтного?\n\nПрежний текст останется в списке «Прежние версии» — вернуть можно.`)) return;
     sysReplace('', 'reset');
     toast('Промпт сброшен до дефолтного');
     render();
   });
-  document.getElementById('sys-undo')?.addEventListener('click', () => {
-    // Обмен местами, а не перезапись: возврат тоже можно отменить
-    sysReplace(state.settings.customSysPrev || '', 'undo');
-    toast('Прежний промпт возвращён');
+  document.querySelectorAll('[data-sys-hist]').forEach(b => b.addEventListener('click', () => {
+    const h = (state.settings.customSysHist || [])[+b.dataset.sysHist];
+    if (!h) return;
+    // Текущий текст при этом сам уходит в историю — возврат тоже можно отменить
+    sysReplace(h.text, 'undo');
+    toast('Версия промпта возвращена');
     render();
-  });
+  }));
   document.getElementById('sync-toggle')?.addEventListener('click', () => {
     try {
       if (syncEnabled()) localStorage.setItem(SYNC_OFF_KEY, '1');
@@ -10120,12 +10146,13 @@ function dbTabHTML() {
             <div class="field" style="min-width:170px;margin:0">
               <label>Категория эталона</label>
               <select id="db-f-refcat">
+                <option value=""${dbRefCat(f) ? '' : ' selected'}>— выбери категорию —</option>
                 ${CATS.map(c => `<option value="${esc(c.id)}"${dbRefCat(f) === c.id ? ' selected' : ''}>${esc(c.label)}</option>`).join('')}
                 <option value="other"${dbRefCat(f) === 'other' ? ' selected' : ''}>Другое</option>
               </select>
             </div>
           </div>
-          <div style="font-size:11px;color:var(--muted);margin-top:6px">У записи Истории категории нет, а эталону она нужна: по ней подбираются примеры твоего голоса. По умолчанию — та, что выбрана в генераторе; поправь, если объявление из другой.</div>
+          <div style="font-size:11px;color:var(--muted);margin-top:6px">У записи Истории категории нет, а эталону она нужна: по ней подбираются примеры твоего голоса. Выбери её сам — подставлять категорию генератора опасно: забыл переключить, и эталон тихо уйдёт в чужие примеры.</div>
         </div>
       </details>
 
@@ -11831,6 +11858,9 @@ document.addEventListener('click', e => {
       if (!f.product.trim() || !f.region.trim()) { toast('Укажите товар и регион'); break; }
       const at = rotInputToTs(f.postedAt);
       const title = (f.title || '').trim(), desc = (f.desc || '').trim();
+      // Проверка ДО записи: иначе запись Истории легла бы, а эталон — нет, и
+      // повторное нажатие после выбора категории задвоило бы запись
+      if ((title || desc) && f.toRefs && !dbRefCat(f)) { toast('Выбери категорию эталона — или сними галочку «в эталоны»'); break; }
       const rec = {
         id: Date.now(), _uid: newUid(),
         product: f.product.trim(), region: f.region.trim(),
@@ -11847,7 +11877,7 @@ document.addEventListener('click', e => {
       if ((title || desc) && f.toRefs) refAdded = addRefFromText(title, desc, 'mine', dbRefCat(f));
       state.dbForm = { product: f.product.trim(), region: f.region.trim(), status: 'active', note: '',
                        account: rec.account, title: '', desc: '', toRefs: f.toRefs, postedAt: '',
-                       refCat: f.refCat || '' };
+                       refCat: '' };  // следующий эталон — снова явный выбор
       save(); renderDb();
       if (title || desc) toast(refAdded ? 'Записано, текст ушёл и в эталоны' : 'Записано');
       break;
@@ -11870,6 +11900,9 @@ document.addEventListener('click', e => {
       if (state.dbEditId === null) break;
       const f2 = state.dbForm;
       if (!f2.product.trim() || !f2.region.trim()) { toast('Укажите товар и регион'); break; }
+      if (((f2.title || '').trim() || (f2.desc || '').trim()) && f2.toRefs && !dbRefCat(f2)) {
+        toast('Выбери категорию эталона — или сними галочку «в эталоны»'); break;
+      }
       const idx = state.db.findIndex(r => r.id === state.dbEditId);
       if (idx !== -1) {
         const rec = state.db[idx];
