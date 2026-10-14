@@ -267,31 +267,46 @@ else {
 // («зачем обращаться ко мне…»), и он считается переписанным телом. У Росомахи
 // 34 % общего числа распадались на 13 % по телу и 84 % удержанных слов бота.
 // Хвост ищем по выравниванию, а не по тексту подписи: она переписывается в каждом
-// объявлении (правило Дениса), шаблон её не поймает. Хвост = слова финала после
-// последнего слова, совпавшего с ботом, если их не меньше TAIL_MIN — иначе это
-// обычная правка концовки. Дописанное в конец по делу (фичи, цены) тоже уйдёт
-// в «хвост», поэтому ниже печатается каждая пара — проверять глазами.
+// объявлении (правило Дениса), шаблон её не поймает. Хвост = конец финала, где
+// совпавших с ботом слов не больше ~10 %, длиной от TAIL_MIN — иначе это обычная
+// правка концовки. Не «после последнего совпадения»: частые слова подписи («в»,
+// «и», «игры») выравниваются с ботом, и хвост не находился бы вовсе (ревью 15.10).
+// Ни одного совпадения — это переписанный текст целиком, а не подпись.
+// Дописанное в конец по делу (фичи, цены) тоже уйдёт в «хвост», поэтому ниже
+// печатается каждая пара — проверять глазами.
 const TAIL_MIN = 20;
+const TAIL_HIT_COST = 9;   // одно совпадение «стоит» 9 новых слов → порог плотности 10 %
 const words = (s) => String(s || '').toLowerCase().split(/\s+/).filter(Boolean).slice(0, 800);
 function lcsAlign(wa, wb) {
   const m = wa.length, n = wb.length;
   const d = Array.from({ length: m + 1 }, () => new Uint16Array(n + 1));
   for (let i = 1; i <= m; i++) for (let j = 1; j <= n; j++)
     d[i][j] = wa[i-1] === wb[j-1] ? d[i-1][j-1] + 1 : Math.max(d[i-1][j], d[i][j-1]);
-  // Последнее совпавшее слово финала — с конца, по таблице
-  let i = m, j = n, lastB = -1;
+  // Какие слова финала совпали с ботом — обратным проходом по таблице
+  const hit = new Uint8Array(n);
+  let i = m, j = n;
   while (i > 0 && j > 0) {
-    if (wa[i-1] === wb[j-1]) { if (lastB < 0) lastB = j - 1; i--; j--; }
+    if (wa[i-1] === wb[j-1]) { hit[j-1] = 1; i--; j--; }
     else if (d[i-1][j] >= d[i][j-1]) i--; else j--;
   }
-  return { lcs: d[m][n], lastB };
+  return { lcs: d[m][n], hit };
+}
+// Самый «новый» конец финала: идём с конца, новое слово +1, совпавшее −TAIL_HIT_COST,
+// берём длину с наибольшим счётом
+function tailLen(hit) {
+  let score = 0, best = 0, bestLen = 0;
+  for (let k = hit.length - 1; k >= 0; k--) {
+    score += hit[k] ? -TAIL_HIT_COST : 1;
+    if (score > best) { best = score; bestLen = hit.length - k; }
+  }
+  return bestLen;
 }
 const share = (lcs, a, b) => (a + b ? 1 - (2 * lcs) / (a + b) : 0);
 function splitPair(bot, fin) {
   const wa = words(bot), wb = words(fin);
-  const { lcs, lastB } = lcsAlign(wa, wb);
-  const trailing = wb.length - 1 - lastB;
-  const tail = trailing >= TAIL_MIN ? trailing : 0;
+  const { lcs, hit } = lcsAlign(wa, wb);
+  const trailing = lcs ? tailLen(hit) : 0;
+  const tail = trailing >= TAIL_MIN && trailing < wb.length ? trailing : 0;
   const body = wb.slice(0, wb.length - tail);
   const bodyLcs = tail ? lcsAlign(wa, body).lcs : lcs;
   return {
@@ -312,7 +327,7 @@ if (pasted.length) {
   if (!pairs.size) console.log('   (в событиях нет botDescription/finalDescription — считать не из чего)');
   else {
     const rs = [...pairs.values()].map(e => ({ e, r: splitPair(e.botDescription, e.finalDescription) }));
-    console.log(`   Пар «бот → финал»: ${rs.length}  (повторные доносы одной записи схлопнуты; хвост — от ${TAIL_MIN} слов в конце без совпадений)\n`);
+    console.log(`   Пар «бот → финал»: ${rs.length}  (повторные доносы одной записи схлопнуты; хвост — от ${TAIL_MIN} слов в конце, где совпадений с ботом не больше ~10 %)\n`);
     console.log(`   ${'товар · регион'.padEnd(30)} ${'слов'.padStart(11)} ${'хвост'.padStart(6)} ${'всего'.padStart(6)} ${'тело'.padStart(6)} ${'удерж.'.padStart(7)}`);
     const p0 = (x) => (x * 100).toFixed(0).padStart(5) + '%';
     for (const { e, r } of rs) {

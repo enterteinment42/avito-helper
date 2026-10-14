@@ -1440,22 +1440,51 @@ function rotInputToTs(s) {
 // уже не вернуть). История едет в бэкап и на сервер вместе с настройками; обе
 // версии каждой замены пишутся и в журнал — он вторая копия сырья.
 const SYS_HIST_MAX = 5;
+// История, пригодная к показу и возврату. Список приезжает и из бэкапа, и с сервера,
+// поэтому чистится при КАЖДОМ чтении — и разметка, и обработчик клика берут один
+// и тот же список, иначе номер кнопки указывал бы не на ту версию (ревью 15.10).
+function sysHist(s = state.settings) {
+  return (Array.isArray(s && s.customSysHist) ? s.customSysHist : [])
+    .filter(h => h && typeof h.text === 'string' && h.text);
+}
+// Сборка истории: текущий текст первым, затем остальные без повторов и без того,
+// что стало текущим.
+function sysHistMerge(lists, current) {
+  const seen = new Set([current]);
+  const out = [];
+  for (const h of lists.flat()) {
+    if (!h || !h.text || seen.has(h.text)) continue;
+    seen.add(h.text); out.push(h);
+  }
+  return out.slice(0, SYS_HIST_MAX);
+}
 function sysReplace(next, via) {
   const prev = state.settings.customSys || '';
   if (next === prev) return false;
-  const hist = Array.isArray(state.settings.customSysHist) ? state.settings.customSysHist : [];
-  // Текст, ставший текущим, из списка уходит; одинаковые версии не копятся
-  state.settings.customSysHist = [
-    ...(prev ? [{ text: prev, at: new Date().toISOString() }] : []),
-    ...hist.filter(h => h && h.text && h.text !== prev && h.text !== next),
-  ].slice(0, SYS_HIST_MAX);
+  state.settings.customSysHist = sysHistMerge(
+    [prev ? [{ text: prev, at: new Date().toISOString() }] : [], sysHist()], next);
   state.settings.customSys = next;
   jlog('sys_changed', null, { via, prev, next });
   save();
   return true;
 }
+// Настройки целиком из бэкапа или с сервера. Раньше это было `state.settings = {…}`,
+// и свой промпт менялся мимо истории версий и журнала (ревью 15.10): текущий текст
+// пропадал без следа. Теперь он уходит в историю, обе истории сливаются по дате.
+function settingsAdopt(inc) {
+  const cur = state.settings || {};
+  const next = { ...DEF_SETTINGS, ...inc };
+  if (MODEL_MIGRATION[next.model]) next.model = MODEL_MIGRATION[next.model];
+  const prevSys = cur.customSys || '', nextSys = next.customSys || '';
+  const byDate = [...(prevSys && prevSys !== nextSys ? [{ text: prevSys, at: new Date().toISOString() }] : []),
+                  ...sysHist(next), ...sysHist(cur)]
+    .sort((a, b) => String(b.at || '').localeCompare(String(a.at || '')));
+  next.customSysHist = sysHistMerge([byDate], nextSys);
+  state.settings = next;
+  if (prevSys !== nextSys) jlog('sys_changed', null, { via: 'restore', prev: prevSys, next: nextSys });
+}
 function sysHistHTML() {
-  const hist = (state.settings.customSysHist || []).filter(h => h && h.text);
+  const hist = sysHist();
   if (!hist.length) return '';
   const rows = hist.map((h, i) => {
     const when = h.at ? new Date(h.at).toLocaleString('ru', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '';
@@ -2077,12 +2106,28 @@ function syncTrash() {
 // Корзина ограничена БАЙТАМИ, а не числом записей: она уезжает в каждой отправке и
 // делит квоту localStorage с живыми данными продавца, а эталон бывает под 2 КБ.
 const SYNC_TRASH_MAX_BYTES = 200000;
+// Размер считается по каждой записи один раз и вычитается бегущей суммой: прежний
+// цикл сериализовал весь массив на каждом шаге — квадрат, заметный на массовой
+// укладке (замена базы кладёт сразу все записи с финалами, ревью 15.10).
+function syncTrashFit(list) {
+  const sizes = list.map(x => JSON.stringify(x).length + 1);
+  let total = sizes.reduce((a, b) => a + b, 2), cut = 0;
+  while (list.length - cut > 1 && total > SYNC_TRASH_MAX_BYTES) total -= sizes[cut++];
+  return list.slice(cut);
+}
 function syncTrashSave(list) {
+  try { localStorage.setItem('avito_trash', JSON.stringify(syncTrashFit(list))); } catch(e) {}
+}
+// Положить в корзину ВСЁ или ничего. Для массовой укладки перед заменой базы:
+// если корзина не вмещает новое без вытеснения старого или запись в хранилище
+// не удалась, возвращает false — и замена не делается (решение Дениса 15.10).
+function syncTrashAddAll(items) {
   try {
-    const t = [...list];
-    while (t.length > 1 && JSON.stringify(t).length > SYNC_TRASH_MAX_BYTES) t.shift();
-    localStorage.setItem('avito_trash', JSON.stringify(t));
-  } catch(e) {}
+    const next = [...syncTrash(), ...items];
+    if (syncTrashFit(next).length !== next.length) return false;
+    localStorage.setItem('avito_trash', JSON.stringify(next));
+    return true;
+  } catch(e) { return false; }
 }
 
 function syncVoiceDoc() {
@@ -2329,10 +2374,7 @@ async function syncPullSettings() {
       rebuildScenes();
     }
     if (d.catalogs && typeof d.catalogs === 'object') state.catalogs = d.catalogs;
-    if (d.settings && typeof d.settings === 'object') {
-      state.settings = { ...DEF_SETTINGS, ...d.settings };
-      if (MODEL_MIGRATION[state.settings.model]) state.settings.model = MODEL_MIGRATION[state.settings.model];
-    }
+    if (d.settings && typeof d.settings === 'object') settingsAdopt(d.settings);
     if (Array.isArray(d.presets)) state.presets = d.presets;
     if (Array.isArray(d.queue)) state.postQueue = d.queue;
     if (d.cv && typeof d.cv === 'object') {
@@ -3606,11 +3648,14 @@ async function doGenTitlesOnly() {
   // F28: сохранённый пакет (переживает F5) рисуется в блоке результатов первым и
   // закрывал собой и спиннер, и шаг заголовков — платная генерация шла невидимо,
   // кнопка казалась мёртвой, и её жали ещё раз. Пакет тоже оплачен, поэтому не
-  // стираем молча, а спрашиваем.
+  // стираем молча, а спрашиваем. И убираем окончательно только когда заголовки
+  // пришли: на время запроса пакет отложен в памяти (иначе он заслонил бы спиннер),
+  // а при ошибке возвращается на место и на диск (ревью 15.10).
+  let keptBatch = null;
   if (state.batchResults.length) {
     if (!confirm(`На экране сохранённый пакет по регионам (${state.batchResults.length} вар.). Шаг заголовков займёт его место — пакет будет убран.\n\nНужные строки можно до этого сохранить ☆ или выгрузить «📦 Экспорт».\n\nПродолжить?`)) return;
+    keptBatch = { results: state.batchResults, expanded: state.batchExpanded };
     state.batchResults = []; state.batchExpanded = null;
-    save();
   }
   state.loading = true; state.error = null; state.loadingKind = 'titles';
   state.titleStep = null;
@@ -3643,10 +3688,17 @@ async function doGenTitlesOnly() {
       latencyMs: Date.now() - jT0, titles: titles.map(t => t.title),
       ...(truncated ? { truncated: true } : {}),
     });
+    if (keptBatch) save();   // заголовки на месте — теперь пакет убран и с диска
   } catch(e) {
     state.error = e.message;
     console.error(e);
     jlog('error', jChain, { stage: 'generate_titles', message: String(e.message || '').slice(0, 300) });
+    if (keptBatch) {
+      // Пакет рисуется первым и заслонил бы ошибку — говорим о ней тостом
+      state.batchResults = keptBatch.results; state.batchExpanded = keptBatch.expanded;
+      save();
+      toast('Заголовки не получены: ' + e.message + ' Пакет на месте.');
+    }
   } finally {
     state.loading = false; state.loadingKind = null;
     refreshResults();
@@ -6596,7 +6648,7 @@ function bindSettingsTab() {
     render();
   });
   document.querySelectorAll('[data-sys-hist]').forEach(b => b.addEventListener('click', () => {
-    const h = (state.settings.customSysHist || [])[+b.dataset.sysHist];
+    const h = sysHist()[+b.dataset.sysHist];
     if (!h) return;
     // Текущий текст при этом сам уходит в историю — возврат тоже можно отменить
     sysReplace(h.text, 'undo');
@@ -10426,7 +10478,16 @@ function bindDbTab() {
         if (!data) throw new Error('Ожидался массив записей или объект бэкапа');
         if (data.some(r => typeof r?.product !== 'string')) throw new Error('В записях отсутствует поле "product"');
         const arr = v => Array.isArray(v) ? v : [];
-        const refsIn = arr(obj.refs), favsIn = arr(obj.favorites), presetsIn = arr(obj.presets), queueIn = arr(obj.queue);
+        // Удалённое человеком из старого бэкапа не воскресает — правило то же, что у
+        // синхронизации и соседней вкладки (решение Дениса 15.10). Ошибочно удалённое
+        // возвращается из корзины, а не повторным импортом.
+        const tombAt = new Map(syncTombs().map(t => [t.k, t.at || 0]));
+        const alive = (list, kind) => list.filter(x => !syncKilled(x, kind, tombAt));
+        const dbAlive = alive(data, SYNC_KIND.db);
+        const refsIn = alive(arr(obj.refs), SYNC_KIND.ref), favsIn = alive(arr(obj.favorites), SYNC_KIND.fav);
+        const presetsIn = arr(obj.presets), queueIn = arr(obj.queue);
+        const killedN = (data.length - dbAlive.length) + (arr(obj.refs).length - refsIn.length) + (arr(obj.favorites).length - favsIn.length);
+        const killedNote = killedN ? `; пропущено удалённых тобой раньше: ${killedN}` : '';
 
         // Списки сравниваются по СОДЕРЖИМОМУ, а не по id: id — это Date.now() того
         // устройства, где запись создали, у разных баз он ничего не значит.
@@ -10482,10 +10543,16 @@ function bindDbTab() {
         // F25: записи с финалом, которых нет в файле, — сырьё голоса. Замена уносила
         // их мимо корзины, а через 5 с новая база уезжала и на сервер. Теперь они
         // названы в вопросе числом и перед заменой кладутся в корзину.
-        const inFile = syncMatcher(data, SYNC_KIND.db);
-        const lostFinals = merge ? [] : state.db.filter(r => r.finalDesc && !inFile.find(r));
+        // Своя пара в файле финал не спасает, если у неё финала нет или он другой
+        // (бэкап снят до доноса) — такая запись тоже теряет финал (ревью 15.10).
+        const inFile = syncMatcher(dbAlive, SYNC_KIND.db);
+        const lostFinals = merge ? [] : state.db.filter(r => {
+          if (!r.finalDesc) return false;
+          const pair = inFile.find(r);
+          return !pair || pair.finalDesc !== r.finalDesc;
+        });
         if (!merge && !confirm(`Точно заменить всю базу? Текущие ${state.db.length} записей будут удалены.` +
-          (lostFinals.length ? `\n\nИз них с донесённым финалом и без пары в файле: ${lostFinals.length} — они уйдут в корзину (⚙ Настройки → Синхронизация), вернуть можно.` : ''))) return;
+          (lostFinals.length ? `\n\nИз них с донесённым финалом, которого в файле нет: ${lostFinals.length} — они уйдут в корзину (⚙ Настройки → Синхронизация), вернуть можно.` : ''))) return;
 
         // Накопленное руками сливается ВСЕГДА, даже при выборе «заменить»: замена
         // относится к истории размещений, а терять эталоны и избранное молча — ровно
@@ -10528,10 +10595,7 @@ function bindDbTab() {
             rebuildScenes();
           }
           if (obj.catalogs && typeof obj.catalogs === 'object') state.catalogs = obj.catalogs;
-          if (obj.settings && typeof obj.settings === 'object') {
-            state.settings = { ...DEF_SETTINGS, ...obj.settings };
-            if (MODEL_MIGRATION[state.settings.model]) state.settings.model = MODEL_MIGRATION[state.settings.model];
-          }
+          if (obj.settings && typeof obj.settings === 'object') settingsAdopt(obj.settings);
           if (obj.cv && typeof obj.cv === 'object') {
             // Только известные поля, старый формат переводится в слои — всё в cvApplyCfg
             cvApplyCfg(obj.cv);
@@ -10545,10 +10609,10 @@ function bindDbTab() {
           // который в локальной копии уже потерян, — и называл это «дублем»;
           // заодно схлопывал законных близнецов (повторное «✓ Размещено»).
           const localDb = syncMatcher(state.db, SYNC_KIND.db);
-          const added = mergeNewOnes(data, state.db, SYNC_KIND.db);
+          const added = mergeNewOnes(dbAlive, state.db, SYNC_KIND.db);
           const isNew = new Set(added);
           let filled = 0;
-          for (const inc of data) {
+          for (const inc of dbAlive) {
             if (isNew.has(inc)) continue;
             const local = localDb.find(inc);
             if (local && dbFillFrom(local, inc)) filled++;
@@ -10558,19 +10622,27 @@ function bindDbTab() {
           mergeLists(); applyCfg(); save();
           toast(`Слияние: добавлено ${added.length} из ${data.length}` +
             (filled ? `, дополнено записей (финал, аккаунт, даты): ${filled}` : '') +
-            `${addedNote ? `, ${addedNote}` : ''} (уже были: ${data.length - added.length})`);
+            `${addedNote ? `, ${addedNote}` : ''} (уже были: ${dbAlive.length - added.length})${killedNote}`);
         } else {
           if (lostFinals.length) {
-            const at = new Date().toISOString();
-            syncTrashSave([...syncTrash(), ...lostFinals.map(rec => ({ key: syncDbKey(rec), kind: 'db', at, rec }))]);
+            // У каждой записи своё время: возврат ищет и вычищает пару «ключ + время»,
+            // а у старых близнецов без _uid ключ общий — с одним временем на всех
+            // возврат одной записи стёр бы из корзины и соседнюю (ревью 15.10).
+            const t0 = Date.now();
+            const ok = syncTrashAddAll(lostFinals.map((rec, i) =>
+              ({ key: syncDbKey(rec), kind: 'db', at: new Date(t0 + i).toISOString(), rec })));
+            if (!ok) {
+              toast(`⚠️ Замена отменена: ${lostFinals.length} записей с финалами не помещаются в корзину. Сначала сделай «⬇ Бэкап JSON» — это копия всего, потом повтори замену.`);
+              return;
+            }
           }
-          state.db = data;
+          state.db = dbAlive;
           // Замена базы — явное намерение, подтверждённое двумя вопросами. Метим
           // хранилище своим, иначе saveMerged увидел бы в нём «чужое» и подлил бы
           // заменённые записи обратно, обессмыслив оба подтверждения.
           _lsMine['avito_db'] = lsRaw('avito_db');
           mergeLists(); applyCfg(); save();
-          toast(`База заменена: ${data.length} записей${addedNote ? `, ${addedNote}` : ''}`);
+          toast(`База заменена: ${dbAlive.length} записей${addedNote ? `, ${addedNote}` : ''}${killedNote}`);
         }
         // Категории и настройки меняют интерфейс целиком, одной вкладкой не обойтись
         if (restoreCfg) render(); else renderDb();

@@ -222,7 +222,7 @@ export async function runRawsafe(browser, base, t) {
         trash: syncTrash().filter(x => x.kind === 'db').map(x => x.rec.finalDesc),
       }));
       t.eq('F25: база заменена содержимым файла', rp.n, 1);
-      t.ok('F25: второй вопрос называет записи с финалом', /с донесённым финалом и без пары в файле: 1/.test(rp.asked), rp.asked);
+      t.ok('F25: второй вопрос называет записи с финалом', /с донесённым финалом, которого в файле нет: 1/.test(rp.asked), rp.asked);
       t.ok('F25: запись с финалом — в корзине', rp.trash.includes('Финал, которого нет в файле'), JSON.stringify(rp.trash));
       t.ok('F25: запись, которая есть в файле, в корзину не попала', !rp.trash.includes('Финал А из бэкапа'), JSON.stringify(rp.trash));
 
@@ -271,7 +271,95 @@ export async function runRawsafe(browser, base, t) {
       await answerConfirms(page, []);
       await page.evaluate(() => doGenTitlesOnly());
       t.eq('F28: без пакета вопроса нет', await page.evaluate(() => window.__asked.length), 0);
-      t.ok('F28: консоль чистая', consoleErrors.length === 0, consoleErrors.join(' | '));
+
+      // Ревью 15.10: заголовки не пришли — пакет не потерян
+      await setup();
+      await page.evaluate(() => { save(); window.callAI = async () => { throw new Error('Сеть упала.'); }; });
+      await answerConfirms(page, [true]);
+      await page.evaluate(() => doGenTitlesOnly());
+      const fail = await page.evaluate(() => ({
+        batch: state.batchResults.length,
+        stored: JSON.parse(localStorage.getItem('avito_batch_results') || '[]').length,
+        toast: document.getElementById('toast')?.textContent || '',
+      }));
+      t.ok('F28: ошибка заголовков — пакет на месте и на диске', fail.batch === 1 && fail.stored === 1, JSON.stringify(fail));
+      t.ok('F28: ошибка видна тостом (пакет заслоняет блок ошибки)', /Заголовки не получены: Сеть упала/.test(fail.toast), fail.toast);
+      const unexpected = consoleErrors.filter(e => !/Сеть упала/.test(e));
+      t.ok('F28: консоль чистая (кроме ожидаемой ошибки)', unexpected.length === 0, unexpected.join(' | '));
+    } finally { await ctx.close(); }
+  }
+
+  // ── Ревью 15.10: импорт, корзина, восстановление настроек ──
+  {
+    const { ctx, page, consoleErrors } = await openApp(browser, base + '/avito-helper.html', { storage: OFF });
+    try {
+      // 1. Замена: пара в файле есть, но без финала — финал всё равно в корзину
+      const a = { id: 800, _uid: 'u-800', product: 'GTA 5', region: 'Омск', title: 'Т', description: 'Бот', finalDesc: 'Мой финал', status: 'active', note: '', date: '01.10.2026' };
+      await page.evaluate((a) => { state.db = [a]; localStorage.removeItem('avito_trash'); save(); }, a);
+      const noFinal = { ...a }; delete noFinal.finalDesc;
+      await importFile(page, 'r1.json', { v: 3, db: [noFinal] }, [false, true]);
+      const r1 = await page.evaluate(() => ({ asked: window.__asked[1] || '', trash: syncTrash().map(x => x.rec.finalDesc), db: state.db[0]?.finalDesc }));
+      t.ok('ревью: пара без финала — вопрос называет запись', /финалом, которого в файле нет: 1/.test(r1.asked), r1.asked);
+      t.ok('ревью: финал при такой замене — в корзине', r1.trash.includes('Мой финал'), JSON.stringify(r1));
+
+      // 3. Близнецы без _uid: у каждого своё время в корзине, возврат одного не стирает другого
+      const tw = (n) => ({ id: 900 + n, product: 'Близнец', region: 'Пермь', title: 'Т', description: 'Бот', finalDesc: 'Финал ' + n, status: 'active', note: '', date: '02.10.2026' });
+      await page.evaluate((list) => { state.db = list; localStorage.removeItem('avito_trash'); save(); }, [tw(1), tw(2)]);
+      await page.evaluate(() => { state.db.forEach(r => delete r._uid); save(); });
+      await importFile(page, 'r3.json', { v: 3, db: [] }, [false, true]);
+      const r3 = await page.evaluate(() => { const t = syncTrash(); return { n: t.length, ats: new Set(t.map(x => x.key + '|' + x.at)).size }; });
+      t.ok('ревью: у записей в корзине разные метки «ключ+время»', r3.n === 2 && r3.ats === 2, JSON.stringify(r3));
+      await page.evaluate(() => { state.tab = 'settings'; render(); document.querySelectorAll('details').forEach(d => d.open = true); });
+      await page.click('[data-act="trash-restore"]');
+      t.eq('ревью: возврат одного близнеца оставляет второго в корзине', await page.evaluate(() => syncTrash().length), 1);
+
+      // 8. Корзина не вмещает — замены нет
+      await page.evaluate(() => {
+        const big = 'x'.repeat(60000);
+        state.db = [1, 2, 3, 4].map(i => ({ id: 1000 + i, _uid: 'big' + i, product: 'Большой', region: 'R' + i, title: 'Т', description: 'Б', finalDesc: big + i, status: 'active', note: '', date: '03.10.2026' }));
+        localStorage.removeItem('avito_trash'); save();
+      });
+      await importFile(page, 'r8.json', { v: 3, db: [] }, [false, true]);
+      const r8 = await page.evaluate(() => ({ db: state.db.length, trash: syncTrash().length, toast: document.getElementById('toast')?.textContent || '' }));
+      t.ok('ревью: корзина не вмещает финалы — база не заменена, корзина не тронута', r8.db === 4 && r8.trash === 0, JSON.stringify({ db: r8.db, trash: r8.trash }));
+      t.ok('ревью: тост объясняет и называет «⬇ Бэкап JSON»', /Замена отменена/.test(r8.toast) && /Бэкап JSON/.test(r8.toast), r8.toast);
+
+      // 6. Обрезка корзины по размеру — свежее остаётся, лимит соблюдён
+      const fit = await page.evaluate(() => {
+        const list = Array.from({ length: 30 }, (_, i) => ({ key: 'k' + i, at: String(i), rec: { d: 'y'.repeat(10000) } }));
+        const out = syncTrashFit(list);
+        return { len: JSON.stringify(out).length, last: out[out.length - 1].key, first: out[0].key };
+      });
+      t.ok('ревью: обрезка корзины держит лимит и выкидывает старое', fit.len <= 200000 && fit.last === 'k29' && fit.first !== 'k0', JSON.stringify(fit));
+
+      // 7. «Слить» не воскрешает удалённое
+      const del = { id: 1100, _uid: 'u-del', product: 'Удалённая', region: 'Уфа', title: 'Т', description: 'Б', status: 'active', note: '', date: '04.10.2026' };
+      await page.evaluate((d) => { state.db = [d]; save(); syncTomb(syncDbKey(d), d, 'db'); state.db = []; save(); }, del);
+      await importFile(page, 'r7.json', { v: 3, db: [del, { ...del, id: 1101, _uid: 'u-live', product: 'Живая' }] }, [true]);
+      const r7 = await page.evaluate(() => ({ prods: state.db.map(r => r.product), toast: document.getElementById('toast')?.textContent || '' }));
+      t.ok('ревью: «слить» пропускает удалённую тобой запись', !r7.prods.includes('Удалённая') && r7.prods.includes('Живая'), JSON.stringify(r7.prods));
+      t.ok('ревью: тост называет число пропущенных удалённых', /пропущено удалённых тобой раньше: 1/.test(r7.toast), r7.toast);
+
+      // 2. Восстановление настроек из бэкапа — текущий промпт уходит в историю
+      await page.evaluate(() => { state.settings.customSys = 'Текущий промпт'; state.settings.customSysHist = [{ text: 'Локальная старая', at: '2026-10-10T00:00:00.000Z' }]; save();
+        window.__jl = []; const o = window.jlog; window.jlog = (ev, c, d) => { window.__jl.push({ event: ev, ...d }); return o(ev, c, d); }; });
+      await importFile(page, 'r2.json', { v: 3, db: [], settings: { customSys: 'Промпт из бэкапа', customSysHist: [{ text: 'Древний', at: '2026-01-01T00:00:00.000Z' }] } }, [true, true]);
+      const r2 = await page.evaluate(() => ({ sys: state.settings.customSys, hist: state.settings.customSysHist.map(h => h.text), j: window.__jl.find(e => e.event === 'sys_changed') }));
+      t.eq('ревью: промпт из бэкапа применён', r2.sys, 'Промпт из бэкапа');
+      t.eq('ревью: текущий — первым в истории, затем обе истории по дате', r2.hist.join(' | '), 'Текущий промпт | Локальная старая | Древний');
+      t.ok('ревью: смена промпта восстановлением — в журнале', r2.j && r2.j.via === 'restore' && r2.j.prev === 'Текущий промпт', JSON.stringify(r2.j));
+
+      // 4. Мусор в истории не сдвигает кнопки
+      const r4 = await page.evaluate(() => {
+        state.settings.customSys = 'Сейчас';
+        state.settings.customSysHist = [null, { text: 'A', at: '' }, {}, { text: '' }, { text: 'B', at: '' }];
+        state.tab = 'settings'; render();
+        const n = document.querySelectorAll('[data-sys-hist]').length;
+        document.querySelector('[data-sys-hist="0"]').click();
+        return { n, sys: state.settings.customSys };
+      });
+      t.ok('ревью: пустые версии не показываются, «↩ вернуть» берёт показанную', r4.n === 2 && r4.sys === 'A', JSON.stringify(r4));
+      t.ok('ревью: консоль чистая', consoleErrors.length === 0, consoleErrors.join(' | '));
     } finally { await ctx.close(); }
   }
 }

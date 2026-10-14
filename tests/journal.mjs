@@ -247,13 +247,19 @@ export async function runJournal(browser, base, t) {
       ev(2, { product: 'A', region: 'R', botDescription: bot, finalDescription: `${w(90, 'b')} ${w(10, 'x')} ${w(50, 't')}` }),
       // правка концовки на 5 слов — не хвост
       ev(3, { product: 'B', region: 'R', botDescription: bot, finalDescription: `${w(95, 'b')} ${w(5, 'z')}` }),
+      // подпись с частыми словами, которые есть и у бота («в», «игры») — всё равно хвост
+      ev(4, { product: 'C', region: 'R', botDescription: `${bot} в игры`, finalDescription: `${w(90, 'b')} ${w(20, 't')} в ${w(15, 'u')} игры ${w(10, 'v')}` }),
+      // ни одного общего слова — переписано целиком, а не подпись
+      ev(5, { product: 'D', region: 'R', botDescription: bot, finalDescription: w(150, 'q') }),
     ].join('\n') + '\n');
     const out = cp.execFileSync(process.execPath, [path.resolve('../tools/journal-report.mjs'), dir], { encoding: 'utf8' });
     fs.rmSync(dir, { recursive: true, force: true });
     const sec = out.slice(out.indexOf('Три числа'), out.indexOf('7. РАСПОЗНАВАНИЕ'));
-    t.ok('отчёт: повторный донос одной записи схлопнут — пар 2, не 3', /Пар «бот → финал»: 2/.test(sec), sec);
+    t.ok('отчёт: повторный донос одной записи схлопнут — пар 4, не 5', /Пар «бот → финал»: 4/.test(sec), sec);
+    t.ok('отчёт: частые слова внутри подписи не ломают хвост', /C · R\s+102→137\s+47\s/.test(sec), sec);
+    t.ok('отчёт: полная переписка — не хвост, тело 100 %', /D · R\s+100→150\s+—\s+100%\s+100%\s+0%/.test(sec), sec);
     t.ok('отчёт: подпись в конце ушла в хвост, тело 5 %, удержание 90 %', /A · R\s+100→150\s+60\s+28%\s+5%\s+90%/.test(sec), sec);
     t.ok('отчёт: короткая правка концовки хвостом не считается', /B · R\s+100→100\s+—\s+5%\s+5%\s+95%/.test(sec), sec);
-    t.ok('отчёт: медианы по телу и удержанию', /по телу : 0\.05\s+\(общий editShare без разделения: 0\.28\)/.test(sec) && /удержания бота : 0\.95/.test(sec), sec);
+    t.ok('отчёт: медианы по телу и удержанию', /по телу : 0\.0[67]\s+\(общий editShare без разделения: 0\.28\)/.test(sec) && /удержания бота : 0\.90/.test(sec), sec);
   }
 }
