@@ -20,6 +20,7 @@ const stubNet = page => page.evaluate(() => {
       return { ok: true, status: 200, json: async () => (d ? { ok: true, ...d } : { ok: true, empty: true }) };
     }
     const body = JSON.parse(opts.body);
+    (window.__bodies = window.__bodies || []).push({ doc, body });
     window.__srv[doc] = { updated: new Date().toISOString(), device: body.device, data: body.data };
     return { ok: true, status: 200, json: async () => ({ ok: true }) };
   };
@@ -71,10 +72,13 @@ export async function runSync(browser, base, t) {
       window.__srv.voice = { updated: '2026-09-11T10:00:00Z', device: 'pc', data: { refs: [a], favorites: [], db: [] } };
       state.refs = []; state.favorites = []; state.db = []; save();
       await syncPush(true);
-      return { onServer: window.__srv.voice.data.refs.length, local: state.refs.length,
+      const empties = (window.__bodies || []).filter(b => b.doc === 'voice')
+        .filter(b => !b.body.data.refs.length && !b.body.data.favorites.length && !b.body.data.db.length).length;
+      return { onServer: window.__srv.voice.data.refs.length, local: state.refs.length, empties,
                firstCall: window.__calls.find(c => c.doc === 'voice')?.method };
     }, [REF_A]);
     t.eq('сырьё на сервере цело', r.onServer, 1);
+    t.eq('пустой документ voice не отправлялся ни разу', r.empties, 0);
     // С F21 отправка сначала забирает серверное и шлёт объединение, а не пустоту
     t.eq('пустой клиент сначала забрал сервер (первый запрос — GET)', r.firstCall, 'GET');
     t.eq('эталон с сервера появился локально', r.local, 1);
@@ -482,7 +486,10 @@ export async function runSync(browser, base, t) {
       window.fetch = async (url, opts = {}) => {
         if (opts.method === 'POST' && String(url).includes('/voice')) {
           window.__posts.push(JSON.parse(opts.body));
-          if (window.__conflictOnce) { window.__conflictOnce = false; window.__calls.push({ doc: 'voice', method: 'POST' }); return { ok: false, status: 409, json: async () => ({}) }; }
+          if (window.__conflictOnce || window.__conflictAlways) {
+            window.__conflictOnce = false; window.__calls.push({ doc: 'voice', method: 'POST' });
+            return { ok: false, status: 409, json: async () => ({ error: 'conflict', updated: 'X', reason: 'stale' }) };
+          }
         }
         return inner(url, opts);
       };
@@ -566,6 +573,88 @@ export async function runSync(browser, base, t) {
     });
     t.ok('F21: ввод токена сразу забирает сырьё', r6.afterToken === 1, JSON.stringify(r6));
     t.ok('F21: возврат на вкладку с устаревшим забиранием — забирает', r6.afterVisible === 1, JSON.stringify(r6));
+
+    // ── Ревью 15.10 ──
+    // 409 раз за разом: после SYNC_CONFLICT_MAX — стоп, тревога, без вечного GET+POST
+    const r7 = await page.evaluate(async () => {
+      window.__conflictAlways = true; _voiceConflicts = 0; _voiceLast = ''; _voiceAlarmAt = 0;
+      document.getElementById('toast').textContent = '';
+      for (let i = 0; i < SYNC_CONFLICT_MAX; i++) {
+        clearTimeout(_syncT); _voicePullAt = 0;
+        state.favorites = [...state.favorites, { _fid: 200 + i, title: 'Конфликт ' + i, description: 'Т' }]; save();
+        await syncPush();
+      }
+      const last = _voiceLast, toastText = document.getElementById('toast').textContent;
+      clearTimeout(_syncT);
+      window.__calls = [];
+      state.favorites = [...state.favorites, { _fid: 299, title: 'После стопа', description: 'Т' }]; save();
+      clearTimeout(_syncT);
+      await syncPush();
+      const quiet = window.__calls.filter(c => c.doc === 'voice').length;
+      window.__conflictAlways = false;
+      window.__calls = [];
+      const forced = await syncPush(true);
+      return { last, toastText, quiet, forced, after: _voiceLast, calls: window.__calls.filter(c => c.doc === 'voice').map(c => c.method).join(',') };
+    });
+    t.eq('ревью: 409 подряд → состояние «stuck»', r7.last, 'stuck');
+    t.ok('ревью: тревога «обнови страницу»', /обнови страницу/.test(r7.toastText), r7.toastText);
+    t.eq('ревью: после стопа сами не долбим сервер (ни GET, ни POST)', r7.quiet, 0);
+    t.ok('ревью: «↑ Отправить сейчас» (force) пробует снова и отправляет', r7.forced === true && r7.after === 'sent' && r7.calls === 'GET,POST', JSON.stringify(r7));
+
+    // Ушли одни настройки, а сырьё нет — это не «отправлено»
+    const r8 = await page.evaluate(async () => {
+      _voicePullAt = 0;
+      state.favorites = [...state.favorites, { _fid: 300, title: 'Без сети', description: 'Т' }];
+      state.settings.pageName = 'Своя ' + Date.now(); save(); clearTimeout(_syncT);
+      // GET сырья падает, POST настроек проходит
+      const inner = window.fetch;
+      window.fetch = async (url, opts = {}) => {
+        if ((opts.method || 'GET') === 'GET' && String(url).includes('/voice')) throw new Error('сеть недоступна');
+        return inner(url, opts);
+      };
+      const sent = await syncPush(true);
+      window.fetch = inner;
+      return { sent, last: _voiceLast, status: syncStatusText() };
+    });
+    t.ok('ревью: забрать не вышло → syncPush не «отправлено», даже если ушли настройки', r8.sent === false && r8.last === 'nopull', JSON.stringify(r8));
+    t.ok('ревью: статус синхронизации предупреждает', /сервер недоступен/.test(r8.status), r8.status);
+
+    // Старое забирание не затирает свежий base из ответа POST
+    const r9 = await page.evaluate(async () => {
+      const inner = window.fetch;
+      let release;
+      window.fetch = async (url, opts = {}) => {
+        if ((opts.method || 'GET') === 'GET' && String(url).includes('/voice')) {
+          await new Promise(r => { release = r; });
+          return { ok: true, status: 200, json: async () => ({ ok: true, updated: 'T1-старое', data: window.__srv.voice.data }) };
+        }
+        if (opts.method === 'POST' && String(url).includes('/voice')) return { ok: true, status: 200, json: async () => ({ ok: true, updated: 'T2-свежее' }) };
+        return inner(url, opts);
+      };
+      _voicePullAt = 0;
+      const pull = syncPullVoice();            // GET висит
+      await new Promise(r => setTimeout(r, 20));
+      _voicePullAt = Date.now();               // как будто свежо — отправка без своего GET
+      state.favorites = [...state.favorites, { _fid: 400, title: 'Гонка', description: 'Т' }]; save(); clearTimeout(_syncT);
+      await syncPush();
+      const afterPost = _voiceBase;
+      release(); await pull;
+      window.fetch = inner;
+      return { afterPost, final: _voiceBase };
+    });
+    t.ok('ревью: поздний ответ GET не откатывает base к старой версии', r9.afterPost === 'T2-свежее' && r9.final === 'T2-свежее', JSON.stringify(r9));
+
+    // Забирание посреди генерации не перерисовывает экран
+    const r10 = await page.evaluate(async () => {
+      let renders = 0; const origRender = window.render;
+      window.render = () => { renders++; return origRender(); };
+      window.__srv.voice.data.refs = [...window.__srv.voice.data.refs, { id: 9, source: 'mine', category: 'game', title: 'Во время генерации', desc: 'Т' }];
+      state.loading = true; _voicePullAt = 0;
+      await syncPullVoice({ inPush: true });
+      state.loading = false; window.render = origRender;
+      return { renders, got: state.refs.some(r => r.title === 'Во время генерации') };
+    });
+    t.ok('ревью: при генерации забирание данные берёт, но экран не перерисовывает', r10.renders === 0 && r10.got, JSON.stringify(r10));
     t.ok('F21: консоль чистая', consoleErrors.length === 0, consoleErrors.join('\n'));
     await ctx.close();
   }

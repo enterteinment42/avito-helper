@@ -2180,7 +2180,11 @@ async function syncFetch(doc, body) {
   // выкидывать человека из работы из-за неё нельзя.
   // 409 — документ на сервере новее версии, поверх которой сделано слияние (F21):
   // не ошибка, а сигнал «забери и повтори»
-  if (r.status === 409) return { conflict: true };
+  if (r.status === 409) {
+    let reason = '';
+    try { reason = String((await r.json())?.reason || ''); } catch(e) {}
+    return { conflict: true, reason };
+  }
   if (!r.ok) return null;
   try { return await r.json(); } catch(e) { return null; }
 }
@@ -2190,9 +2194,33 @@ let _syncT = null, _syncBusy = false;
 // версия сервера при этом пришла. Только в памяти: новая загрузка страницы обязана
 // забрать заново, прежде чем что-то отправлять.
 let _voicePullAt = 0, _voiceBase = null;
+// Номер «поколения» base: растёт при каждом base из ответа POST. Забирание, начатое
+// раньше, своё (более старое) updated поверх уже не кладёт — иначе следующий POST
+// получил бы ложный 409 (ревью 15.10).
+let _voiceEpoch = 0;
 const SYNC_PULL_FRESH = 2 * 60 * 1000;
 const syncVoiceFresh = () => _voicePullAt > 0 && Date.now() - _voicePullAt < SYNC_PULL_FRESH;
-function syncPushSoon() {
+// Итог последней отправки сырья — по нему кнопка «↑ Отправить сейчас» и статус
+// говорят правду, а не «отправлено», когда ушли одни настройки (ревью 15.10):
+// sent | same | empty | nopull | conflict | stuck
+let _voiceLast = '';
+// 409 подряд: обычный конфликт лечится одним повтором; если сервер отказывает
+// снова и снова — это не гонка, а поломка, и крутить GET+POST вечно нельзя
+let _voiceConflicts = 0;
+const SYNC_CONFLICT_MAX = 3;
+// Тревога о том, что сырьё не уходит на сервер, — не чаще раза в 10 минут
+let _voiceAlarmAt = 0;
+function syncVoiceAlarm(text) {
+  const now = Date.now();
+  if (now - _voiceAlarmAt < 10 * 60 * 1000) return;
+  _voiceAlarmAt = now;
+  try { toast(text); } catch(e) {}
+}
+// Принудительность («↑ Отправить сейчас», включение синхронизации) переживает
+// отложенный повтор после 409 — иначе повтор без force ничего бы не отправил
+let _syncForceNext = false;
+function syncPushSoon(force) {
+  if (force) _syncForceNext = true;
   try { clearTimeout(_syncT); _syncT = setTimeout(syncPush, SYNC_DEBOUNCE); } catch(e) {}
 }
 
@@ -2221,7 +2249,8 @@ async function syncPush(force) {
   if (!syncEnabled() || !lsRaw('avito_admin_token')) return false;
   // Правка, сделанная во время отправки, не должна потеряться: перезапускаем
   // таймер вместо молчаливого выхода.
-  if (_syncBusy) { syncPushSoon(); return false; }
+  if (_syncBusy) { syncPushSoon(force); return false; }
+  force = force || _syncForceNext; _syncForceNext = false;
   let sent = false;
   try {
     _syncBusy = true;
@@ -2232,27 +2261,51 @@ async function syncPush(force) {
     // неделями, затирала всё, что за это время пришло с телефона. Забираем перед
     // отправкой, если последнее успешное забирание старше SYNC_PULL_FRESH
     // (решение Дениса 15.10: не перед каждой отправкой — трафик телефона).
-    if (!syncVoiceFresh()) await syncPullVoice();
+    // После череды отказов сами не повторяем — даже забирание, чтобы не жечь трафик
+    const voiceStuck = _voiceLast === 'stuck' && !force;
+    if (force) _voiceConflicts = 0;
+    if (!voiceStuck && !syncVoiceFresh()) await syncPullVoice({ inPush: true });
     const meta = syncMeta();
     const voice = syncVoiceDoc();
     // Пустой клиент не имеет права стереть сырьё на сервере: так выглядит первый
     // запуск в новом браузере ДО того, как он успел забрать данные.
     const voiceEmpty = !voice.refs.length && !voice.favorites.length && !voice.db.length;
     const vStamp = syncStamp(voice);
-    // Забрать не вышло (нет сети, сервер лежит) — сырьё не отправляем вовсе:
-    // правки лежат локально и уйдут следующей отправкой после удачного забирания
-    if (syncVoiceFresh() && !voiceEmpty && (force || vStamp !== meta.voiceStamp)) {
+    const changed = force || vStamp !== meta.voiceStamp;
+    if (voiceStuck) {
+      // Сервер раз за разом отказывал — ждём «↑ Отправить сейчас» или перезагрузки
+    } else if (voiceEmpty) _voiceLast = 'empty';
+    else if (!changed) _voiceLast = 'same';
+    else if (!syncVoiceFresh()) {
+      // Забрать не вышло (нет сети, сервер лежит, ответ не разобрался) — сырьё не
+      // отправляем вовсе: правки лежат локально и уйдут после удачного забирания.
+      // Молчать об этом нельзя: иначе сырьё неделями жило бы в одном браузере.
+      _voiceLast = 'nopull';
+      syncVoiceAlarm('⚠️ Не удаётся забрать данные с сервера — новые эталоны и финалы пока только в этом браузере. Сделай «⬇ Бэкап JSON», если это надолго');
+    } else {
       // base — версия сервера, поверх которой сделано слияние. Сервер с защитой
-      // (задача VPS, 15.10) отвечает 409, если документ с тех пор обновился.
+      // (F21, Claude1 15.10) отвечает 409, если документ с тех пор обновился.
       const got = await syncFetch('voice', { data: voice, device: _jDevice(), base: _voiceBase });
       if (got && got.conflict) {
         // Кто-то успел отправить между нашими «забрал» и «отправил»: забираем
-        // заново и повторяем в следующем цикле
-        _voicePullAt = 0; syncPushSoon();
+        // заново и повторяем. Ответ 409 несёт updated сервера, но брать его как
+        // base НЕЛЬЗЯ — это был бы повтор без слияния, ровно то, от чего защита.
+        // no-base к этой версии страницы прийти не может — значит, что-то сломано.
+        _voicePullAt = 0;
+        if (++_voiceConflicts >= SYNC_CONFLICT_MAX || got.reason === 'no-base') {
+          _voiceLast = 'stuck';
+          syncVoiceAlarm('⚠️ Сервер не принимает эталоны и финалы с этой вкладки — обнови страницу (Ctrl+F5). Пока данные только в этом браузере');
+        } else {
+          _voiceLast = 'conflict';
+          syncPushSoon(force);
+        }
       } else if (got) {
-        if (got.updated) _voiceBase = got.updated;
+        if (got.updated != null) { _voiceBase = got.updated; _voiceEpoch++; }
         syncSetMeta({ voiceStamp: vStamp, voiceAt: new Date().toISOString() });
+        _voiceConflicts = 0; _voiceLast = 'sent';
         sent = true;
+      } else {
+        _voiceLast = 'nopull';   // сеть упала уже на отправке — то же «лежит локально»
       }
     }
     const settings = syncSettingsDoc();
@@ -2265,17 +2318,22 @@ async function syncPush(force) {
     }
   } catch(e) { console.error('sync push:', e); }
   finally { _syncBusy = false; }
-  return sent;
+  // Ушли одни настройки, а сырьё — нет: это не «отправлено» (ревью 15.10)
+  return sent && !['nopull', 'conflict', 'stuck'].includes(_voiceLast);
 }
 
 // Забрать сырьё и слить с локальным. Вызывается при старте. Ничего не удаляет
 // молча, кроме того, что помечено удалённым (кладбище) — это выбор владельца.
-async function syncPullVoice() {
+async function syncPullVoice(opts = {}) {
   try {
+    const epoch = _voiceEpoch;
+    // base из этого забирания принимаем, только если за время запроса не было
+    // успешного POST с более свежим updated (ревью 15.10)
+    const takeBase = got => { if (epoch === _voiceEpoch) _voiceBase = got.updated ?? null; };
     const got = await syncFetch('voice');
     if (!got || got.conflict) return null;   // не забрали — отправлять сырьё нельзя (F21)
     // Сервер ответил — пусть и пустым документом: перезаписать нечего, отправка разрешена
-    if (got.empty || !got.data) { _voicePullAt = Date.now(); _voiceBase = got.updated || null; return null; }
+    if (got.empty || !got.data) { _voicePullAt = Date.now(); takeBase(got); return null; }
     const d = got.data;
     const arr = v => Array.isArray(v) ? v : [];
     // Кладбища объединяем: удалённое на другом устройстве должно уйти и здесь.
@@ -2339,14 +2397,19 @@ async function syncPullVoice() {
     const changed = added || finalsMerged
       || before !== JSON.stringify([state.refs.length, state.favorites.length, state.db.length]);
     syncSetMeta({ pulledAt: new Date().toISOString() });
-    _voicePullAt = Date.now(); _voiceBase = got.updated || null;
+    _voicePullAt = Date.now(); takeBase(got);
     if (changed) {
-      save(); render();
+      save();
+      // Во время генерации не перерисовываем: ввод токена на первом запросе
+      // запускает забирание прямо посреди генерации (ревью 15.10). Данные уже в
+      // state и покажутся при следующей перерисовке.
+      if (!state.loading) render();
       // После слияния локальный набор БОГАЧЕ серверного (наши записи там ещё не
       // лежат). Отправляем объединение сразу и принудительно: иначе подпись,
       // посчитанная от уже слитого документа, сделала бы отправку ненужной, и
       // записи, заведённые только здесь, остались бы на одном устройстве.
-      syncPush(true).catch(() => {});
+      // Из самой отправки — не нужно: она и так отправит слитое следом.
+      if (!opts.inPush) syncPush(true).catch(() => {});
     }
     return { added, finals: finalsMerged, at: got.updated, device: got.device };
   } catch(e) { console.error('sync pull:', e); return null; }
@@ -2382,7 +2445,9 @@ function syncStatusText() {
     const m = syncMeta();
     const when = t => t ? new Date(t).toLocaleString('ru') : '—';
     const trash = syncTrash().length;
-    return `Отправлено: ${when(m.voiceAt)} · получено: ${when(m.pulledAt)}${trash ? ` · в корзине: ${trash}` : ''}`;
+    const warn = _voiceLast === 'nopull' ? ' · ⚠️ сервер недоступен — новое сырьё пока только здесь'
+      : _voiceLast === 'stuck' ? ' · ⚠️ сервер не принимает сырьё — обнови страницу' : '';
+    return `Отправлено: ${when(m.voiceAt)} · получено: ${when(m.pulledAt)}${trash ? ` · в корзине: ${trash}` : ''}${warn}`;
   } catch(e) { return ''; }
 }
 
@@ -6702,7 +6767,11 @@ function bindSettingsTab() {
     // отправлять нечего, поэтому «Отправлено» без проверки было бы враньём про
     // сохранность сырья — самое опасное сообщение из возможных.
     const sent = await syncPush(true);
-    toast(sent ? 'Отправлено на сервер' : (syncEnabled() ? 'Сервер недоступен — данные остались в браузере' : 'Синхронизация выключена'));
+    toast(sent ? 'Отправлено на сервер'
+      : !syncEnabled() ? 'Синхронизация выключена'
+      : _voiceLast === 'conflict' ? 'На сервере свежие правки с другого устройства — забираю и повторю отправку через несколько секунд'
+      : _voiceLast === 'stuck' ? 'Сервер не принимает эталоны и финалы с этой вкладки — обнови страницу (Ctrl+F5)'
+      : 'Сервер недоступен — эталоны и финалы остались в браузере');
     btn.disabled = false;
     const s = document.getElementById('sync-status'); if (s) s.textContent = syncStatusText();
   });
