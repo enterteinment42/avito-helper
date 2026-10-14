@@ -1433,6 +1433,17 @@ function rotInputToTs(s) {
 // Положить текст объявления в эталоны. Повторный вызов с тем же текстом ничего
 // не делает: тот же текст двумя строками ушёл бы в промпт дважды и перевесил бы
 // остальной корпус — та же ошибка, что была с бот-близнецом из избранного.
+// Категория эталона из формы Истории — РОВНО та, что видна в селекте (F27): пока
+// селект не трогали, refCat пуст, на экране выбрана категория генератора (или,
+// если её нет среди категорий, первая строка списка — так выбирает сам браузер),
+// а сохранялось пустое значение → «Другое», и эталон выпадал из примеров своей
+// категории. При правке записи refCat заранее заполнен её _category.
+function dbRefCat(f) {
+  const c = (f && f.refCat) || state.form.category;
+  if (c === 'other' || CATS.some(x => x.id === c)) return c;
+  return CATS[0]?.id || 'other';
+}
+
 function addRefFromText(title, desc, source = 'mine', category = null) {
   const t = (title || '').trim(), d = (desc || '').trim();
   if (!t && !d) return false;
@@ -1458,6 +1469,7 @@ const DEF_SETTINGS = {
   model: 'claude-sonnet-5',
   orModel: 'anthropic/claude-3.5-sonnet',
   customSys: '',
+  customSysPrev: '',  // прежняя версия своего промпта — для «↩ Вернуть прежний» (F24)
   pageName:  'Страница 1',
   regions:   [...REGIONS],
   // Ротация: через сколько дней объявление считается выдохшимся. Число общее, но
@@ -1653,9 +1665,14 @@ function saveMerged(key, mine, kind) {
         const m = syncMatcher(out, kind);
         const busy = new Set(out.map(x => x._fid ?? x.id));
         const back = [];
+        const fill = fillFor(kind);
         let n = 0;
         for (const x of stored) {
-          if (m.find(x)) continue;                          // эта запись у нас уже есть
+          // Запись у нас уже есть — но соседняя вкладка могла донести в неё финал
+          // (или разобрать приёмы эталона). Раньше побеждала версия этой вкладки
+          // целиком, и финал уходил с диска её устаревшей копией (F22).
+          const have = m.find(x);
+          if (have) { if (fill) fill(have, x); continue; }
           if (syncKilled(x, kind, tombAt)) continue;        // удалена человеком — не поднимаем
           // Совпавшие id ломают удаление и правку (они ищут строго по id), а две
           // вкладки штампуют id из одного Date.now() — поэтому коллизии переназначаем.
@@ -1707,7 +1724,9 @@ function saveFailed(err) {
 }
 
 // Соседняя вкладка что-то записала. Сырьё (История, эталоны, избранное) пишется
-// слиянием и не пострадает, но настройки (там и свой системный промпт), категории,
+// слиянием: новые записи и донесённые финалы не пропадут, но правка уже известной
+// записи (статус, товар, голос эталона) в этой вкладке устарела и при записи
+// победит её версия. А настройки (там и свой системный промпт), категории,
 // очередь и пресеты пишутся целиком — следующий save этой вкладки положит поверх
 // свой устаревший снимок. Поэтому сразу говорим об этом и предлагаем обновиться.
 const _OTHER_TAB_KEYS = new Set(['avito_settings', 'avito_catalogs', 'avito_cats', 'avito_scenes',
@@ -1717,7 +1736,7 @@ window.addEventListener('storage', e => {
   const bar = document.createElement('div');
   bar.id = 'other-tab-bar';
   bar.style.cssText = 'position:fixed;left:50%;bottom:16px;transform:translateX(-50%);z-index:9999;max-width:calc(100vw - 32px);box-sizing:border-box;background:var(--card,#222);color:var(--text,#eee);border:1px solid var(--accent,#f90);border-radius:10px;padding:10px 14px;font-size:13px;display:flex;gap:10px;align-items:center;flex-wrap:wrap;box-shadow:0 4px 16px rgba(0,0,0,.4)';
-  bar.innerHTML = `<span>⚠️ Данные изменены в другой вкладке. Настройки и очередь этой вкладки устарели — обнови её, чтобы не затереть чужие правки.</span>
+  bar.innerHTML = `<span>⚠️ Данные изменены в другой вкладке. Эта вкладка устарела — обнови её, прежде чем что-то менять: иначе её версия затрёт правки в настройках, очереди и уже существующих записях.</span>
     <button class="btn-sm" data-other-tab="reload">↻ Обновить</button>
     <button class="btn-sm" data-other-tab="close" title="Скрыть">✕</button>`;
   bar.addEventListener('click', ev => {
@@ -1766,6 +1785,44 @@ function _saveAll() {
 // устройства, где запись создали, у чужой базы он ничего не значит.
 // Новыми считаются те входящие, для которых не нашлось «той же самой» записи
 // (правила сопоставления — в syncMatcher: личность важнее содержимого).
+// Слияние ПОЛЕЙ уже известной записи — одни правила для трёх путей: сервер
+// (syncPullVoice), соседняя вкладка (saveMerged, F22) и импорт бэкапа (F23).
+// Ключ записи от финала не меняется, поэтому слияние по ключу добавляет только
+// новые записи, а финал, донесённый в другом месте, молча терялся бы.
+// Правило одно: недостающее берём, своё не трогаем — времени правки у полей нет,
+// и «чья версия новее» не определить. Возвращает число подтянутых полей.
+function dbFillFrom(local, inc) {
+  let n = 0;
+  // Поля учёта (аккаунт, дата публикации, свой срок ротации) подтягиваем в
+  // уже известную запись, если локально их ещё нет: устройство, где запись
+  // завели раньше этой версии, иначе навсегда осталось бы без них.
+  // У аккаунта «нет» значит «не выбирали руками» (метка _accAuto от миграции):
+  // после неё поле заполнено у всех записей, и проверка на пустоту не сработала
+  // бы никогда — публикация со второго профиля осталась бы на первом навсегда.
+  if (inc.account && !inc._accAuto && (!local.account || local._accAuto) && local.account !== inc.account) {
+    local.account = inc.account; delete local._accAuto; n++;
+  }
+  if (!local.postedAt && inc.postedAt) { local.postedAt = inc.postedAt; n++; }
+  // «Своего срока нет» и «срок сняли» — разные вещи: снятие пишет 0/false, и
+  // тогда входящее старое значение уже не воскресит выключенную ротацию.
+  if (local.rotDays == null && inc.rotDays != null) { local.rotDays = inc.rotDays; n++; }
+  if (local.rotOff == null && inc.rotOff != null) { local.rotOff = inc.rotOff; n++; }
+  if (!inc.finalDesc || local.finalDesc) return n;
+  local.finalTitle = inc.finalTitle; local.finalDesc = inc.finalDesc;
+  local.editShare = inc.editShare;
+  if (!local._category && inc._category) local._category = inc._category;
+  return n + 1;
+}
+// У эталона недостающее — разобранные приёмы (платный разбор). Массива нет =
+// не разбирали; пустой массив — разобрали, приёмов не нашлось.
+function refFillFrom(local, inc) {
+  if (!Array.isArray(local.tricks) && Array.isArray(inc.tricks)) { local.tricks = inc.tricks; return 1; }
+  return 0;
+}
+function fillFor(kind) {
+  return kind === SYNC_KIND.db ? dbFillFrom : kind === SYNC_KIND.ref ? refFillFrom : null;
+}
+
 function mergeNewOnes(incoming, have, kind) {
   const m = syncMatcher(have, kind);
   const out = [];
@@ -2155,26 +2212,12 @@ async function syncPullVoice() {
     const localDb = syncMatcher(state.db, SYNC_KIND.db);
     for (const inc of arr(d.db)) {
       const local = localDb.find(inc);
-      if (!local) continue;
-      // Поля учёта (аккаунт, дата публикации, свой срок ротации) подтягиваем в
-      // уже известную запись, если локально их ещё нет: устройство, где запись
-      // завели раньше этой версии, иначе навсегда осталось бы без них.
-      // У аккаунта «нет» значит «не выбирали руками» (метка _accAuto от миграции):
-      // после неё поле заполнено у всех записей, и проверка на пустоту не сработала
-      // бы никогда — публикация со второго профиля осталась бы на первом навсегда.
-      if (inc.account && !inc._accAuto && (!local.account || local._accAuto) && local.account !== inc.account) {
-        local.account = inc.account; delete local._accAuto; finalsMerged++;
-      }
-      if (!local.postedAt && inc.postedAt) { local.postedAt = inc.postedAt; finalsMerged++; }
-      // «Своего срока нет» и «срок сняли» — разные вещи: снятие пишет 0/false, и
-      // тогда входящее старое значение уже не воскресит выключенную ротацию.
-      if (local.rotDays == null && inc.rotDays != null) { local.rotDays = inc.rotDays; finalsMerged++; }
-      if (local.rotOff == null && inc.rotOff != null) { local.rotOff = inc.rotOff; finalsMerged++; }
-      if (!inc.finalDesc || local.finalDesc) continue;
-      local.finalTitle = inc.finalTitle; local.finalDesc = inc.finalDesc;
-      local.editShare = inc.editShare;
-      if (!local._category && inc._category) local._category = inc._category;
-      finalsMerged++;
+      if (local) finalsMerged += dbFillFrom(local, inc);
+    }
+    const localRefs = syncMatcher(state.refs, SYNC_KIND.ref);
+    for (const inc of arr(d.refs)) {
+      const local = localRefs.find(inc);
+      if (local) finalsMerged += refFillFrom(local, inc);
     }
 
     // Снятые метки убираем, остальные сохраняем
@@ -3522,6 +3565,15 @@ async function doGenTitlesOnly() {
   if (state.loading) return;
   const miss = validateForm();
   if (miss.length) { toast('Заполните: ' + miss.join(', ')); return; }
+  // F28: сохранённый пакет (переживает F5) рисуется в блоке результатов первым и
+  // закрывал собой и спиннер, и шаг заголовков — платная генерация шла невидимо,
+  // кнопка казалась мёртвой, и её жали ещё раз. Пакет тоже оплачен, поэтому не
+  // стираем молча, а спрашиваем.
+  if (state.batchResults.length) {
+    if (!confirm(`На экране сохранённый пакет по регионам (${state.batchResults.length} вар.). Шаг заголовков займёт его место — пакет будет убран.\n\nНужные строки можно до этого сохранить ☆ или выгрузить «📦 Экспорт».\n\nПродолжить?`)) return;
+    state.batchResults = []; state.batchExpanded = null;
+    save();
+  }
   state.loading = true; state.error = null; state.loadingKind = 'titles';
   state.titleStep = null;
   refreshResults();
@@ -6188,6 +6240,8 @@ function settingsTabHTML() {
           ${isCustom ? `<button class="btn-add" id="sys-reset">Сбросить до дефолтного</button>
           <span style="font-size:12px;color:var(--warn)">⚠ Используется кастомный промпт</span>` :
           `<span style="font-size:12px;color:var(--muted)">Дефолтный промпт активен</span>`}
+          ${state.settings.customSysPrev && state.settings.customSysPrev !== state.settings.customSys
+            ? `<button class="btn-add" id="sys-undo" title="${esc(state.settings.customSysPrev.slice(0, 300))}">↩ Вернуть прежний (${state.settings.customSysPrev.length} зн.)</button>` : ''}
         </div>
       </div>
     </div>
@@ -6488,17 +6542,39 @@ function bindSettingsTab() {
   }
   regionAddBtn?.addEventListener('click', doAddRegion);
   regionInput?.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); doAddRegion(); } });
-  document.getElementById('sys-save')?.addEventListener('click', () => {
-    const val = document.getElementById('sys-prompt')?.value || '';
-    state.settings.customSys = val.trim();
+  // Свой промпт — невосполнимое (F24): раньше «Сбросить» стирал его без вопроса,
+  // а через 5 с затиралась и серверная копия. Теперь любая замена кладёт прежнюю
+  // версию в customSysPrev (едет в бэкап и на сервер вместе с настройками) и пишет
+  // обе версии в журнал — он вторая копия сырья.
+  const sysReplace = (next, via) => {
+    const prev = state.settings.customSys || '';
+    if (next === prev) return false;
+    if (prev) state.settings.customSysPrev = prev;
+    state.settings.customSys = next;
+    jlog('sys_changed', null, { via, prev, next });
     save();
-    toast('Промпт сохранён');
+    return true;
+  };
+  document.getElementById('sys-save')?.addEventListener('click', () => {
+    const val = (document.getElementById('sys-prompt')?.value || '').trim();
+    const prev = state.settings.customSys || '';
+    if (val === prev) { toast('Промпт не изменился'); return; }
+    if (!val && !confirm(`Поле пустое — сохранить значит стереть своё дополнение к промпту (${prev.length} знаков).\n\nПрежний текст можно будет вернуть кнопкой «↩ Вернуть прежний».`)) return;
+    sysReplace(val, 'save');
+    toast(val ? 'Промпт сохранён' : 'Промпт сброшен до дефолтного');
     render();
   });
   document.getElementById('sys-reset')?.addEventListener('click', () => {
-    state.settings.customSys = '';
-    save();
+    const prev = state.settings.customSys || '';
+    if (!confirm(`Сбросить своё дополнение к промпту (${prev.length} знаков) до дефолтного?\n\nПрежний текст можно будет вернуть кнопкой «↩ Вернуть прежний».`)) return;
+    sysReplace('', 'reset');
     toast('Промпт сброшен до дефолтного');
+    render();
+  });
+  document.getElementById('sys-undo')?.addEventListener('click', () => {
+    // Обмен местами, а не перезапись: возврат тоже можно отменить
+    sysReplace(state.settings.customSysPrev || '', 'undo');
+    toast('Прежний промпт возвращён');
     render();
   });
   document.getElementById('sync-toggle')?.addEventListener('click', () => {
@@ -10044,8 +10120,8 @@ function dbTabHTML() {
             <div class="field" style="min-width:170px;margin:0">
               <label>Категория эталона</label>
               <select id="db-f-refcat">
-                ${CATS.map(c => `<option value="${esc(c.id)}"${(f.refCat || state.form.category) === c.id ? ' selected' : ''}>${esc(c.label)}</option>`).join('')}
-                <option value="other"${f.refCat === 'other' ? ' selected' : ''}>Другое</option>
+                ${CATS.map(c => `<option value="${esc(c.id)}"${dbRefCat(f) === c.id ? ' selected' : ''}>${esc(c.label)}</option>`).join('')}
+                <option value="other"${dbRefCat(f) === 'other' ? ' selected' : ''}>Другое</option>
               </select>
             </div>
           </div>
@@ -10376,7 +10452,13 @@ function bindDbTab() {
         const merge = confirm(`Файл содержит: ${has.join(', ')}.\nТекущая база: ${state.db.length} записей.\n\nOK — слить с текущей базой (добавить новые, не трогая старые)\nОтмена — полностью заменить базу\n\nЭталоны, избранное, пресеты и очередь в обоих случаях ДОБАВЛЯЮТСЯ, ничего не стирая.`);
         // Замену подтверждаем сразу, до остальных вопросов: отказ здесь — это отказ
         // от импорта целиком, и спрашивать после него про настройки незачем.
-        if (!merge && !confirm(`Точно заменить всю базу? Текущие ${state.db.length} записей будут удалены безвозвратно.`)) return;
+        // F25: записи с финалом, которых нет в файле, — сырьё голоса. Замена уносила
+        // их мимо корзины, а через 5 с новая база уезжала и на сервер. Теперь они
+        // названы в вопросе числом и перед заменой кладутся в корзину.
+        const inFile = syncMatcher(data, SYNC_KIND.db);
+        const lostFinals = merge ? [] : state.db.filter(r => r.finalDesc && !inFile.find(r));
+        if (!merge && !confirm(`Точно заменить всю базу? Текущие ${state.db.length} записей будут удалены.` +
+          (lostFinals.length ? `\n\nИз них с донесённым финалом и без пары в файле: ${lostFinals.length} — они уйдут в корзину (⚙ Настройки → Синхронизация), вернуть можно.` : ''))) return;
 
         // Накопленное руками сливается ВСЕГДА, даже при выборе «заменить»: замена
         // относится к истории размещений, а терять эталоны и избранное молча — ровно
@@ -10431,13 +10513,30 @@ function bindDbTab() {
         };
 
         if (merge) {
-          const key = rec => [rec.product, rec.region, rec.title || '', rec.date || ''].join('|');
-          const existing = new Set(state.db.map(key));
-          const added = data.filter(rec => !existing.has(key(rec)));
+          // F23: те же правила, что у синхронизации. Прежний ключ товар|регион|
+          // название|дата отбрасывал совпавшую запись целиком — вместе с финалом,
+          // который в локальной копии уже потерян, — и называл это «дублем»;
+          // заодно схлопывал законных близнецов (повторное «✓ Размещено»).
+          const localDb = syncMatcher(state.db, SYNC_KIND.db);
+          const added = mergeNewOnes(data, state.db, SYNC_KIND.db);
+          const isNew = new Set(added);
+          let filled = 0;
+          for (const inc of data) {
+            if (isNew.has(inc)) continue;
+            const local = localDb.find(inc);
+            if (local && dbFillFrom(local, inc)) filled++;
+          }
+          restampIds(added, state.db);
           state.db = [...state.db, ...added];
           mergeLists(); applyCfg(); save();
-          toast(`Слияние: добавлено ${added.length} из ${data.length}${addedNote ? `, ${addedNote}` : ''} (пропущено дублей: ${data.length - added.length})`);
+          toast(`Слияние: добавлено ${added.length} из ${data.length}` +
+            (filled ? `, дополнено записей (финал, аккаунт, даты): ${filled}` : '') +
+            `${addedNote ? `, ${addedNote}` : ''} (уже были: ${data.length - added.length})`);
         } else {
+          if (lostFinals.length) {
+            const at = new Date().toISOString();
+            syncTrashSave([...syncTrash(), ...lostFinals.map(rec => ({ key: syncDbKey(rec), kind: 'db', at, rec }))]);
+          }
           state.db = data;
           // Замена базы — явное намерение, подтверждённое двумя вопросами. Метим
           // хранилище своим, иначе saveMerged увидел бы в нём «чужое» и подлил бы
@@ -11745,7 +11844,7 @@ document.addEventListener('click', e => {
       if (title || desc) { rec.title = title; rec.description = desc; }
       state.db.push(rec);
       let refAdded = false;
-      if ((title || desc) && f.toRefs) refAdded = addRefFromText(title, desc, 'mine', f.refCat);
+      if ((title || desc) && f.toRefs) refAdded = addRefFromText(title, desc, 'mine', dbRefCat(f));
       state.dbForm = { product: f.product.trim(), region: f.region.trim(), status: 'active', note: '',
                        account: rec.account, title: '', desc: '', toRefs: f.toRefs, postedAt: '',
                        refCat: f.refCat || '' };
@@ -11796,7 +11895,7 @@ document.addEventListener('click', e => {
         if (t2) upd.title = t2;
         if (d2) upd.description = d2;
         state.db[idx] = upd;
-        if ((t2 || d2) && f2.toRefs) addRefFromText(t2, d2, 'mine', f2.refCat || rec._category);
+        if ((t2 || d2) && f2.toRefs) addRefFromText(t2, d2, 'mine', dbRefCat(f2));
       }
       state.dbEditId = null;
       state.dbForm = { ...state.dbForm, title: '', desc: '', toRefs: true, postedAt: '', refCat: '' };

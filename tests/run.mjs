@@ -26,6 +26,7 @@ import { runBrand } from './brand.mjs';
 import { runSeries } from './series.mjs';
 import { runStorage } from './storage.mjs';
 import { runMobile } from './mobile.mjs';
+import { runRawsafe } from './rawsafe.mjs';
 
 const only = process.argv[2]; // node run.mjs parity|editor|regress — прогнать одну секцию
 
@@ -50,6 +51,7 @@ try {
   if (!only || only === 'backup')  await runBackup(browser, base, t);
   if (!only || only === 'storage') await runStorage(browser, base, t);
   if (!only || only === 'mobile')  await runMobile(browser, base, t);
+  if (!only || only === 'rawsafe') await runRawsafe(browser, base, t);
   if (!only || only === 'sync')    await runSync(browser, base, t);
   if (!only || only === 'truncate') await runTruncate(browser, base, t);
   if (!only || only === 'history')  await runHistory(browser, base, t);
