@@ -59,11 +59,11 @@ export async function runJournalfix(browser, base, t) {
       state.form = { ...JSON.parse(JSON.stringify(DEF_FORM)), ...form };
 
       // Пул пуст — текст модели байт в байт
-      state.settings.sigPool = [];
+      state.settings.sigGame = []; state.settings.sigSub = [];
       await doGenerate();
       out.emptyPool = state.results.map(v => v.description);
 
-      state.settings.sigPool = [a, b];
+      state.settings.sigGame = [a, b];
       await doGenerate();
       out.descs = state.results.map(v => v.description);
       out.sigs = state.results.map(v => v._sig);
@@ -73,9 +73,24 @@ export async function runJournalfix(browser, base, t) {
       document.querySelector('[data-act="sig-swap"][data-vid="1"]').click();
       out.swap = { before, after: state.results[0]._sig, desc: state.results[0].description };
 
-      // Категория без галочки — подписи нет
-      const phys = sigAttach({ description: 'Вещь.' }, 'phys');
-      out.physDesc = phys.description;
+      // Пул поменяли после генерации — 🔄 всё равно не оставляет старую подпись
+      state.settings.sigGame = [a + ' Правка.', b + ' Правка.'];
+      document.querySelector('[data-act="sig-swap"][data-vid="1"]').click();
+      const d1 = state.results[0].description;
+      out.swapAfterEdit = { one: [a, b].every(s => !d1.includes(s + '\n')) && (d1.match(/Почему ко мне/g) || []).length === 1, d1 };
+      state.settings.sigGame = [a, b];
+
+      // Пулы разные у игр и подписок; у прочих категорий подписи нет
+      state.settings.sigSub = ['Подпись подписки.'];
+      out.subSig = sigAttach({ description: 'PS Plus.' }, 'gaming_sub').description;
+      out.aiSig  = sigAttach({ description: 'Claude.' }, 'ai_sub').description;
+      out.physDesc = sigAttach({ description: 'Вещь.' }, 'phys').description;
+      state.settings.sigSub = [];
+      // С одним вариантом в пуле менять не на что — кнопки нет
+      state.settings.sigGame = [a]; refreshResults();
+      out.btnOne = !!document.querySelector('[data-act="sig-swap"]');
+      state.settings.sigGame = [a, b]; refreshResults();
+      out.btnTwo = !!document.querySelector('[data-act="sig-swap"]');
 
       // Текст без подписи sigStrip не трогает ни байта
       const raw = 'Строка.\n\n\n\nЕщё строка.  ';
@@ -104,11 +119,68 @@ export async function runJournalfix(browser, base, t) {
     t.ok('соседние варианты — с разными подписями', r.sigs[0] !== r.sigs[1] && r.sigs[1] !== r.sigs[2], JSON.stringify(r.sigs));
     t.ok('🔄 меняет подпись, тело на месте', r.swap.after !== r.swap.before
       && r.swap.desc === `Тело варианта 1. Оформляется онлайн. PS4 PS5\n\n${r.swap.after}`, JSON.stringify(r.swap));
-    t.eq('категория без галочки — без подписи', r.physDesc, 'Вещь.');
+    t.ok('пул изменился после генерации — 🔄 оставляет одну подпись, а не две', r.swapAfterEdit.one, r.swapAfterEdit.d1);
+    t.eq('игровая подписка берёт подпись из пула подписок', r.subSig, 'PS Plus.\n\nПодпись подписки.');
+    t.eq('AI-подписка — из того же пула подписок', r.aiSig, 'Claude.\n\nПодпись подписки.');
+    t.eq('категория без пула — без подписи', r.physDesc, 'Вещь.');
+    t.ok('🔄 видна только когда есть на что менять', !r.btnOne && r.btnTwo, JSON.stringify([r.btnOne, r.btnTwo]));
     t.ok('текст без подписи не меняется ни на байт', r.stripSame);
     t.ok('в примерах для модели тело финала есть, подписи нет', r.fewshot.hasBody && !r.fewshot.hasSig, JSON.stringify(r.fewshot));
     t.ok('ротация: модели уходит текст без подписи, результат — с подписью из пула',
       !r.rot.sentSig && r.rot.sentBody && r.rot.resSig, JSON.stringify(r.rot));
+    t.ok('консоль чистая', consoleErrors.length === 0, consoleErrors.join('\n'));
+    await ctx.close();
+  }
+
+  // ── Подпись: Сканер, ручные версии, приём настроек ─────
+  {
+    const { ctx, page, consoleErrors } = await openApp(browser, base + '/avito-helper.html');
+    const r = await page.evaluate(() => {
+      const out = {};
+      // Ручная версия подписи — слова поменяны, в пуле её нет, стоит в одной
+      // строке с концом тела (живой случай GTA 6, 15.10)
+      const HAND = '⚡Возможно, вы задаетесь вопросом, зачем обращаться ко мне, а не продавцу, указавшему в объявлении условно 1000 руб?\nЯ ставлю честную цену.\nУ меня безупречная репутация, которую вы нечасто встретите.';
+      const body = 'GTA 6 — главное событие года. Оформляется онлайн на PS5, Xbox Series X|S.';
+      state.settings.sigGame = []; state.settings.sigSub = [];
+      out.handInline = sigStrip(body + '   ' + HAND);
+      out.handBlock  = sigStrip(body + '\n\n' + HAND);
+
+      // Сканер подпись не проверяет: ни сумму, ни «профиль», ни её «онлайн»
+      const scan = checkAds('ГТА 6 — главное событие года (PS5)', body + '\n\n' + HAND + ' Отзывы в профиле.', 'game');
+      out.scanErrors = scan.errors;
+      const noPhrase = checkAds('ГТА 6 (PS5)', 'Тело без фразы.\n\n' + HAND.replace('Я ставлю', 'Оформляется онлайн. Я ставлю'), 'game');
+      out.phraseFromSig = noPhrase.ok.some(x => /онлайн/.test(x));
+      out.multiplayer = checkAds('Doom (PS5)', 'Онлайн-мультиплеер на четверых.', 'game').ok.some(x => /Оформляется онлайн/.test(x));
+
+      // Финал, где сменили только подпись, — не «голос продавца»
+      state.favorites = []; state.refs = [];
+      state.db = [{ id: 1, _uid: 'u1', product: 'GTA 6', region: 'Киров', title: 'T', _category: 'game',
+        description: 'Бот-тело про GTA.\n\n' + HAND, finalDesc: 'Бот-тело про GTA.\n\n' + HAND.replace('нечасто', 'редко'),
+        status: 'active', note: '', date: '15.10.2026' }];
+      out.sigOnlyFinal = fewShotSamples('game').all.filter(x => x.final).length;
+
+      // Приём настроек: старая страница/бэкап без пулов не стирает свои
+      state.settings.sigGame = ['Моя подпись игр.']; state.settings.sigSub = ['Моя подпись подписок.'];
+      settingsAdopt({ model: state.settings.model });
+      out.keptMissing = [state.settings.sigGame, state.settings.sigSub];
+      settingsAdopt({ model: state.settings.model, sigGame: [], sigSub: ['Новая подписок.'] });
+      out.keptEmpty = [state.settings.sigGame, state.settings.sigSub];
+      // Единый пул первой версии переезжает в оба новых
+      state.settings.sigGame = []; state.settings.sigSub = [];
+      settingsAdopt({ model: state.settings.model, sigPool: ['Старая общая.'] });
+      out.migrated = [state.settings.sigGame, state.settings.sigSub, 'sigPool' in state.settings];
+      return out;
+    });
+    const BODY = 'GTA 6 — главное событие года. Оформляется онлайн на PS5, Xbox Series X|S.';
+    t.eq('ручная подпись в той же строке, что тело, — вырезается по ключевому вопросу', r.handInline, BODY);
+    t.eq('ручная подпись отдельным абзацем — тоже', r.handBlock, BODY);
+    t.eq('Сканер: сумма и «профиль» в подписи — не ошибки', r.scanErrors.length, 0);
+    t.ok('Сканер: «оформляется онлайн» из подписи не засчитывается за тело', !r.phraseFromSig);
+    t.ok('Сканер: «онлайн-мультиплеер» — не обязательная фраза', !r.multiplayer);
+    t.eq('финал, где сменили только подпись, в «голос продавца» не идёт', r.sigOnlyFinal, 0);
+    t.ok('настройки без пулов не стирают свои', JSON.stringify(r.keptMissing) === JSON.stringify([['Моя подпись игр.'], ['Моя подпись подписок.']]), JSON.stringify(r.keptMissing));
+    t.ok('пустой входящий пул не стирает свой, непустой — принимается', JSON.stringify(r.keptEmpty) === JSON.stringify([['Моя подпись игр.'], ['Новая подписок.']]), JSON.stringify(r.keptEmpty));
+    t.ok('единый пул первой версии переезжает в оба', JSON.stringify(r.migrated) === JSON.stringify([['Старая общая.'], ['Старая общая.'], false]), JSON.stringify(r.migrated));
     t.ok('консоль чистая', consoleErrors.length === 0, consoleErrors.join('\n'));
     await ctx.close();
   }

@@ -1480,6 +1480,7 @@ function settingsAdopt(inc) {
                   ...sysHist(next), ...sysHist(cur)]
     .sort((a, b) => String(b.at || '').localeCompare(String(a.at || '')));
   next.customSysHist = sysHistMerge([byDate], nextSys);
+  sigAdopt(next, cur);
   state.settings = next;
   if (prevSys !== nextSys) jlog('sys_changed', null, { via: 'restore', prev: prevSys, next: nextSys });
 }
@@ -1552,10 +1553,35 @@ const DEF_SETTINGS = {
   // повтор названия запрещён внутри одного аккаунта, а между своими профилями
   // владелец повторяет сознательно — мы только помечаем совпадение.
   rotXAcc:   false,
-  // Подпись продавца: готовые варианты, код приклеивает их по кругу (см. sigAttach)
-  sigPool:   [],
-  sigCats:   ['game', 'gaming_sub', 'ai_sub'],
+  // Подпись продавца: готовые варианты, код приклеивает их по кругу (см. sigAttach).
+  // Два пула — игры и подписки (игровые + AI), см. SIG_POOL_OF.
+  sigGame:   [],
+  sigSub:    [],
 };
+
+// Пулов два (решение Дениса 15.10): у игр и у подписок разная цена-приманка
+// («условно 1000 руб» против «150 руб») и разные слова («к игре» / «функционал
+// подписки»). Остальные категории без подписи.
+const SIG_POOL_OF = { game: 'sigGame', gaming_sub: 'sigSub', ai_sub: 'sigSub' };
+const SIG_KEYS = ['sigGame', 'sigSub'];
+
+// Подписи — текст продавца, то есть сырьё. Пустой или отсутствующий пул на входе
+// (настройки со старой страницы или из старого бэкапа, где пулов ещё нет) НЕ
+// стирает непустой свой: иначе варианты пропали бы молча и вернуть их было бы
+// нечем. Убрать подпись можно только руками в ⚙ — там есть переспрос.
+// Плюс перенос единого пула первой версии (sigPool, 15.10) в оба новых.
+function sigAdopt(next, cur) {
+  if (Array.isArray(next.sigPool) && next.sigPool.length) {
+    for (const k of SIG_KEYS) if (!(Array.isArray(next[k]) && next[k].length)) next[k] = next.sigPool.slice();
+  }
+  delete next.sigPool; delete next.sigCats;
+  for (const k of SIG_KEYS) {
+    const mine = cur && Array.isArray(cur[k]) ? cur[k] : [];
+    if (!(Array.isArray(next[k]) && next[k].length) && mine.length) next[k] = mine.slice();
+    if (!Array.isArray(next[k])) next[k] = [];
+  }
+  return next;
+}
 
 const DEF_FORM = {
   category: 'gaming_sub',
@@ -1604,7 +1630,7 @@ const state = {
     // уровень, поэтому у настроек старше этой версии s.accounts — ТОТ ЖЕ массив,
     // что в DEF_SETTINGS, а переименование правит его по месту.
     s.accounts = (Array.isArray(s.accounts) ? s.accounts : DEF_ACCOUNTS).map(a => ({ ...a }));
-    return s;
+    return sigAdopt(s, null);
   })(),
   form:     ls('avito_form',     DEF_FORM),
   loading: false,
@@ -3242,26 +3268,48 @@ function styleLabel(f) {
 // документ настроек на сервер (та же причина, что у списка частых сцен).
 const SIG_IDX_KEY = 'avito_sig_i';
 
-function sigPool() {
-  return (state.settings.sigPool || []).map(s => String(s || '').trim()).filter(Boolean);
+function sigList(key) {
+  const s = typeof state !== 'undefined' && state.settings;
+  return ((s && s[key]) || []).map(x => String(x || '').trim()).filter(Boolean);
 }
-function sigOn(category) {
-  return sigPool().length > 0 && (state.settings.sigCats || []).includes(category);
+function sigPool(category) {
+  return SIG_POOL_OF[category] ? sigList(SIG_POOL_OF[category]) : [];
 }
-// Вырезает из текста любую подпись пула. Длинные первыми: короткая может быть
-// куском длинной. Текст без подписи возвращается байт в байт.
-function sigStrip(text) {
+function sigOn(category) { return sigPool(category).length > 0; }
+
+// Ключевой вопрос, которым открываются ВСЕ подписи Дениса (12 из 12 в журнале):
+// «…зачем обращаться ко мне / писать мне, а не продавцу…». В теле объявления его
+// не бывает, поэтому подпись режется от него до конца, даже если слова в ней
+// поменяны и точного совпадения с пулом нет.
+const SIG_Q_RE = /зачем[^\n?]{0,60}?мне,?\s*а не (?:к )?продавцу/i;
+
+// Тело без подписи: точные варианты из обоих пулов (длинные первыми — короткая
+// может быть куском длинной) и всё от ключевого вопроса. Текст без подписи
+// возвращается байт в байт.
+function sigStrip(text, extra) {
   let t = String(text || '');
   let hit = false;
-  for (const s of sigPool().sort((a, b) => b.length - a.length)) {
+  const all = [...new Set([...SIG_KEYS.flatMap(sigList), ...(extra ? [String(extra).trim()] : [])])]
+    .filter(Boolean).sort((a, b) => b.length - a.length);
+  for (const s of all) {
     if (t.includes(s)) { t = t.split(s).join(''); hit = true; }
+  }
+  const m = SIG_Q_RE.exec(t);
+  if (m) {
+    // Режем от начала предложения с вопросом: бывает, что он стоит в одной
+    // строке с концом тела («…Xbox Series X|S.   ⚡Возможно, вы задаетесь…»)
+    const lineStart = t.lastIndexOf('\n', m.index) + 1;
+    const head = t.slice(lineStart, m.index);
+    const ends = [...head.matchAll(/[.!…]\s+/g)];
+    const cut = ends.length ? lineStart + ends[ends.length - 1].index + ends[ends.length - 1][0].length : lineStart;
+    t = t.slice(0, cut); hit = true;
   }
   return hit ? t.replace(/\n{3,}/g, '\n\n').trim() : t;
 }
 // Следующая по кругу; skip — та, что стоит сейчас (кнопка «🔄» не должна
 // вернуть ту же самую).
-function sigNext(skip) {
-  const pool = sigPool();
+function sigNext(category, skip) {
+  const pool = sigPool(category);
   if (!pool.length) return '';
   let i = 0;
   try { i = +localStorage.getItem(SIG_IDX_KEY) || 0; } catch(e) {}
@@ -3271,8 +3319,10 @@ function sigNext(skip) {
 }
 function sigAttach(v, category) {
   if (!v || !sigOn(category)) return v;
-  const sig = sigNext(v._sig || '');
-  v.description = sigStrip(v.description || '').trim() + '\n\n' + sig;
+  const sig = sigNext(category, v._sig || '');
+  // Свою прежнюю подпись вырезаем явно: пул мог измениться после генерации,
+  // и без этого 🔄 дописал бы вторую подпись под первой
+  v.description = sigStrip(v.description || '', v._sig).trim() + '\n\n' + sig;
   v._sig = sig;
   return v;
 }
@@ -3284,13 +3334,21 @@ function formPlats(f) {
   return Array.isArray(list) ? list : [];
 }
 
-// Общий хвост всех путей генерации: подпись, затем Сканер — по тексту, который
-// уйдёт на Авито целиком, и со сверкой платформ формы.
+// Сканер варианта. Платформы формы запоминаются на варианте: 🔄, перегенерация
+// и перефраз проверяют PS4 по ним же, а не по живой форме. Там, где формы нет
+// (ротация записи Истории, вкладка «Сканер»), проверки PS4 нет вовсе.
+function variantScan(v, category, form) {
+  if (!v) return v;
+  if (form) v._plats = formPlats(form);
+  v._scan = checkAds(v.title || '', v.description || '', category, v._plats || []);
+  return v;
+}
+
+// Общий хвост всех путей генерации: подпись, затем Сканер.
 function variantFinish(v, category, form) {
   if (!v) return v;
   sigAttach(v, category);
-  v._scan = checkAds(v.title || '', v.description || '', category, formPlats(form));
-  return v;
+  return variantScan(v, category, form);
 }
 
 function fewShotSamples(category) {
@@ -3300,7 +3358,9 @@ function fewShotSamples(category) {
   // бот-версию, если поле описания оставили пустым (fd = fdRaw || r.description),
   // и такой «финал» ничего нового о голосе не говорит.
   const fromFinal = (state.db || [])
-    .filter(r => r.finalDesc && r.finalDesc !== r.description)
+    // Сравниваем тела без подписи: финал, где поменяли только подпись, — это
+    // бот-текст, а не «голос продавца»
+    .filter(r => r.finalDesc && sigStrip(r.finalDesc) !== sigStrip(r.description))
     .map(r => ({
       title: r.finalTitle || r.title || '', desc: r.finalDesc, cat: r._category || null,
       final: true, chain: r._chain || null,
@@ -4024,7 +4084,7 @@ async function doRegen(id) {
         ...(truncated ? { truncated: true } : {}),
       });
       arr[idx] = { ...v, id, _product: product, _category: category, _chain: prev._chain }; // штампы F4 сохраняются
-      arr[idx]._scan = checkAds(v.title || '', v.description || '', category, formPlats(snapForm)); // бейдж под НОВЫЙ текст
+      variantScan(arr[idx], category, snapForm); // бейдж под НОВЫЙ текст
       save();
     }
   } catch(e) {
@@ -4110,7 +4170,8 @@ ${sigStrip(v.description)}
     box._rephResult = {
       ...nv, id: vid, _fid: Date.now(),
       _chain: v._chain || null, _product: v._product || null, _category: v._category || null,
-      _scan: checkAds(nv.title || '', nv.description || '', v._category || state.form.category, formPlats(state.resultsForm)),
+      _plats: v._plats || [],
+      _scan: checkAds(nv.title || '', nv.description || '', v._category || state.form.category, v._plats || []),
     };
   } catch(e) {
     box.innerHTML = `<div style="padding:8px 12px;color:var(--err);font-size:13px">✗ ${esc(e.message)}</div>`;
@@ -4369,7 +4430,7 @@ function vcardHTML(v, inFav) {
         ${rloading ? 'disabled' : ''} title="Перегенерировать вариант">${rloading ? '⏳' : '↻'}</button>` : ''}
       ${!inFav ? `<button class="btn-sm" data-act="alt-titles" data-vid="${v.id}"
         ${state.altTitlesLoading === v.id ? 'disabled' : ''} title="5 вариантов названия" style="color:var(--teal-h)">${state.altTitlesLoading === v.id ? '⏳' : '↻×5'}</button>` : ''}
-      ${!inFav && v._sig ? `<button class="btn-sm" data-act="sig-swap" data-vid="${v.id}" title="Другая подпись из пула">🔄</button>` : ''}
+      ${!inFav && v._sig && sigPool(v._category).length > 1 ? `<button class="btn-sm" data-act="sig-swap" data-vid="${v.id}" title="Другая подпись из пула">🔄</button>` : ''}
       <button class="btn-sm ${fav ? 'fav-on' : ''}"
         data-act="${inFav ? 'unfav' : 'fav'}"
         data-vid="${v.id}" data-fid="${fidAttr}"
@@ -6513,16 +6574,13 @@ function settingsTabHTML() {
       <div class="form-body">
         <div style="font-size:12px;color:var(--muted)">
           Блок в конце объявления — почему обращаться к тебе. Варианты подставляются по кругу после генерации,
-          модель их не видит и не пересказывает. В карточке варианта 🔄 меняет подпись на следующую.
+          модель их не видит и не пересказывает, Сканер их не проверяет. В карточке варианта 🔄 меняет подпись
+          на следующую. Пустое поле — без подписи. Варианты разделяй строкой <b>---</b>.
         </div>
-        <div class="field">
-          <label>Варианты подписи — разделяй строкой <b>---</b> (сейчас: ${sigPool().length})</label>
-          <textarea id="sig-pool" rows="10" style="min-height:160px;font-size:13px" placeholder="Почему стоит обратиться ко мне…&#10;---&#10;Почему стоит обратиться ко мне (другая версия)…">${esc(sigPool().join('\n---\n'))}</textarea>
-        </div>
-        <div style="display:flex;flex-wrap:wrap;gap:10px;font-size:13px">
-          ${CATS.map(c => `<label style="display:inline-flex;align-items:center;gap:5px;cursor:pointer">
-            <input type="checkbox" data-sig-cat="${esc(c.id)}" ${(state.settings.sigCats || []).includes(c.id) ? 'checked' : ''}> ${esc(c.label)}</label>`).join('')}
-        </div>
+        ${[['sigGame', '🕹️ Игры'], ['sigSub', '🎮🧠 Подписки (игровые и AI)']].map(([k, lbl]) => `<div class="field">
+          <label>${lbl} — вариантов: ${sigList(k).length}</label>
+          <textarea data-sig-pool="${k}" rows="10" style="min-height:160px;font-size:13px" placeholder="⚡Вы задаетесь вопросом, зачем обращаться ко мне…&#10;---&#10;(другая версия)">${esc(sigList(k).join('\n---\n'))}</textarea>
+        </div>`).join('')}
         <div><button class="btn-gen" id="sig-save" style="width:auto;padding:9px 22px">Сохранить подписи</button></div>
       </div>
     </div>
@@ -6840,25 +6898,23 @@ function bindSettingsTab() {
     render();
   });
   document.getElementById('sig-save')?.addEventListener('click', () => {
-    const next = (document.getElementById('sig-pool')?.value || '')
-      .split(/^\s*---\s*$/m).map(s => s.trim()).filter(Boolean);
-    const prev = sigPool();
-    if (next.join('\n---\n') === prev.join('\n---\n')) { toast('Подписи не изменились'); return; }
+    const next = {};
+    for (const el of document.querySelectorAll('[data-sig-pool]')) {
+      next[el.dataset.sigPool] = el.value.split(/^\s*---\s*$/m).map(s => s.trim()).filter(Boolean);
+    }
+    const changed = SIG_KEYS.filter(k => next[k] && next[k].join('\n---\n') !== sigList(k).join('\n---\n'));
+    if (!changed.length) { toast('Подписи не изменились'); return; }
     // Подписи — текст продавца, как и промпт: молча терять их нельзя
-    const gone = prev.filter(s => !next.includes(s)).length;
-    if (gone && !confirm(`Убрать из пула ${gone} вариант(ов) подписи? Вернуть их будет нечем.`)) return;
-    state.settings.sigPool = next;
-    jlog('sig_changed', null, { prev: prev.length, next: next.length });
+    const gone = changed.reduce((n, k) => n + sigList(k).filter(s => !next[k].includes(s)).length, 0);
+    if (gone && !confirm(`Убрать ${gone} вариант(ов) подписи? Вернуть их будет нечем.`)) return;
+    for (const k of changed) {
+      jlog('sig_changed', null, { pool: k, prev: sigList(k).length, next: next[k].length });
+      state.settings[k] = next[k];
+    }
     save();
-    toast(`Подписей в пуле: ${next.length}`);
+    toast(`Подписей: игры ${sigList('sigGame').length}, подписки ${sigList('sigSub').length}`);
     render();
   });
-  document.querySelectorAll('[data-sig-cat]').forEach(b => b.addEventListener('change', () => {
-    const id = b.dataset.sigCat;
-    const cur = (state.settings.sigCats || []).filter(x => x !== id);
-    state.settings.sigCats = b.checked ? [...cur, id] : cur;
-    save();
-  }));
   document.querySelectorAll('[data-sys-hist]').forEach(b => b.addEventListener('click', () => {
     const h = sysHist()[+b.dataset.sysHist];
     if (!h) return;
@@ -11209,8 +11265,10 @@ const SCAN_WARNINGS = [
 ];
 
 const PLATFORM_RE = /ps4|ps5|пс4|пс5|xbox|иксбокс|playstation|nintendo|switch/i;
-// «В цифре» продавец не пишет никогда, а «онлайн» — в 11 из 14 финалов (разбор журнала 15.10)
-const DIGITAL_RE  = /онлайн/i;
+// «В цифре» продавец не пишет никогда, а «онлайн» — в 11 из 14 финалов (разбор
+// журнала 15.10). Именно фраза: голое «онлайн» («онлайн-мультиплеер») про способ
+// получения ничего не говорит.
+const DIGITAL_RE  = /оформля[а-яё]*\s+онлайн/i;
 
 // ══════════════════════════════════════════
 // ПРАВИЛА ПРОВЕРКИ ПО КАТЕГОРИЯМ (этап 3)
@@ -11252,6 +11310,11 @@ function scanRuleOn(catId, ruleId) {
 // plats — платформы из формы генератора (необязательно): по ним Сканер видит,
 // что модель выбросила PS4, которую продавец отметил.
 function checkAds(title, desc, category, plats) {
+  // Подпись продавца Сканер не проверяет (решение Дениса 15.10): это его
+  // осознанный текст, и цена-приманка в ней («условно 1000 руб») для игр давала
+  // бы красный бейдж на каждом варианте. Слова подписи не засчитываются и в
+  // обязательные фразы — проверяется тело.
+  desc = sigStrip(desc);
   const full = title + '\n' + desc;
   const errors = [], warnings = [], ok = [];
 
@@ -11373,7 +11436,7 @@ function scannerTabHTML() {
               // Что именно проверяется в этой категории, видно прямо в списке —
               // набор правил у категорий теперь разный (см. SCAN_RULES)
               const marks = [
-                scanRuleOn(c.id, 'digital_phrase') ? '«оформляется в цифре»' : '',
+                scanRuleOn(c.id, 'digital_phrase') ? '«оформляется онлайн»' : '',
                 scanRuleOn(c.id, 'game_price') ? 'без цены' : '',
                 scanRuleOn(c.id, 'payment') ? '' : 'слова оплаты разрешены',
               ].filter(Boolean).join(', ');
@@ -11800,9 +11863,9 @@ document.addEventListener('click', e => {
 
     case 'sig-swap': {
       const v = findResult(+el.dataset.vid);
-      if (!v || !v._sig) break;
+      if (!v || !v._sig || sigPool(v._category).length < 2) break;
       sigAttach(v, v._category);
-      v._scan = checkAds(v.title || '', v.description || '', v._category, formPlats(state.resultsForm));
+      variantScan(v, v._category);
       save(); refreshResults();
       break;
     }
