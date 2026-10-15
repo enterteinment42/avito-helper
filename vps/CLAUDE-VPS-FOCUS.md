@@ -12,3 +12,8 @@ PS4, спам `cv_variants`, дубли `posted`). Жаргон в заголо�
 **Следующий шаг:** когда в `TASK-JOURNAL-FIXES-WINDOWS.md` появятся отметки `[x]` и ≥10 новых
 публикаций — повторный разбор тем же методом (`/bot-selflearn-log`), сравнить с 15.10.
 При подсчёте снимать дубли `posted`/`edited` по `botTitle`+`region`.
+
+🔵 **15.10 — папка под git.** `~/avito-helper` → `~/avito-helper-repo/vps/` (sparse-клон
+публичного `enterteinment42/avito-helper`). В начале сессии — `git -C ~/avito-helper-repo pull --ff-only`;
+в конце — коммит, пуш по решению пользователя. Ждём: Windows-сессия правит свой `CLAUDE.md`
+(сервер теперь в `vps/`) и берёт `TASK-JOURNAL-FIXES-WINDOWS.md`.
