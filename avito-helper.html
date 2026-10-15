@@ -1116,7 +1116,7 @@ const BUILTIN_CATS = [
     extra: f => f.isPreorder ? `
 ЭТО ПРЕДЗАКАЗ. Найди через веб-поиск актуальные бонусы предзаказа для "${f.gameName}" и используй их в описании.
 Обязательно включи в описание:
-- Объяснение предзаказа БЕЗ путаницы: покупатель оформляет игру сейчас и СРАЗУ получает её в цифре — просто играть можно будет начиная с дня релиза. Не «платишь сейчас и ждёшь» — а «игра уже твоя, просто старт в день выхода»
+- Объяснение предзаказа БЕЗ путаницы: покупатель оформляет игру сейчас и СРАЗУ получает её онлайн — просто играть можно будет начиная с дня релиза. Не «платишь сейчас и ждёшь» — а «игра уже твоя, просто старт в день выхода»
 - Конкретные бонусы предзаказа (найди через поиск — скины, миссии, контент и т.п.)
 - Акцент: цена зафиксирована — даже если игра подорожает. Писать БЕЗ суммы: просто «Цена зафиксирована» или «стоимость не изменится» — никаких чисел и ₽
 В названии слово «предзаказ» — МОЖНО, но не обязательно. Иногда сильнее зайти с другого угла: топ-бонус, дата выхода, название игры без «предзаказа»` : '',
@@ -1135,7 +1135,7 @@ const BUILTIN_CATS = [
     Слово «Slim» пиши, только если стык виден, а прорезей нет. Если ракурс не даёт разглядеть панель — не угадывай между версиями: напиши «PlayStation 5» без приставки и скажи в recognized, что нужен снимок сбоку.`,
     // Своя раскладка проверок: «купить» и «оплата» для вещи из рук — обычные
     // слова, а не юридический риск (в отличие от цифровых товаров); платформы и
-    // «оформляется в цифре» к вещи не относятся; цена в тексте — как у игр,
+    // «оформляется онлайн» к вещи не относятся; цена в тексте — как у игр,
     // клиент видит её в поле Авито.
     scanRules: { payment: false, platform: false, digital_phrase: false, game_price: true },
     fields: [
@@ -1161,7 +1161,7 @@ const BUILTIN_CATS = [
     ],
     extra: () => `
 ЭТО ФИЗИЧЕСКАЯ ВЕЩЬ ИЗ РУК В РУКИ, не цифровой товар:
-- Пиши обычным языком продавца вещей: «купить», «заберёшь», «отдам» — нормально. НЕ используй «оформляется», «оформить в цифре» — это про цифровые товары
+- Пиши обычным языком продавца вещей: «купить», «заберёшь», «отдам» — нормально. НЕ используй «оформляется», «оформить онлайн» — это про цифровые товары
 - Состояние и дефекты передавай ЧЕСТНО и ровно так, как указал продавец: не приукрашивай и не добавляй недостатков от себя
 - Если дефекты не указаны — не выдумывай их и не пиши «без дефектов»
 - Сумму в тексте НЕ называй — цена стоит в поле Авито
@@ -1552,6 +1552,9 @@ const DEF_SETTINGS = {
   // повтор названия запрещён внутри одного аккаунта, а между своими профилями
   // владелец повторяет сознательно — мы только помечаем совпадение.
   rotXAcc:   false,
+  // Подпись продавца: готовые варианты, код приклеивает их по кругу (см. sigAttach)
+  sigPool:   [],
+  sigCats:   ['game', 'gaming_sub', 'ai_sub'],
 };
 
 const DEF_FORM = {
@@ -2900,14 +2903,17 @@ const SYS_HEAD = `Ты — эксперт по созданию объявлен
 - Название игры ОБЯЗАТЕЛЬНО в каждом варианте — ВАРЬИРУЙ форму написания:
   Пример: "Grand Theft Auto VI" / "GTA VI" / "GTA 6" / "ГТА 6" / "ГТА VI" / "гта6"
   Пример: "FC 26" / "FC26" / "ФИФА 26" / "фифа26" / "FIFA 26"
-- Крючок после названия — выбирай из того, что ЕСТЬ В КОНКРЕТНОЙ ИГРЕ: сеттинг/город, жанровая фишка, эмоция вокруг игры, масштаб, уникальная механика, платформа («пс5» / «PS5»), слово «предзаказ». Не тащи шаблонные фразы из других игр.
-- Примеры ниже — только иллюстрация СТРУКТУРЫ и принципа вариации названий. Это не шаблоны и не список обязательных крючков. Для каждой игры крючок берётся из её собственных сильных сторон.
-- ХОРОШИЕ примеры структуры (на базе GTA VI / PS5 — только для понимания принципа):
-  ✓ "ГТА VI пс5 — самый большой открытый мир" [крючок = масштаб жанра]
-  ✓ "гта6 пс5 предзаказ — Вайс-Сити ждёт" [крючок = сеттинг + предзаказ]
-  ✓ "GTA VI пс5 — ждали 10 лет" [крючок = эмоция вокруг релиза]
-  ✓ "ГТА 6 пс5 — Вайс-Сити, два героя, открытый мир" [крючок = ключевые фичи]
+- Схема названия игры: НАЗВАНИЕ ИГРЫ — ПРОДАЮЩИЙ ДОВОД (ПЛАТФОРМЫ). Платформы — в конце, в скобках: «(PS5)», «(PS4,5)», «(PS4,5/Xbox)».
+- Крючок после названия — ПРОДАЮЩИЙ ДОВОД, а не образ: кто сделал («от создателей Ведьмака»), что это за событие («главное событие года», «футбольная новинка»), режим или сезон («новый сезон Ultimate Team»), масштаб, слово «предзаказ». Довод берётся из того, что ЕСТЬ В КОНКРЕТНОЙ ИГРЕ. Не тащи шаблонные фразы из других игр.
+- ЗАПРЕЩЁН образный, поэтический хвост после тире: «— ярость мутанта», «— вампир на один день», «— на одном дыхании», «— город ждёт». Метафора в названии ничего не продаёт: покупатель листает выдачу и ищет довод.
+- Примеры ниже — только иллюстрация СТРУКТУРЫ и принципа вариации названий. Это не шаблоны и не список обязательных крючков. Для каждой игры довод берётся из её собственных сильных сторон.
+- ХОРОШИЕ примеры структуры (только для понимания принципа):
+  ✓ "FC 27 - футбольная новинка (PS4,5/Xbox)" [довод = новинка жанра]
+  ✓ "ГТА 6 — главное событие года (PS5)" [довод = событие]
+  ✓ "GTA VI предзаказ — от создателей RDR 2 (PS5)" [довод = студия + предзаказ]
+  ✓ "ГТА 6 — самый большой открытый мир (PS5)" [довод = масштаб]
 - ПЛОХИЕ примеры (ТАК НЕ ДЕЛАТЬ):
+  ✗ "ГТА 6 пс5 — Вайс-Сити ждёт" — образ вместо довода
   ✗ "GTA VI пс5 — в цифре оформить" — «в цифре» и «оформить» в названии запрещены
   ✗ "GTA 6 PS5 — Rockstar, открытый мир, цифра" — «Rockstar» и «цифра» лишние слова
   ✗ "ГТА 6 — криминал, Флорида, PS5" — «криминал» отпугивает
@@ -2921,15 +2927,17 @@ const SYS_HEAD = `Ты — эксперт по созданию объявлен
   * цена → что получишь → фичи (только для подписок)
   * список игр → преимущества → цены (только для подписок)
   * эмоция/метафора → содержимое
+- Платформы — ВСЕ, что даны во входных данных. Указана PS4 — назови и PS4, не сужай до PS5
 
 ДЛЯ КАТЕГОРИИ «ИГРА» — особые правила:
 - НОЛЬ упоминаний цены в описании — ни суммы, ни ₽, ни «рублей», ни «стоит», ни «за X руб». На Авито есть отдельное поле цены — клиент её видит там. ЗАПРЕЩЕНО: «оформить за 7500», «цена 7500 рублей», «всего 3000₽». РАЗРЕШЕНО (без суммы): «Цена зафиксирована», «стоимость не изменится»
 - Минимум 3 живых предложения о сюжете и геймплее — о чём игра, что происходит, что делает игрок. Не тезисы и не буллеты, а связный текст который цепляет
-- После этого — короткие практические детали (платформа, «оформляется в цифре»)
+- После этого — короткие практические детали (платформа, «оформляется онлайн»)
 - Тон варьировать: дерзкий/молодёжный, деловой, восторженный, минималистичный
 - AI-подписки: конкретные инструменты и юзкейсы, не абстрактно
 - Пиши грамотно и точно, но без официоза
 - Звучи как живой человек, не рекламный робот
+- Как получают товар — пиши «онлайн» («оформляется онлайн»). «В цифре», «цифровая версия» — НЕ пиши: продавец так не говорит
 - Не копируй структуру эталонных примеров — переосмысли своими словами
 - Разговорный язык в меру: «зайдёт», «затянет», «годнота» — нормально, но не перебарщивай
 - Градус эмоции под товар: крутая игра — живее, рядовая позиция — спокойнее и по делу, без натянутого восторга
@@ -2952,7 +2960,7 @@ const SYS_BANS = [
       + (cat == null || scanRuleOn(cat, 'payment') ? '«оформляешь за X руб» или просто «X руб»' : 'просто «X руб»') },
   { rule: 'gift',        text: '- «В подарок», «подарок», «в качестве подарка» — ЗАПРЕЩЕНО в любом контексте' },
   { rule: 'selling_word', text: '- «Продаю», «продам», «продаётся» — ЗАПРЕЩЕНО и в названии, и в описании. Так начинает половина Авито, объявление сразу теряется. Начинай с самого товара, выгоды или живой детали' },
-  { rule: 'account',     text: '- «Аккаунт», «учётная запись», «учетная запись», «профиль» — КАТЕГОРИЧЕСКИ ЗАПРЕЩЕНО. Авито банит объявления за продажу аккаунтов — это запрещённая категория товаров. Любое упоминание этих слов может привести к блокировке. Правильная нейтральная формулировка — «оформляется в цифре». НЕ пиши «оформляется в цифре на ваш аккаунт» — только «оформляется в цифре», без уточнений.' },
+  { rule: 'account',     text: '- «Аккаунт», «учётная запись», «учетная запись», «профиль» — КАТЕГОРИЧЕСКИ ЗАПРЕЩЕНО. Авито банит объявления за продажу аккаунтов — это запрещённая категория товаров. Любое упоминание этих слов может привести к блокировке. Правильная нейтральная формулировка — «оформляется онлайн». НЕ пиши «оформляется онлайн на ваш аккаунт» — только «оформляется онлайн», без уточнений.' },
 ];
 
 const SYS_TAIL = `
@@ -3222,6 +3230,69 @@ function styleLabel(f) {
 // Пул образцов языка продавца: избранное (★) плюс эталоны, написанные руками
 // (карточка «📥 Эталоны», пометка ✍ моё). Чужие удачные объявления (👀) в промпт
 // НЕ идут — они собираются для разбора, копировать чужой текст незачем.
+// ══════════════════════════════════════════
+// ПОДПИСЬ ПРОДАВЦА
+// Постоянный блок в конце («зачем ко мне… честная цена… геймер… репутация»)
+// продавец дописывал руками в 9 из 14 финалов (разбор журнала 15.10), каждый раз
+// меняя пару слов. Модель его не пишет и не видит: код приклеивает готовый
+// вариант из пула после генерации и вырезает пул из всего, что уходит модели
+// (примеры, перефраз, ротация), — иначе она начнёт подпись пересказывать.
+// ══════════════════════════════════════════
+// Счётчик круга — не в настройках: он менялся бы на каждой генерации и гонял
+// документ настроек на сервер (та же причина, что у списка частых сцен).
+const SIG_IDX_KEY = 'avito_sig_i';
+
+function sigPool() {
+  return (state.settings.sigPool || []).map(s => String(s || '').trim()).filter(Boolean);
+}
+function sigOn(category) {
+  return sigPool().length > 0 && (state.settings.sigCats || []).includes(category);
+}
+// Вырезает из текста любую подпись пула. Длинные первыми: короткая может быть
+// куском длинной. Текст без подписи возвращается байт в байт.
+function sigStrip(text) {
+  let t = String(text || '');
+  let hit = false;
+  for (const s of sigPool().sort((a, b) => b.length - a.length)) {
+    if (t.includes(s)) { t = t.split(s).join(''); hit = true; }
+  }
+  return hit ? t.replace(/\n{3,}/g, '\n\n').trim() : t;
+}
+// Следующая по кругу; skip — та, что стоит сейчас (кнопка «🔄» не должна
+// вернуть ту же самую).
+function sigNext(skip) {
+  const pool = sigPool();
+  if (!pool.length) return '';
+  let i = 0;
+  try { i = +localStorage.getItem(SIG_IDX_KEY) || 0; } catch(e) {}
+  if (pool.length > 1 && pool[i % pool.length] === skip) i++;
+  try { localStorage.setItem(SIG_IDX_KEY, String(i + 1)); } catch(e) {}
+  return pool[i % pool.length];
+}
+function sigAttach(v, category) {
+  if (!v || !sigOn(category)) return v;
+  const sig = sigNext(v._sig || '');
+  v.description = sigStrip(v.description || '').trim() + '\n\n' + sig;
+  v._sig = sig;
+  return v;
+}
+
+// Платформы из формы генератора — по категории
+function formPlats(f) {
+  if (!f) return [];
+  const list = f.category === 'game' ? f.gamePlatforms : f.category === 'gaming_sub' ? f.platforms : null;
+  return Array.isArray(list) ? list : [];
+}
+
+// Общий хвост всех путей генерации: подпись, затем Сканер — по тексту, который
+// уйдёт на Авито целиком, и со сверкой платформ формы.
+function variantFinish(v, category, form) {
+  if (!v) return v;
+  sigAttach(v, category);
+  v._scan = checkAds(v.title || '', v.description || '', category, formPlats(form));
+  return v;
+}
+
 function fewShotSamples(category) {
   // Финальные тексты с Авито — самый сильный образец голоса: вариант из избранного
   // написала модель и человек его одобрил, а финал он ДОРАБОТАЛ СВОЕЙ РУКОЙ уже в
@@ -3246,9 +3317,10 @@ function fewShotSamples(category) {
   const fromRefs = (state.refs || [])
     .filter(r => r.source === 'mine' && (r.title || r.desc))
     .map(r => ({ title: r.title || '', desc: r.desc || '', cat: r.category }));
-  const all = [...fromFinal, ...fromFav, ...fromRefs];
+  // Подпись продавца модели не показываем — её приклеивает код (sigAttach)
+  const all = [...fromFinal, ...fromFav, ...fromRefs].map(x => ({ ...x, desc: sigStrip(x.desc) }));
   const own = all.filter(x => x.cat === category);
-  // Своя категория в приоритете: факты и правила («оформляется в цифре», запрет
+  // Своя категория в приоритете: факты и правила («оформляется онлайн», запрет
   // цены в тексте) у каждой свои, и переносить их нельзя. Своих нет — берём чужие
   // с пометкой. А ГОЛОС категории не принадлежит: он у продавца один на всё, и для
   // него ниже есть отдельный слот (voicePick) — см. fewShotBlock.
@@ -3579,7 +3651,7 @@ async function doGenerate() {
     state.resultsForm = JSON.parse(JSON.stringify(state.form));
     state.results.forEach(v => {
       v._product = currentProductName(state.form); v._category = state.form.category;
-      v._scan = checkAds(v.title || '', v.description || '', state.form.category); // автопроверка сразу после генерации
+      variantFinish(v, state.form.category, state.form); // подпись + автопроверка сразу после генерации
       v._chain = jChain;
     });
     state.conveyorIdx = 0;
@@ -3632,7 +3704,7 @@ async function doGenerateMore() {
     fresh.forEach(v => {
       v.id = ++nextId;
       v._product = product; v._category = category;
-      v._scan = checkAds(v.title || '', v.description || '', category);
+      variantFinish(v, category, snapForm);
       v._chain = jChain;
     });
     state.extraResults.push(...fresh);
@@ -3690,7 +3762,7 @@ async function doBatchGenerate() {
     // F4: штамп товара/категории по форме на момент генерации (регион у пакета свой на каждой позиции)
     variants.forEach(v => {
       v._product = currentProductName(state.form); v._category = state.form.category;
-      v._scan = checkAds(v.title || '', v.description || '', state.form.category); // автопроверка сразу после генерации
+      variantFinish(v, state.form.category, state.form); // подпись + автопроверка сразу после генерации
       v._chain = jChain;
     });
     if (variants.length < regions.length) {
@@ -3863,7 +3935,7 @@ ${list}
     state.resultsForm = JSON.parse(JSON.stringify(f));
     state.results.forEach(v => {
       v._product = currentProductName(f); v._category = f.category;
-      v._scan = checkAds(v.title || '', v.description || '', f.category); // автопроверка сразу после генерации
+      variantFinish(v, f.category, f); // подпись + автопроверка сразу после генерации
       v._chain = jChain;
     });
     state.conveyorIdx = 0;
@@ -3896,7 +3968,7 @@ async function doGenAltTitles(id) {
     const msg = `${base}
 Текущее название: ${v?.title || ''}
 
-ЗАДАЧА: сгенерируй 5 альтернативных названий для этого же объявления. Каждое — в ДРУГОЙ стилистической точке: разный крючок, разные слова, для игры — обязательно разная форма написания названия (рус/англ/аббревиатура, транслит). Строго до 50 символов. ЗАПРЕЩЕНО: для категории «Игра» — любая цена/сумма/₽ в названии; для любой категории — слова «рублей»/«руб», даты/годы/«старт»/«релиз». Верни только JSON:
+ЗАДАЧА: сгенерируй 5 альтернативных названий для этого же объявления. Каждое — в ДРУГОЙ стилистической точке: разный крючок, разные слова, для игры — обязательно разная форма написания названия (рус/англ/аббревиатура, транслит), после тире — продающий довод, а не образ, платформы — в скобках в конце. Строго до 50 символов. ЗАПРЕЩЕНО: для категории «Игра» — любая цена/сумма/₽ в названии; для любой категории — слова «рублей»/«руб», даты/годы/«старт»/«релиз». Верни только JSON:
 {"titles":[{"title":"...","hook":"крючок одним словом"},{"title":"...","hook":"..."},{"title":"...","hook":"..."},{"title":"...","hook":"..."},{"title":"...","hook":"..."}]}`;
     const snapForm = state.resultsForm || state.form; // F12: webSearch из того же снимка, что и промпт (buildMsg выше)
     const webSearch = snapForm.isPreorder && snapForm.category === 'game';
@@ -3940,6 +4012,7 @@ async function doRegen(id) {
     const text = await callAI([{ role: 'user', content: buildMsg(1, excl, snapForm) }],
       { webSearch, category, onTruncated: () => { truncated = true; } });
     const [v] = parseVariants(text);
+    sigAttach(v, category); // до записи в журнал: after — это текст, который увидит продавец
     const { arr, idx } = findResultRef(id);
     if (arr && idx !== -1 && v) {
       // Журнал: перегенерация = «этот вариант не устроил». Старый текст пишем ДО перезаписи —
@@ -3951,7 +4024,7 @@ async function doRegen(id) {
         ...(truncated ? { truncated: true } : {}),
       });
       arr[idx] = { ...v, id, _product: product, _category: category, _chain: prev._chain }; // штампы F4 сохраняются
-      arr[idx]._scan = checkAds(v.title || '', v.description || '', category); // бейдж под НОВЫЙ текст
+      arr[idx]._scan = checkAds(v.title || '', v.description || '', category, formPlats(snapForm)); // бейдж под НОВЫЙ текст
       save();
     }
   } catch(e) {
@@ -3981,14 +4054,14 @@ async function doRephrase(vid, fid) {
   try {
     const msg = `Перефразируй это объявление для Авито. Сделай его СТРУКТУРНО ДРУГИМ — как будто писал другой продавец:
 - Другая структура описания (поменяй порядок блоков)
-- Другой крючок в названии: для подписок/AI — другая игра, фича или подача цены; для игры — другая форма написания названия (рус/англ/аббревиатура) и другой акцент; цена в названии игры ЗАПРЕЩЕНА
+- Другой крючок в названии: для подписок/AI — другая игра, фича или подача цены; для игры — другая форма написания названия (рус/англ/аббревиатура) и другой продающий довод (не образ); цена в названии игры ЗАПРЕЩЕНА
 - Другая подача цены в описании (если помесячная — сделай общую, и наоборот); для игры цену в описании не упоминать
 - Другой тон (если деловой — сделай более живым, и наоборот)
 - Название строго до 50 символов
 
 Исходное название: «${v.title}»
 Исходное описание:
-${v.description}
+${sigStrip(v.description)}
 
 Верни ОДИН вариант в JSON:
 {"variants": [{"id": 1, "title": "...", "title_length": 0, "description": "...", "style": "...", "price_format": "...", "hook": "...", "structure": "..."}]}`;
@@ -4001,6 +4074,7 @@ ${v.description}
     });
     const [nv] = parseVariants(text);
     if (!nv) throw new Error('Пустой ответ от AI');
+    sigAttach(nv, v._category || state.form.category);
     jlog('generated', v._chain || null, {
       path: 'rephrase', baseTitle: v.title || '',
       variants: [{ title: nv.title || '', description: nv.description || '' }],
@@ -4036,7 +4110,7 @@ ${v.description}
     box._rephResult = {
       ...nv, id: vid, _fid: Date.now(),
       _chain: v._chain || null, _product: v._product || null, _category: v._category || null,
-      _scan: checkAds(nv.title || '', nv.description || '', v._category || state.form.category),
+      _scan: checkAds(nv.title || '', nv.description || '', v._category || state.form.category, formPlats(state.resultsForm)),
     };
   } catch(e) {
     box.innerHTML = `<div style="padding:8px 12px;color:var(--err);font-size:13px">✗ ${esc(e.message)}</div>`;
@@ -4139,12 +4213,14 @@ async function doRotate(recId, mode) {
     const crossAcc = !!state.settings.rotXAcc;
     const used = rotUsedTitles(rec, crossAcc);
     let truncated = false;
-    const text = await callAI([{ role: 'user', content: rotPrompt(mode, live, used) }], {
+    // Подпись модели не показываем: прокрутит её — получится пересказ, а не подпись
+    const text = await callAI([{ role: 'user', content: rotPrompt(mode, { ...live, desc: sigStrip(live.desc) }, used) }], {
       category: rec._category || state.form.category,
       max_tokens: genTokens(1), onTruncated: () => { truncated = true; },
     });
     const [nv] = parseVariants(text);
     if (!nv) throw new Error('Пустой ответ от AI');
+    sigAttach(nv, rec._category || state.form.category);
 
     // Совпадение с названием на ДРУГОМ аккаунте не запрещено (решение владельца),
     // но показать его надо: два своих профиля площадка может связать.
@@ -4293,6 +4369,7 @@ function vcardHTML(v, inFav) {
         ${rloading ? 'disabled' : ''} title="Перегенерировать вариант">${rloading ? '⏳' : '↻'}</button>` : ''}
       ${!inFav ? `<button class="btn-sm" data-act="alt-titles" data-vid="${v.id}"
         ${state.altTitlesLoading === v.id ? 'disabled' : ''} title="5 вариантов названия" style="color:var(--teal-h)">${state.altTitlesLoading === v.id ? '⏳' : '↻×5'}</button>` : ''}
+      ${!inFav && v._sig ? `<button class="btn-sm" data-act="sig-swap" data-vid="${v.id}" title="Другая подпись из пула">🔄</button>` : ''}
       <button class="btn-sm ${fav ? 'fav-on' : ''}"
         data-act="${inFav ? 'unfav' : 'fav'}"
         data-vid="${v.id}" data-fid="${fidAttr}"
@@ -5838,7 +5915,7 @@ async function doStartSession() {
           v._chain = jChain;
           v._product = it.product || currentProductName(form);
           v._category = form.category;
-          v._scan = checkAds(v.title || '', v.description || '', form.category);
+          variantFinish(v, form.category, form);
           jlog('generated', jChain, {
             path: 'session', category: form.category, product: v._product, region: it.region || null,
             provider: state.settings.provider, model: state.settings.provider === 'claude' ? state.settings.model : state.settings.orModel,
@@ -6206,7 +6283,7 @@ function catEditorHTML() {
     </div>
     <div class="cat-ed-grid" style="margin-top:4px">
       <label class="cat-fld-sub">Свои обязательные фразы
-        <textarea data-act="catd" data-k="scanRequire" rows="3" placeholder="оформляется в цифре">${esc(d.scanRequire)}</textarea>
+        <textarea data-act="catd" data-k="scanRequire" rows="3" placeholder="оформляется онлайн">${esc(d.scanRequire)}</textarea>
       </label>
       <label class="cat-fld-sub">Свои запрещённые слова
         <textarea data-act="catd" data-k="scanForbid" rows="3" placeholder="аккаунт&#10;подарок">${esc(d.scanForbid)}</textarea>
@@ -6429,6 +6506,24 @@ function settingsTabHTML() {
           `<span style="font-size:12px;color:var(--muted)">Дефолтный промпт активен</span>`}
         </div>
         ${sysHistHTML()}
+      </div>
+    </div>
+    <div class="card" style="margin-top:16px">
+      <div class="card-title">✍ Подпись продавца</div>
+      <div class="form-body">
+        <div style="font-size:12px;color:var(--muted)">
+          Блок в конце объявления — почему обращаться к тебе. Варианты подставляются по кругу после генерации,
+          модель их не видит и не пересказывает. В карточке варианта 🔄 меняет подпись на следующую.
+        </div>
+        <div class="field">
+          <label>Варианты подписи — разделяй строкой <b>---</b> (сейчас: ${sigPool().length})</label>
+          <textarea id="sig-pool" rows="10" style="min-height:160px;font-size:13px" placeholder="Почему стоит обратиться ко мне…&#10;---&#10;Почему стоит обратиться ко мне (другая версия)…">${esc(sigPool().join('\n---\n'))}</textarea>
+        </div>
+        <div style="display:flex;flex-wrap:wrap;gap:10px;font-size:13px">
+          ${CATS.map(c => `<label style="display:inline-flex;align-items:center;gap:5px;cursor:pointer">
+            <input type="checkbox" data-sig-cat="${esc(c.id)}" ${(state.settings.sigCats || []).includes(c.id) ? 'checked' : ''}> ${esc(c.label)}</label>`).join('')}
+        </div>
+        <div><button class="btn-gen" id="sig-save" style="width:auto;padding:9px 22px">Сохранить подписи</button></div>
       </div>
     </div>
     <div class="card" style="margin-top:16px">
@@ -6744,6 +6839,26 @@ function bindSettingsTab() {
     toast('Промпт сброшен до дефолтного');
     render();
   });
+  document.getElementById('sig-save')?.addEventListener('click', () => {
+    const next = (document.getElementById('sig-pool')?.value || '')
+      .split(/^\s*---\s*$/m).map(s => s.trim()).filter(Boolean);
+    const prev = sigPool();
+    if (next.join('\n---\n') === prev.join('\n---\n')) { toast('Подписи не изменились'); return; }
+    // Подписи — текст продавца, как и промпт: молча терять их нельзя
+    const gone = prev.filter(s => !next.includes(s)).length;
+    if (gone && !confirm(`Убрать из пула ${gone} вариант(ов) подписи? Вернуть их будет нечем.`)) return;
+    state.settings.sigPool = next;
+    jlog('sig_changed', null, { prev: prev.length, next: next.length });
+    save();
+    toast(`Подписей в пуле: ${next.length}`);
+    render();
+  });
+  document.querySelectorAll('[data-sig-cat]').forEach(b => b.addEventListener('change', () => {
+    const id = b.dataset.sigCat;
+    const cur = (state.settings.sigCats || []).filter(x => x !== id);
+    state.settings.sigCats = b.checked ? [...cur, id] : cur;
+    save();
+  }));
   document.querySelectorAll('[data-sys-hist]').forEach(b => b.addEventListener('click', () => {
     const h = sysHist()[+b.dataset.sysHist];
     if (!h) return;
@@ -8376,7 +8491,7 @@ function cvDrawSelection(ctx, canvas, cw, ch) {
 
 // ⚡ Автозаполнение инфографики из формы генератора — набор строк зависит от категории.
 // Для игр цену НЕ подставляем (запрет цен в объявлениях игр — тот же принцип, что в сканере),
-// вместо неё — обязательная фраза «Оформляется в цифре».
+// вместо неё — обязательная фраза «Оформляется онлайн».
 function cvInfogBuildLines() {
   const f = state.form;
   const L = [];
@@ -8401,7 +8516,7 @@ function cvInfogBuildLines() {
     if (f.gameName) L.push(`🕹️ ${f.gameName}`);
     if (f.gamePlatforms?.length) L.push(`✔️ ${f.gamePlatforms.join(' / ')}`);
     if (f.gameGenre) L.push(`🎯 ${f.gameGenre}`);
-    L.push('⚡ Оформляется в цифре');
+    L.push('⚡ Оформляется онлайн');
   } else if (f.category === 'digital') {
     if (f.digitalName) L.push(`📦 ${f.digitalName}`);
     if (f.digitalPrice) L.push(`💲 ${f.digitalPrice}₽`);
@@ -9023,7 +9138,8 @@ function cvGenerateVariations() {
   ];
 
   cv._gameVars = vars;
-  jlog('cv_variants', null, { mode: 'game', infog: cvHasLayer('infog') });
+  // Событие cv_variants пишет кнопка, а не эта функция: её же зовёт cvReDraw на
+  // каждом движении слайдера, и журнал 15.10 получил 256 событий за 2 минуты.
 
   grid.innerHTML = vars.map((v,i) => `
     <div class="cv-var">
@@ -10887,7 +11003,7 @@ function showFinalDialog(recId) {
       r.editShare = jEditShare(r.description || '', fd);
       save();
       jlog('edited', r._chain || null, {
-        product: r.product, region: r.region,
+        rec: r._uid || null, product: r.product, region: r.region,
         botTitle: r.title || '', finalTitle: ft, titleChanged: ft !== (r.title || ''),
         botDescription: r.description || '', finalDescription: fd,
         // descPasted отвечает на один вопрос разбора: финал ОТЛИЧАЕТСЯ от
@@ -11093,7 +11209,8 @@ const SCAN_WARNINGS = [
 ];
 
 const PLATFORM_RE = /ps4|ps5|пс4|пс5|xbox|иксбокс|playstation|nintendo|switch/i;
-const DIGITAL_RE  = /оформляется в цифре/i;
+// «В цифре» продавец не пишет никогда, а «онлайн» — в 11 из 14 финалов (разбор журнала 15.10)
+const DIGITAL_RE  = /онлайн/i;
 
 // ══════════════════════════════════════════
 // ПРАВИЛА ПРОВЕРКИ ПО КАТЕГОРИЯМ (этап 3)
@@ -11113,7 +11230,7 @@ const SCAN_RULES = [
   { id: 'price_label',label: '«Цена: N» как ярлык-ценник',   def: () => true },
   { id: 'rub_word',   label: '«рублей»/«руб» в названии',    def: () => true },
   { id: 'platform',   label: 'Платформа упомянута',          def: id => id === 'gaming_sub' || id === 'game' },
-  { id: 'digital_phrase', label: '«Оформляется в цифре»',    def: id => id === 'game' },
+  { id: 'digital_phrase', label: '«Оформляется онлайн»',     def: id => id === 'game' },
   { id: 'game_price', label: 'Цена в названии и описании запрещена', def: id => id === 'game' },
 ];
 
@@ -11132,7 +11249,9 @@ function scanRuleOn(catId, ruleId) {
   return scanRuleFactory(catId, ruleId);
 }
 
-function checkAds(title, desc, category) {
+// plats — платформы из формы генератора (необязательно): по ним Сканер видит,
+// что модель выбросила PS4, которую продавец отметил.
+function checkAds(title, desc, category, plats) {
   const full = title + '\n' + desc;
   const errors = [], warnings = [], ok = [];
 
@@ -11173,13 +11292,18 @@ function checkAds(title, desc, category) {
     } else {
       ok.push('Платформа упомянута');
     }
+    // PS4 модель теряла чаще всего — сужала до PS5, и человек дописывал её руками
+    // (3 из 14 финалов, разбор журнала 15.10). «PS4,5» и «пс4/5» тоже считаются.
+    if ((plats || []).includes('PS4') && !/ps\s?4|пс\s?4|playstation\s?4/i.test(full)) {
+      warnings.push('В форме отмечена PS4, а в объявлении её нет');
+    }
   }
 
   if (on('digital_phrase')) {
     if (!DIGITAL_RE.test(full)) {
-      warnings.push('Нет фразы «оформляется в цифре» — обязательно для игр');
+      warnings.push('Нет фразы «оформляется онлайн» — обязательно для игр');
     } else {
-      ok.push('«Оформляется в цифре» присутствует');
+      ok.push('«Оформляется онлайн» присутствует');
     }
   }
   // Формулировка зависит от категории: для игр она историческая и точная,
@@ -11674,6 +11798,15 @@ document.addEventListener('click', e => {
 
     case 'regen': doRegen(+el.dataset.vid); break;
 
+    case 'sig-swap': {
+      const v = findResult(+el.dataset.vid);
+      if (!v || !v._sig) break;
+      sigAttach(v, v._category);
+      v._scan = checkAds(v.title || '', v.description || '', v._category, formPlats(state.resultsForm));
+      save(); refreshResults();
+      break;
+    }
+
     case 'fav': {
       const vid = +el.dataset.vid;
       const v = findResult(vid);
@@ -11809,8 +11942,9 @@ document.addEventListener('click', e => {
       const si = state.postSession;
       const item = si.items[si.idx];
       if (item) {
+        const recUid = newUid();
         state.db.push({
-          id: Date.now(), _uid: newUid(), product: item.product, region: item.region,
+          id: Date.now(), _uid: recUid, product: item.product, region: item.region,
           title: item.variant?.title || '', description: item.variant?.description || '',
           account: accActive(),
           status: 'active', note: '', date: new Date().toLocaleDateString('ru'),
@@ -11823,7 +11957,7 @@ document.addEventListener('click', e => {
         // Журнал: в сессии постинга диалог финала не показываем (не рвём конвейерный темп) —
         // финал доносится кнопкой «📥 финал» в Истории
         jlog('posted', item.variant?._chain || null, {
-          product: item.product, region: item.region, title: item.variant?.title || '',
+          rec: recUid, product: item.product, region: item.region, title: item.variant?.title || '',
           scan: jScanLevel(item.variant), session: true,
         });
       }
@@ -11932,6 +12066,7 @@ document.addEventListener('click', e => {
       break;
     }
     case 'cv-gen-vars':
+      if (cv.images.length) jlog('cv_variants', null, { mode: 'game', infog: cvHasLayer('infog') });
       cvGenerateVariations(); break;
 
     case 'cv-gen-collage-vars':
@@ -12148,7 +12283,7 @@ document.addEventListener('click', e => {
       state.rotResult = null; state.rotPanel = fresh.id;
       save(); renderDb();
       jlog('posted', fresh._chain, {
-        product: fresh.product, category: fresh._category, region: fresh.region,
+        rec: fresh._uid, product: fresh.product, category: fresh._category, region: fresh.region,
         title: fresh.title, rotated: res.mode, account: fresh.account,
       });
       showFinalDialog(fresh.id);
@@ -12387,9 +12522,9 @@ document.addEventListener('click', e => {
       )) break;
       const region = prompt('Регион размещения?', (state.settings.regions || REGIONS)[0] || 'Москва');
       if (!region || !region.trim()) break;
-      const recId = Date.now();
+      const recId = Date.now(), recUid = newUid();
       state.db.push({
-        id: recId, _uid: newUid(),
+        id: recId, _uid: recUid,
         product: v._product || currentProductName(state.form), region: region.trim(),  // F4: товар из варианта
         title: v.title || '', description: v.description || '',
         account: accActive(),
@@ -12402,8 +12537,10 @@ document.addEventListener('click', e => {
         _category: v._category || null,
       });
       save();
+      // rec — ключ записи Истории: по нему разбор склеивает posted и все edited
+      // одной публикации, а повтор с тем же eid — это переотправка, а не новое событие
       jlog('posted', v._chain || null, {
-        product: v._product || null, category: v._category || null, region: region.trim(),
+        rec: recUid, product: v._product || null, category: v._category || null, region: region.trim(),
         title: v.title || '', scan: jScanLevel(v),
       });
       toast('Отмечено как размещено: ' + region.trim());
@@ -12441,9 +12578,9 @@ document.addEventListener('click', e => {
       if (dupB.length && !confirm(
         `Это объявление уже отмечено размещённым (${dupB.length}): ${dupB.map(r => r.region).join(', ')}.\n\nДобавить ещё одну публикацию?`
       )) break;
-      const recId = Date.now();
+      const recId = Date.now(), recUid = newUid();
       state.db.push({
-        id: recId, _uid: newUid(),
+        id: recId, _uid: recUid,
         product: item.variant._product || currentProductName(state.form), region: item.region,  // F4: товар из варианта
         title: item.variant.title || '', description: item.variant.description || '',
         account: accActive(),
@@ -12453,7 +12590,7 @@ document.addEventListener('click', e => {
       });
       save();
       jlog('posted', item.variant._chain || null, {
-        product: item.variant._product || null, category: item.variant._category || null, region: item.region,
+        rec: recUid, product: item.variant._product || null, category: item.variant._category || null, region: item.region,
         title: item.variant.title || '', scan: jScanLevel(item.variant),
       });
       toast('Отмечено как размещено: ' + item.region);

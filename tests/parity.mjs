@@ -38,13 +38,19 @@ export const CASES = [
 // секции (правило selling_word живёт в review.mjs), а не этим списком.
 const EXPECTED_SYS_LINES = [];
 const EXPECTED_SCAN_LABELS = [];
+// Осознанные ЗАМЕНЫ текста: [было, стало]. Применяются к выводу baseline (промпт,
+// сообщение, вердикты Сканера) перед сравнением — так правка формулировки не
+// маскирует случайные изменения рядом. Чистится после коммита, как и списки выше.
+const EXPECTED_SWAPS = [];
 
 // Тексты для сравнения Сканера: каждый бьёт по своему правилу.
 const SCAN_CASES = [
-  ['Doom для PS5', 'Игра оформляется в цифре на PS5. Отличный шутер.'],
+  // Обе фразы сразу: обязательная фраза игр сменилась 15.10 («в цифре» → «онлайн»),
+  // и только так обе версии дают «присутствует» на одном и том же тексте
+  ['Doom для PS5', 'Игра оформляется в цифре на PS5, онлайн. Отличный шутер.'],
   ['Продам аккаунт PS Plus', 'Пишите в телеграм, дам профиль. Цена: 3000'],
   ['PS Plus Extra 12 мес 3000 руб', 'Платишь один раз, подарок другу. https://example.com'],
-  ['Cyberpunk 2077 пс5 — 2500₽', 'Оформляется в цифре. Стоит 2500 рублей.'],
+  ['Cyberpunk 2077 пс5 — 2500₽', 'Оформляется в цифре, онлайн. Стоит 2500 рублей.'],
   ['', ''],
 ];
 
@@ -97,6 +103,8 @@ async function snapshot(page) {
   }, cases_serializable());
 }
 
+const swap = s => EXPECTED_SWAPS.reduce((acc, [from, to]) => acc.split(from).join(to), s);
+
 function cases_serializable() { return CASES.map(c => ({ name: c.name, form: c.form, catalogs: c.catalogs || null })); }
 
 export async function runParity(browser, base, t) {
@@ -105,7 +113,7 @@ export async function runParity(browser, base, t) {
   const old = await openApp(browser, `${base}/baseline/avito-helper.html`);
   try {
     const a = await snapshot(cur.page);
-    const b = await snapshot(old.page);
+    const b = (await snapshot(old.page)).map(x => ({ ...x, info: swap(x.info), msg: swap(x.msg) }));
     t.eq('число форм совпало', a.length, b.length);
     for (let i = 0; i < a.length; i++) {
       t.ok(`[${a[i].name}] блок категории идентичен`, a[i].info === b[i].info,
@@ -118,7 +126,7 @@ export async function runParity(browser, base, t) {
     // Системный промпт при заводских настройках категорий
     const ids = ['gaming_sub', 'ai_sub', 'digital', 'game'];
     const sysA = await sysSnapshot(cur.page, ids);
-    const sysB = await sysSnapshot(old.page, ids);
+    const sysB = Object.fromEntries(Object.entries(await sysSnapshot(old.page, ids)).map(([k, v]) => [k, swap(v)]));
     for (const id of [...ids, '__none']) {
       // Из нового промпта вычитаем строки, которые добавлены осознанно, —
       // всё остальное обязано совпасть дословно
@@ -133,7 +141,7 @@ export async function runParity(browser, base, t) {
 
     // Сканер: набор правил стал категорийным, но заводское поведение обязано совпасть
     const scanA = await scanSnapshot(cur.page, SCAN_CASES, EXPECTED_SCAN_LABELS);
-    const scanB = await scanSnapshot(old.page, SCAN_CASES);
+    const scanB = (await scanSnapshot(old.page, SCAN_CASES)).map(swap);
     t.eq('число проверок сканера совпало', scanA.length, scanB.length);
     let scanDiff = 0;
     for (let i = 0; i < scanA.length; i++) if (scanA[i] !== scanB[i]) scanDiff++;

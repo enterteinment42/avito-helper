@@ -76,8 +76,8 @@ export async function runPhys(browser, base, t) {
     t.ok('цена в описании — ошибка', scan.price.errors.some(e => /Цена в описании/.test(e)), JSON.stringify(scan.price.errors));
     t.eq('платформа не требуется',
       scan.plain.warnings.filter(w => /Платформа не упомянута/.test(w)).length, 0);
-    t.eq('«оформляется в цифре» не требуется',
-      scan.plain.warnings.filter(w => /оформляется в цифре/.test(w)).length, 0);
+    t.eq('«оформляется онлайн» не требуется',
+      scan.plain.warnings.filter(w => /оформляется онлайн/.test(w)).length, 0);
     t.eq('чистое объявление проходит без замечаний', scan.plain.errors.length + scan.plain.warnings.length, 0,
       JSON.stringify([scan.plain.errors, scan.plain.warnings]));
     t.ok('«аккаунт» остаётся ошибкой и здесь', scan.acc.errors.some(e => /аккаунт/i.test(e)));

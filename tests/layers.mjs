@@ -330,7 +330,7 @@ export async function runLayers(browser, base, t) {
       const fi = cvLayerFrame(ig, cw, ch);
       return { lines: cvLinesOf(ig.text), plats: pl.plats, igLeft: fi.cx - fi.w / 2, igBottom: fi.cy + fi.h / 2 };
     });
-    t.ok('«Карточка товара»: инфографика из формы', card.lines[0] === '🕹️ Elden Ring' && card.lines.includes('⚡ Оформляется в цифре'), JSON.stringify(card.lines));
+    t.ok('«Карточка товара»: инфографика из формы', card.lines[0] === '🕹️ Elden Ring' && card.lines.includes('⚡ Оформляется онлайн'), JSON.stringify(card.lines));
     t.eq('«Карточка товара»: платформы из формы', card.plats.join('/'), 'PS5');
     t.ok('инфографика встала в левый нижний угол', card.igLeft < 80 && card.igBottom > 1350 * 0.85, JSON.stringify(card));
 

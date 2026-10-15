@@ -59,7 +59,7 @@ export async function runStage3(browser, base, t) {
       return checkAds('Геймпад', 'Обычное описание', 'u_phys').warnings;
     });
     t.ok('включённое вручную правило начинает работать',
-      forced.some(w => /оформляется в цифре/.test(w)), JSON.stringify(forced));
+      forced.some(w => /оформляется онлайн/.test(w)), JSON.stringify(forced));
     await install(page, PHYS); // возвращаем исходную настройку
 
     // ── SYS-промпт следует тем же галочкам ──────────────────
