@@ -205,7 +205,7 @@ export async function runJournalfix(browser, base, t) {
           return { ok: true, status: 200, json: async () => ({ ok: true, updated: Date.now() }) };
         };
       };
-      const reset = (game, sub) => { state.settings.sigGame = game; state.settings.sigSub = sub; state.settings.sigOff = {}; };
+      const reset = (game, sub) => { state.settings.sigGame = game; state.settings.sigSub = sub; state.settings.sigOff = {}; state.settings.sigAt = {}; };
       state.settings.pageName = 'Своя страница'; // иначе заводские настройки не отправляются
 
       // Пустые пулы — забираются с сервера, и в отправку уходят уже с ними
@@ -263,7 +263,34 @@ export async function runJournalfix(browser, base, t) {
       window.confirm = () => true;
       document.getElementById('sig-save').click();
       await syncPush(true);
-      out.cleared = { game: state.settings.sigGame, sub: state.settings.sigSub, off: state.settings.sigOff };
+      out.cleared = { game: state.settings.sigGame, sub: state.settings.sigSub, off: state.settings.sigOff, at: !!state.settings.sigAt.sigGame };
+
+      // Версии пулов: на сервере правка свежее — заменяет и непустой свой
+      net({ settings: { sigGame: ['Новая А.', 'Новая Б.'], sigAt: { sigGame: '2026-10-17T00:00:00Z' } } });
+      reset(['Старая.'], ['Своя подписка.']);
+      await syncPush(true);
+      out.newer = { game: state.settings.sigGame, sub: state.settings.sigSub, at: state.settings.sigAt.sigGame,
+                    sent: window.__posts.filter(p => p.doc === 'settings').pop()?.body?.data?.settings?.sigGame };
+
+      // Своя правка свежее серверной — остаётся и уходит на сервер
+      net({ settings: { sigGame: ['Серверная.'], sigAt: { sigGame: '2026-10-17T00:00:00Z' } } });
+      reset(['Моя свежая.'], []);
+      state.settings.sigAt = { sigGame: '2026-10-18T00:00:00.000Z' };
+      await syncPush(true);
+      out.mine = { game: state.settings.sigGame,
+                   sent: window.__posts.filter(p => p.doc === 'settings').pop()?.body?.data?.settings?.sigGame };
+
+      // Пул очищен на другом устройстве (версия свежее) — очищается и здесь
+      net({ settings: { sigGame: [], sigOff: { sigGame: true }, sigAt: { sigGame: '2026-10-17T00:00:00Z' } } });
+      reset(['Была.'], []);
+      await syncPush(true);
+      out.offNewer = { game: state.settings.sigGame, off: state.settings.sigOff.sigGame };
+
+      // Пустой пул на сервере без пометки «очищен», даже со свежей версией, — не решение
+      net({ settings: { sigGame: [], sigAt: { sigGame: '2026-10-17T00:00:00Z' } } });
+      reset(['Была.'], []);
+      await syncPush(true);
+      out.emptyNewer = state.settings.sigGame;
       return out;
     });
     t.ok('пустые пулы забираются с сервера сами, остальные настройки не трогаются',
@@ -281,6 +308,14 @@ export async function runJournalfix(browser, base, t) {
     t.ok('единый пул первой версии на сервере — в оба пула', JSON.stringify(r.legacy) === '[["Старая общая."],["Старая общая."]]', JSON.stringify(r.legacy));
     t.ok('пул, очищенный руками, с сервера не возвращается; другой пустой — заполняется',
       r.cleared.game.length === 0 && r.cleared.off.sigGame === true && r.cleared.sub.length === 1, JSON.stringify(r.cleared));
+    t.ok('«Сохранить подписи» ставит версию пула', r.cleared.at, JSON.stringify(r.cleared));
+    t.ok('правка на сервере свежее — заменяет и непустой свой пул, другой пул не трогает',
+      JSON.stringify(r.newer.game) === '["Новая А.","Новая Б."]' && JSON.stringify(r.newer.sub) === '["Своя подписка."]'
+      && r.newer.at === '2026-10-17T00:00:00Z' && JSON.stringify(r.newer.sent) === '["Новая А.","Новая Б."]', JSON.stringify(r.newer));
+    t.ok('своя правка свежее серверной — остаётся и уходит на сервер',
+      JSON.stringify(r.mine.game) === '["Моя свежая."]' && JSON.stringify(r.mine.sent) === '["Моя свежая."]', JSON.stringify(r.mine));
+    t.ok('пул очищен на другом устройстве — очищается и здесь', r.offNewer.game.length === 0 && r.offNewer.off === true, JSON.stringify(r.offNewer));
+    t.ok('пустой пул без пометки «очищен» не стирает свой даже со свежей версией', JSON.stringify(r.emptyNewer) === '["Была."]', JSON.stringify(r.emptyNewer));
     t.ok('консоль чистая', consoleErrors.length === 0, consoleErrors.join('\n'));
     await ctx.close();
   }

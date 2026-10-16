@@ -1558,6 +1558,7 @@ const DEF_SETTINGS = {
   sigGame:   [],
   sigSub:    [],
   sigOff:    {},   // пулы, очищенные руками: с сервера не заполняются
+  sigAt:     {},   // версия пула — момент последней осознанной правки (ISO)
 };
 
 // Пулов два (решение Дениса 15.10): у игр и у подписок разная цена-приманка
@@ -1578,7 +1579,13 @@ function sigAdopt(next, cur) {
   delete next.sigPool; delete next.sigCats;
   for (const k of SIG_KEYS) {
     const mine = cur && Array.isArray(cur[k]) ? cur[k] : [];
-    if (!(Array.isArray(next[k]) && next[k].length) && mine.length) next[k] = mine.slice();
+    if (!(Array.isArray(next[k]) && next[k].length) && mine.length) {
+      next[k] = mine.slice();
+      // Оставили свой пул — оставляем и его версию, иначе она разошлась бы с текстом
+      const myAt = cur && cur.sigAt && cur.sigAt[k];
+      next.sigAt = { ...(next.sigAt || {}) };
+      if (myAt) next.sigAt[k] = myAt; else delete next.sigAt[k];
+    }
     if (!Array.isArray(next[k])) next[k] = [];
   }
   return next;
@@ -2280,40 +2287,61 @@ function syncSettingsWorth(d) {
 // Без этого первая же отправка настроек с пустым пулом (а настройки уходят
 // документом целиком, без версии) стёрла бы подписи на сервере.
 //
-// Сверка — перед КАЖДОЙ отправкой, пока пул пуст, а не раз за сессию (ревью
-// 16.10): вкладка, открытая до того, как сервер получил пулы, иначе отправила
-// бы пустые поверх них при следующей правке. Как только пулы пришли, запросов
-// больше нет. Пул, очищенный руками в ⚙, помечен в sigOff и не заполняется.
+// Сверка — перед КАЖДОЙ отправкой настроек (ревью 16.10): вкладка, открытая
+// до того, как сервер получил пулы, иначе отправила бы пустые поверх них.
+// Документ настроек маленький (~2 КБ), запрос дешёвый.
+//
+// У пула есть версия — sigAt[k], момент последней осознанной правки: «Сохранить
+// подписи» в ⚙ или запись на сервере (решение Дениса 16.10). Свежее побеждает:
+// поправил пул на одном устройстве или серверная сессия поправила документ —
+// доедет до всех браузеров сам, а не только до пустых. Пул, очищенный руками,
+// помечен в sigOff: с сервера не заполняется, и это решение тоже едет по версии.
 let _sigPullP = null;
-const sigNeedPull = () => SIG_KEYS.some(k => !sigList(k).length && !(state.settings.sigOff || {})[k]);
+const sigTime = s => { const t = Date.parse(s || ''); return isNaN(t) ? 0 : t; };
 function syncPullSigPools() {
-  if (!sigNeedPull()) return Promise.resolve(true);
   // Старт страницы и отложенная отправка сразу после него — один запрос, не два
   if (_sigPullP) return _sigPullP;
   _sigPullP = (async () => {
     const got = await syncFetch('settings');
     // Сервер не ответил — что там лежит, неизвестно: настройки не шлём, чтобы
-    // не затереть чужие подписи пустыми. Повторим при следующей отправке.
+    // не затереть чужие подписи. Повторим при следующей отправке.
     if (!got || got.conflict) return false;
     const s = got.data && got.data.settings;
     const clean = a => Array.isArray(a) ? a.map(x => String(x || '').trim()).filter(Boolean) : [];
     const took = {};
+    // Поля ⚙ правили, но не сохранили — перерисовка затёрла бы набранное
+    const dirty = [...document.querySelectorAll('[data-sig-pool]')]
+      .some(el => el.value.trim() !== sigList(el.dataset.sigPool).join('\n---\n'));
     if (s && typeof s === 'object') {
       // Единый пул первой версии (15.10) — в оба, как и в sigAdopt
       const legacy = clean(s.sigPool);
+      const at = { ...(state.settings.sigAt || {}) }, off = { ...(state.settings.sigOff || {}) };
       for (const k of SIG_KEYS) {
-        if (sigList(k).length || (state.settings.sigOff || {})[k]) continue;
         const inc = clean(s[k]).length ? clean(s[k]) : legacy;
-        if (inc.length) { state.settings[k] = inc; took[k] = inc.length; }
+        const incOff = !!(s.sigOff || {})[k];
+        const srvAt = (s.sigAt || {})[k] || '';
+        if (sigTime(srvAt) > sigTime(at[k])) {
+          // На сервере правка свежее своей — берём как есть, вместе с «очищен»
+          if (!inc.length && !incOff) continue;   // пустота без пометки — не решение, а дыра
+          state.settings[k] = incOff ? [] : inc;
+          if (incOff) off[k] = true; else delete off[k];
+          at[k] = srvAt;
+          took[k] = incOff ? 0 : inc.length;
+        } else if (!sigList(k).length && !off[k] && inc.length) {
+          // Свой пул пуст и не очищался руками — заполняем
+          state.settings[k] = inc;
+          if (srvAt) at[k] = srvAt;
+          took[k] = inc.length;
+        }
       }
+      state.settings.sigAt = at; state.settings.sigOff = off;
     }
     if (Object.keys(took).length) {
       jlog('sig_pulled', null, took);
       save();
-      // Вкладку настроек перерисовываем, только если в поля подписей ещё ничего
-      // не набрано: несохранённый текст — тоже сырьё продавца
-      const typed = [...document.querySelectorAll('[data-sig-pool]')].some(el => el.value.trim());
-      if (state.tab === 'settings' && !typed) render();
+      if (state.tab === 'settings' && !dirty) render();
+      // Карточки вариантов: 🔄 зависит от размера пула
+      else if (state.tab === 'generator') refreshResults();
     }
     return true;
   })().catch(() => false).finally(() => { _sigPullP = null; });
@@ -6972,6 +7000,8 @@ function bindSettingsTab() {
       const off = { ...(state.settings.sigOff || {}) };
       if (next[k].length) delete off[k]; else off[k] = true;
       state.settings.sigOff = off;
+      // Версия пула: по ней правка доезжает до остальных устройств (syncPullSigPools)
+      state.settings.sigAt = { ...(state.settings.sigAt || {}), [k]: new Date().toISOString() };
     }
     save();
     toast(`Подписей: игры ${sigList('sigGame').length}, подписки ${sigList('sigSub').length}`);
@@ -12932,6 +12962,8 @@ syncPullSigPools().catch(() => {});
 // устройств (F21); отправка и сама заберёт, но так новое видно сразу
 document.addEventListener('visibilitychange', () => {
   try { if (document.visibilityState === 'visible' && !syncVoiceFresh()) syncPullVoice().catch(() => {}); } catch(e) {}
+  // Подписи могли поправить на другом устройстве или на сервере — по версии пула
+  try { if (document.visibilityState === 'visible') syncPullSigPools().catch(() => {}); } catch(e) {}
 });
 
 // GFX-13: шрифты грузятся асинхронно — если канвас с текстом успел отрисоваться
