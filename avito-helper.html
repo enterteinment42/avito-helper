@@ -1557,6 +1557,7 @@ const DEF_SETTINGS = {
   // Два пула — игры и подписки (игровые + AI), см. SIG_POOL_OF.
   sigGame:   [],
   sigSub:    [],
+  sigOff:    {},   // пулы, очищенные руками: с сервера не заполняются
 };
 
 // Пулов два (решение Дениса 15.10): у игр и у подписок разная цена-приманка
@@ -2278,27 +2279,45 @@ function syncSettingsWorth(d) {
 // всё целиком. Только пулы и только в пустые: свои подписи входящие не трогают.
 // Без этого первая же отправка настроек с пустым пулом (а настройки уходят
 // документом целиком, без версии) стёрла бы подписи на сервере.
-let _sigPulled = false;
-async function syncPullSigPools() {
-  if (_sigPulled) return true;
-  if (SIG_KEYS.every(k => sigList(k).length)) { _sigPulled = true; return true; }
-  const got = await syncFetch('settings');
-  // Сервер не ответил — что там лежит, неизвестно: настройки не шлём, чтобы
-  // не затереть чужие подписи пустыми. Повторим при следующей отправке.
-  if (!got || got.conflict) return false;
-  _sigPulled = true;
-  const s = got.data && got.data.settings;
-  const took = {};
-  if (s && typeof s === 'object') for (const k of SIG_KEYS) {
-    const inc = Array.isArray(s[k]) ? s[k].map(x => String(x || '').trim()).filter(Boolean) : [];
-    if (inc.length && !sigList(k).length) { state.settings[k] = inc; took[k] = inc.length; }
-  }
-  if (Object.keys(took).length) {
-    jlog('sig_pulled', null, took);
-    save();
-    if (state.tab === 'settings') render();
-  }
-  return true;
+//
+// Сверка — перед КАЖДОЙ отправкой, пока пул пуст, а не раз за сессию (ревью
+// 16.10): вкладка, открытая до того, как сервер получил пулы, иначе отправила
+// бы пустые поверх них при следующей правке. Как только пулы пришли, запросов
+// больше нет. Пул, очищенный руками в ⚙, помечен в sigOff и не заполняется.
+let _sigPullP = null;
+const sigNeedPull = () => SIG_KEYS.some(k => !sigList(k).length && !(state.settings.sigOff || {})[k]);
+function syncPullSigPools() {
+  if (!sigNeedPull()) return Promise.resolve(true);
+  // Старт страницы и отложенная отправка сразу после него — один запрос, не два
+  if (_sigPullP) return _sigPullP;
+  _sigPullP = (async () => {
+    const got = await syncFetch('settings');
+    // Сервер не ответил — что там лежит, неизвестно: настройки не шлём, чтобы
+    // не затереть чужие подписи пустыми. Повторим при следующей отправке.
+    if (!got || got.conflict) return false;
+    const s = got.data && got.data.settings;
+    const clean = a => Array.isArray(a) ? a.map(x => String(x || '').trim()).filter(Boolean) : [];
+    const took = {};
+    if (s && typeof s === 'object') {
+      // Единый пул первой версии (15.10) — в оба, как и в sigAdopt
+      const legacy = clean(s.sigPool);
+      for (const k of SIG_KEYS) {
+        if (sigList(k).length || (state.settings.sigOff || {})[k]) continue;
+        const inc = clean(s[k]).length ? clean(s[k]) : legacy;
+        if (inc.length) { state.settings[k] = inc; took[k] = inc.length; }
+      }
+    }
+    if (Object.keys(took).length) {
+      jlog('sig_pulled', null, took);
+      save();
+      // Вкладку настроек перерисовываем, только если в поля подписей ещё ничего
+      // не набрано: несохранённый текст — тоже сырьё продавца
+      const typed = [...document.querySelectorAll('[data-sig-pool]')].some(el => el.value.trim());
+      if (state.tab === 'settings' && !typed) render();
+    }
+    return true;
+  })().catch(() => false).finally(() => { _sigPullP = null; });
+  return _sigPullP;
 }
 
 // Возвращает true, если отправка реально состоялась (по ней кнопка «↑ Отправить
@@ -2309,7 +2328,7 @@ async function syncPush(force) {
   // таймер вместо молчаливого выхода.
   if (_syncBusy) { syncPushSoon(force); return false; }
   force = force || _syncForceNext; _syncForceNext = false;
-  let sent = false;
+  let sent = false, settingsHeld = false;
   try {
     _syncBusy = true;
     // F21: документ voice уходит на сервер ЦЕЛИКОМ и заменяет там всё. Значит,
@@ -2366,19 +2385,27 @@ async function syncPush(force) {
         _voiceLast = 'nopull';   // сеть упала уже на отправке — то же «лежит локально»
       }
     }
-    const sigOk = await syncPullSigPools();
-    const settings = syncSettingsDoc();
-    const sStamp = syncStamp(settings);
-    if (sigOk && syncSettingsWorth(settings) && (force || sStamp !== meta.settingsStamp)) {
-      if (await syncFetch('settings', { data: settings, device: _jDevice() })) {
-        syncSetMeta({ settingsStamp: sStamp, settingsAt: new Date().toISOString() });
-        sent = true;
+    let settings = syncSettingsDoc();
+    let sStamp = syncStamp(settings);
+    if (syncSettingsWorth(settings) && (force || sStamp !== meta.settingsStamp)) {
+      // Сверка пулов — только когда настройки реально уходят: без отправки
+      // затирать нечего, а документ настроек тяжёлый (трафик телефона)
+      if (!(await syncPullSigPools())) {
+        settingsHeld = true;
+        syncVoiceAlarm('⚠️ Настройки не отправлены: не удалось сверить подписи с сервером. Повторю при следующей правке');
+      } else {
+        settings = syncSettingsDoc(); sStamp = syncStamp(settings); // пулы могли прийти
+        if (await syncFetch('settings', { data: settings, device: _jDevice() })) {
+          syncSetMeta({ settingsStamp: sStamp, settingsAt: new Date().toISOString() });
+          sent = true;
+        }
       }
     }
   } catch(e) { console.error('sync push:', e); }
   finally { _syncBusy = false; }
-  // Ушли одни настройки, а сырьё — нет: это не «отправлено» (ревью 15.10)
-  return sent && !['nopull', 'conflict', 'stuck'].includes(_voiceLast);
+  // Ушли одни настройки, а сырьё — нет: это не «отправлено» (ревью 15.10);
+  // и наоборот — сырьё ушло, а настройки задержаны сверкой подписей (ревью 16.10)
+  return sent && !settingsHeld && !['nopull', 'conflict', 'stuck'].includes(_voiceLast);
 }
 
 // Забрать сырьё и слить с локальным. Вызывается при старте. Ничего не удаляет
@@ -6940,6 +6967,11 @@ function bindSettingsTab() {
     for (const k of changed) {
       jlog('sig_changed', null, { pool: k, prev: sigList(k).length, next: next[k].length });
       state.settings[k] = next[k];
+      // Очищенный руками пул помечаем: иначе сверка с сервером (syncPullSigPools)
+      // вернула бы удалённые подписи на следующей же загрузке
+      const off = { ...(state.settings.sigOff || {}) };
+      if (next[k].length) delete off[k]; else off[k] = true;
+      state.settings.sigOff = off;
     }
     save();
     toast(`Подписей: игры ${sigList('sigGame').length}, подписки ${sigList('sigSub').length}`);

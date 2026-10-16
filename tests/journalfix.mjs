@@ -205,7 +205,7 @@ export async function runJournalfix(browser, base, t) {
           return { ok: true, status: 200, json: async () => ({ ok: true, updated: Date.now() }) };
         };
       };
-      const reset = (game, sub) => { state.settings.sigGame = game; state.settings.sigSub = sub; _sigPulled = false; };
+      const reset = (game, sub) => { state.settings.sigGame = game; state.settings.sigSub = sub; state.settings.sigOff = {}; };
       state.settings.pageName = 'Своя страница'; // иначе заводские настройки не отправляются
 
       // Пустые пулы — забираются с сервера, и в отправку уходят уже с ними
@@ -229,11 +229,41 @@ export async function runJournalfix(browser, base, t) {
       out.failSent = window.__posts.filter(p => p.doc === 'settings').length;
       out.failGame = state.settings.sigGame;
 
+      out.failReturn = await (async () => { net({ settings: SRV }, true); reset([], []); return syncPush(true); })();
+
       // На сервере настроек нет — отправка идёт как раньше
       net(null);
       reset([], []);
       await syncPush(true);
       out.emptySent = window.__posts.filter(p => p.doc === 'settings').length;
+
+      // Порядок раскатки (ревью 16.10): вкладка уже сверилась, когда пулов на
+      // сервере не было; потом сервер их получил; следующая правка — не затирает
+      const doc = { settings: { pageName: 'Чужая' } };
+      net(doc);
+      reset([], []);
+      await syncPush(true);                         // на сервере пулов ещё нет
+      doc.settings = { ...SRV };                    // Claude1 положил пулы
+      state.settings.regions = [...state.settings.regions, 'Тестовый']; save();
+      await syncPush();                             // обычная правка
+      const after = window.__posts.filter(p => p.doc === 'settings').pop()?.body?.data?.settings;
+      out.rollout = { local: state.settings.sigGame.length, sent: after?.sigGame?.length };
+
+      // Единый пул первой версии на сервере — в оба пула
+      net({ settings: { sigPool: ['Старая общая.'] } });
+      reset([], []);
+      await syncPush(true);
+      out.legacy = [state.settings.sigGame, state.settings.sigSub];
+
+      // Пул очищен руками — с сервера не возвращается
+      net({ settings: SRV });
+      reset(['Игра А.'], []);
+      state.tab = 'settings'; render();
+      document.querySelector('[data-sig-pool="sigGame"]').value = '';
+      window.confirm = () => true;
+      document.getElementById('sig-save').click();
+      await syncPush(true);
+      out.cleared = { game: state.settings.sigGame, sub: state.settings.sigSub, off: state.settings.sigOff };
       return out;
     });
     t.ok('пустые пулы забираются с сервера сами, остальные настройки не трогаются',
@@ -244,7 +274,13 @@ export async function runJournalfix(browser, base, t) {
     t.ok('свои подписи входящие не трогают, пустой пул — заполняется',
       JSON.stringify(r.own) === JSON.stringify({ game: ['Своя игра.'], sub: ['Подписка А.'] }), JSON.stringify(r.own));
     t.ok('сервер не ответил — настройки с пустыми пулами не отправляются', r.failSent === 0 && r.failGame.length === 0, JSON.stringify(r));
+    t.ok('и «↑ Отправить сейчас» не врёт про успех', r.failReturn === false, String(r.failReturn));
     t.eq('настроек на сервере нет — отправка как раньше', r.emptySent, 1);
+    t.ok('пулы пришли на сервер после первой сверки — следующая правка их не затирает, а забирает',
+      r.rollout.local === 2 && r.rollout.sent === 2, JSON.stringify(r.rollout));
+    t.ok('единый пул первой версии на сервере — в оба пула', JSON.stringify(r.legacy) === '[["Старая общая."],["Старая общая."]]', JSON.stringify(r.legacy));
+    t.ok('пул, очищенный руками, с сервера не возвращается; другой пустой — заполняется',
+      r.cleared.game.length === 0 && r.cleared.off.sigGame === true && r.cleared.sub.length === 1, JSON.stringify(r.cleared));
     t.ok('консоль чистая', consoleErrors.length === 0, consoleErrors.join('\n'));
     await ctx.close();
   }
