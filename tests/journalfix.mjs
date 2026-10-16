@@ -205,7 +205,7 @@ export async function runJournalfix(browser, base, t) {
           return { ok: true, status: 200, json: async () => ({ ok: true, updated: Date.now() }) };
         };
       };
-      const reset = (game, sub) => { state.settings.sigGame = game; state.settings.sigSub = sub; state.settings.sigOff = {}; state.settings.sigAt = {}; };
+      const reset = (game, sub) => { state.settings.sigGame = game; state.settings.sigSub = sub; state.settings.sigOff = {}; state.settings.sigAt = {}; state.settings.sigVer = {}; state.settings.sigHist = []; state.tab = 'generator'; render(); };
       state.settings.pageName = 'Своя страница'; // иначе заводские настройки не отправляются
 
       // Пустые пулы — забираются с сервера, и в отправку уходят уже с ними
@@ -291,6 +291,56 @@ export async function runJournalfix(browser, base, t) {
       reset(['Была.'], []);
       await syncPush(true);
       out.emptyNewer = state.settings.sigGame;
+
+      // Версия — счётчик, а не часы: спешащие часы устройства ничего не решают
+      net({ settings: { sigGame: ['С ПК.'], sigVer: { sigGame: 3 }, sigAt: { sigGame: '2026-10-16T10:00:00Z' } } });
+      reset(['С телефона.'], []);
+      state.settings.sigVer = { sigGame: 2 }; state.settings.sigAt = { sigGame: '2027-01-01T00:00:00Z' };
+      await syncPush(true);
+      out.clock = { game: state.settings.sigGame, ver: state.settings.sigVer.sigGame };
+
+      // Заменённый чужой версией пул — в историю и целиком в журнал
+      const jl = [], origJ = window.jlog;
+      window.jlog = (ev, ch, d) => { jl.push({ ev, d }); };
+      net({ settings: { sigGame: ['Новая.'], sigVer: { sigGame: 5 } } });
+      reset(['Прежняя А.', 'Прежняя Б.'], []);
+      await syncPush(true);
+      window.jlog = origJ;
+      out.kept = { hist: state.settings.sigHist[0]?.list, log: jl.find(x => x.ev === 'sig_replaced')?.d?.prev };
+
+      // Старая пометка «очищен» не перебивает непустой входящий пул
+      net({ settings: { sigGame: ['Записал сервер.'], sigOff: { sigGame: true }, sigVer: { sigGame: 2 } } });
+      reset([], []); state.settings.sigOff = { sigGame: true }; state.settings.sigVer = { sigGame: 1 };
+      await syncPush(true);
+      out.offStale = { game: state.settings.sigGame, off: !!state.settings.sigOff.sigGame };
+
+      // Восстановление настроек — осознанный выбор: версия растёт, сверка не откатывает
+      reset(['Сейчас.'], []); state.settings.sigVer = { sigGame: 4 };
+      settingsAdopt({ model: state.settings.model, sigGame: ['Из бэкапа.'], sigVer: { sigGame: 1 } });
+      out.restore = { game: state.settings.sigGame, ver: state.settings.sigVer.sigGame, hist: state.settings.sigHist[0]?.list };
+      net({ settings: { sigGame: ['Сервер.'], sigVer: { sigGame: 4 } } });
+      await syncPush(true);
+      out.restoreKept = state.settings.sigGame;
+
+      // Оставленный свой пул сохраняет и свою пометку: непустой пул с «очищен» не появляется
+      reset(['Свой.'], []);
+      settingsAdopt({ model: state.settings.model, sigGame: [], sigOff: { sigGame: true }, sigVer: { sigGame: 9 } });
+      out.adoptOff = { game: state.settings.sigGame, off: !!(state.settings.sigOff || {}).sigGame, ver: sigVerOf(state.settings, 'sigGame') };
+
+      // Вкладка ⚙: принятый пул обновляет только своё поле; набранное в других полях цело;
+      // пул, поле которого правят, не трогается вовсе
+      reset(['Игра стар.'], ['Подп стар.']);
+      state.tab = 'settings'; render();
+      document.getElementById('sys-prompt').value = 'Набираю промпт, не сохранил';
+      document.querySelector('[data-sig-pool="sigSub"]').value = 'Подп стар.\n---\nПравлю руками';
+      net({ settings: { sigGame: ['Игра нов.'], sigSub: ['Подп нов.'], sigVer: { sigGame: 2, sigSub: 2 } } });
+      await syncPush(true);
+      out.ui = {
+        prompt: document.getElementById('sys-prompt').value,
+        gameField: document.querySelector('[data-sig-pool="sigGame"]').value,
+        subField: document.querySelector('[data-sig-pool="sigSub"]').value,
+        subState: state.settings.sigSub,
+      };
       return out;
     });
     t.ok('пустые пулы забираются с сервера сами, остальные настройки не трогаются',
@@ -316,6 +366,21 @@ export async function runJournalfix(browser, base, t) {
       JSON.stringify(r.mine.game) === '["Моя свежая."]' && JSON.stringify(r.mine.sent) === '["Моя свежая."]', JSON.stringify(r.mine));
     t.ok('пул очищен на другом устройстве — очищается и здесь', r.offNewer.game.length === 0 && r.offNewer.off === true, JSON.stringify(r.offNewer));
     t.ok('пустой пул без пометки «очищен» не стирает свой даже со свежей версией', JSON.stringify(r.emptyNewer) === '["Была."]', JSON.stringify(r.emptyNewer));
+    t.ok('версия — счётчик: телефон со спешащими часами не перебивает правку с ПК',
+      JSON.stringify(r.clock.game) === '["С ПК."]' && r.clock.ver === 3, JSON.stringify(r.clock));
+    t.ok('пул, заменённый чужой версией, уходит в историю и целиком в журнал',
+      JSON.stringify(r.kept.hist) === '["Прежняя А.","Прежняя Б."]' && JSON.stringify(r.kept.log) === '["Прежняя А.","Прежняя Б."]', JSON.stringify(r.kept));
+    t.ok('старая пометка «очищен» не перебивает непустой входящий пул',
+      JSON.stringify(r.offStale.game) === '["Записал сервер."]' && !r.offStale.off, JSON.stringify(r.offStale));
+    t.ok('восстановление настроек поднимает версию пула и кладёт прежний в историю',
+      JSON.stringify(r.restore.game) === '["Из бэкапа."]' && r.restore.ver === 5 && JSON.stringify(r.restore.hist) === '["Сейчас."]', JSON.stringify(r.restore));
+    t.ok('и сверка с сервером восстановленное не откатывает', JSON.stringify(r.restoreKept) === '["Из бэкапа."]', JSON.stringify(r.restoreKept));
+    t.ok('оставленный свой пул сохраняет свою пометку и версию, а не входящие',
+      JSON.stringify(r.adoptOff.game) === '["Свой."]' && !r.adoptOff.off && r.adoptOff.ver === 0, JSON.stringify(r.adoptOff));
+    t.ok('⚙: несохранённый промпт не затирается, поле принятого пула обновлено на месте',
+      r.ui.prompt === 'Набираю промпт, не сохранил' && r.ui.gameField === 'Игра нов.', JSON.stringify(r.ui));
+    t.ok('⚙: пул, поле которого правят, сверка не трогает', r.ui.subField === 'Подп стар.\n---\nПравлю руками'
+      && JSON.stringify(r.ui.subState) === '["Подп стар."]', JSON.stringify(r.ui));
     t.ok('консоль чистая', consoleErrors.length === 0, consoleErrors.join('\n'));
     await ctx.close();
   }

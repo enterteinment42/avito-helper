@@ -1558,7 +1558,9 @@ const DEF_SETTINGS = {
   sigGame:   [],
   sigSub:    [],
   sigOff:    {},   // пулы, очищенные руками: с сервера не заполняются
-  sigAt:     {},   // версия пула — момент последней осознанной правки (ISO)
+  sigVer:    {},   // версия пула — счётчик осознанных правок (см. sigVerOf)
+  sigAt:     {},   // когда была последняя правка пула (ISO) — для человека
+  sigHist:   [],   // пулы, заменённые чужой версией или восстановлением
 };
 
 // Пулов два (решение Дениса 15.10): у игр и у подписок разная цена-приманка
@@ -1572,19 +1574,55 @@ const SIG_KEYS = ['sigGame', 'sigSub'];
 // стирает непустой свой: иначе варианты пропали бы молча и вернуть их было бы
 // нечем. Убрать подпись можно только руками в ⚙ — там есть переспрос.
 // Плюс перенос единого пула первой версии (sigPool, 15.10) в оба новых.
+// Версия пула — СЧЁТЧИК правок, а не время (ревью 16.10: часы устройства врут,
+// и телефон, спешащий на сутки, побеждал бы любую правку с ПК). Каждая осознанная
+// правка ставит версию на единицу больше последней виденной; sigAt — только для
+// человека. Пул первой версии с одной меткой sigAt считается версией 1.
+function sigVerOf(s, k) {
+  const v = s && s.sigVer ? +s.sigVer[k] : 0;
+  if (v > 0) return v;
+  return s && s.sigAt && s.sigAt[k] ? 1 : 0;
+}
+function sigSetVer(s, k, v, at) {
+  s.sigVer = { ...(s.sigVer || {}), [k]: v };
+  s.sigAt = { ...(s.sigAt || {}), [k]: at || new Date().toISOString() };
+}
+// Пул, который заменяет чужая (более свежая) версия, — тоже текст продавца:
+// прежний вариант уходит в историю настроек и целиком в журнал (вторая копия сырья)
+const SIG_HIST_MAX = 5;
+function sigKeepOld(s, k, list, why) {
+  if (!list.length) return;
+  const h = Array.isArray(s.sigHist) ? s.sigHist : [];
+  s.sigHist = [{ pool: k, list: list.slice(), at: new Date().toISOString(), why }, ...h].slice(0, SIG_HIST_MAX);
+  try { jlog('sig_replaced', null, { pool: k, why, prev: list.slice() }); } catch(e) {}
+}
+const sigSame = (a, b) => (a || []).join('\n---\n') === (b || []).join('\n---\n');
+
+// restore — настройки пришли по воле человека (бэкап, «↓ Забрать»): их пул —
+// осознанный выбор и получает новую версию, иначе ближайшая сверка с сервером
+// молча откатила бы восстановленное (ревью 16.10)
 function sigAdopt(next, cur) {
   if (Array.isArray(next.sigPool) && next.sigPool.length) {
     for (const k of SIG_KEYS) if (!(Array.isArray(next[k]) && next[k].length)) next[k] = next.sigPool.slice();
   }
   delete next.sigPool; delete next.sigCats;
+  // История пулов — своя, локальная: входящая её не заменяет
+  if (cur && Array.isArray(cur.sigHist)) next.sigHist = cur.sigHist.slice();
   for (const k of SIG_KEYS) {
     const mine = cur && Array.isArray(cur[k]) ? cur[k] : [];
-    if (!(Array.isArray(next[k]) && next[k].length) && mine.length) {
+    const inc = Array.isArray(next[k]) ? next[k] : [];
+    if (!inc.length && mine.length) {
+      // Оставили свой пул — оставляем и его версию, и пометку «очищен», иначе
+      // они разошлись бы с текстом (непустой пул с sigOff стёр бы его у других)
       next[k] = mine.slice();
-      // Оставили свой пул — оставляем и его версию, иначе она разошлась бы с текстом
-      const myAt = cur && cur.sigAt && cur.sigAt[k];
-      next.sigAt = { ...(next.sigAt || {}) };
-      if (myAt) next.sigAt[k] = myAt; else delete next.sigAt[k];
+      next.sigVer = { ...(next.sigVer || {}) }; next.sigAt = { ...(next.sigAt || {}) }; next.sigOff = { ...(next.sigOff || {}) };
+      for (const [f, src] of [['sigVer', cur.sigVer], ['sigAt', cur.sigAt], ['sigOff', cur.sigOff]]) {
+        if (src && src[k] != null) next[f][k] = src[k]; else delete next[f][k];
+      }
+    } else if (cur && inc.length && !sigSame(inc, mine)) {
+      sigKeepOld(next, k, mine, 'restore');
+      sigSetVer(next, k, Math.max(sigVerOf(cur, k), sigVerOf(next, k)) + 1);
+      if (next.sigOff) { next.sigOff = { ...next.sigOff }; delete next.sigOff[k]; }
     }
     if (!Array.isArray(next[k])) next[k] = [];
   }
@@ -2289,15 +2327,16 @@ function syncSettingsWorth(d) {
 //
 // Сверка — перед КАЖДОЙ отправкой настроек (ревью 16.10): вкладка, открытая
 // до того, как сервер получил пулы, иначе отправила бы пустые поверх них.
-// Документ настроек маленький (~2 КБ), запрос дешёвый.
+// Документ настроек маленький (1,8 КБ по замеру сервера 16.10), запрос дешёвый.
 //
-// У пула есть версия — sigAt[k], момент последней осознанной правки: «Сохранить
-// подписи» в ⚙ или запись на сервере (решение Дениса 16.10). Свежее побеждает:
-// поправил пул на одном устройстве или серверная сессия поправила документ —
-// доедет до всех браузеров сам, а не только до пустых. Пул, очищенный руками,
-// помечен в sigOff: с сервера не заполняется, и это решение тоже едет по версии.
-let _sigPullP = null;
-const sigTime = s => { const t = Date.parse(s || ''); return isNaN(t) ? 0 : t; };
+// У пула есть версия — счётчик sigVer[k] (см. sigVerOf), растёт с каждой
+// осознанной правкой: «Сохранить подписи» в ⚙, восстановление, запись на
+// сервере. Старшая версия побеждает: поправил пул на одном устройстве или
+// серверная сессия поправила документ — доедет до всех браузеров сам. Пул,
+// очищенный руками, помечен в sigOff и едет по той же версии. Заменённый
+// чужой версией пул не пропадает — уходит в историю и журнал (sigKeepOld).
+let _sigPullP = null, _sigPullAt = 0;
+const SIG_LABEL = { sigGame: '🕹️ Игры', sigSub: '🎮🧠 Подписки (игровые и AI)' };
 function syncPullSigPools() {
   // Старт страницы и отложенная отправка сразу после него — один запрос, не два
   if (_sigPullP) return _sigPullP;
@@ -2306,45 +2345,62 @@ function syncPullSigPools() {
     // Сервер не ответил — что там лежит, неизвестно: настройки не шлём, чтобы
     // не затереть чужие подписи. Повторим при следующей отправке.
     if (!got || got.conflict) return false;
+    _sigPullAt = Date.now();
     const s = got.data && got.data.settings;
     const clean = a => Array.isArray(a) ? a.map(x => String(x || '').trim()).filter(Boolean) : [];
     const took = {};
-    // Поля ⚙ правили, но не сохранили — перерисовка затёрла бы набранное
-    const dirty = [...document.querySelectorAll('[data-sig-pool]')]
-      .some(el => el.value.trim() !== sigList(el.dataset.sigPool).join('\n---\n'));
+    // Поле пула в ⚙ правят, но не сохранили — этот пул сейчас не трогаем вовсе:
+    // иначе «Сохранить» записало бы устаревший текст поверх принятого (ревью 16.10)
+    const fields = Object.fromEntries([...document.querySelectorAll('[data-sig-pool]')].map(el => [el.dataset.sigPool, el]));
+    const dirty = k => fields[k] && fields[k].value.trim() !== sigList(k).join('\n---\n');
     if (s && typeof s === 'object') {
       // Единый пул первой версии (15.10) — в оба, как и в sigAdopt
       const legacy = clean(s.sigPool);
-      const at = { ...(state.settings.sigAt || {}) }, off = { ...(state.settings.sigOff || {}) };
+      const off = { ...(state.settings.sigOff || {}) };
       for (const k of SIG_KEYS) {
+        if (dirty(k)) continue;
         const inc = clean(s[k]).length ? clean(s[k]) : legacy;
-        const incOff = !!(s.sigOff || {})[k];
-        const srvAt = (s.sigAt || {})[k] || '';
-        if (sigTime(srvAt) > sigTime(at[k])) {
-          // На сервере правка свежее своей — берём как есть, вместе с «очищен»
+        // «Очищен» — только если пул и правда пуст: непустой входящий важнее
+        // старой пометки (серверная сессия могла записать пул, не тронув sigOff)
+        const incOff = !inc.length && !!(s.sigOff || {})[k];
+        const sv = sigVerOf(s, k), lv = sigVerOf(state.settings, k);
+        if (sv > lv) {
           if (!inc.length && !incOff) continue;   // пустота без пометки — не решение, а дыра
-          state.settings[k] = incOff ? [] : inc;
+          const next = incOff ? [] : inc;
+          if (!sigSame(next, sigList(k))) sigKeepOld(state.settings, k, sigList(k), 'newer-elsewhere');
+          state.settings[k] = next;
           if (incOff) off[k] = true; else delete off[k];
-          at[k] = srvAt;
-          took[k] = incOff ? 0 : inc.length;
+          sigSetVer(state.settings, k, sv, (s.sigAt || {})[k]);
+          took[k] = next.length;
         } else if (!sigList(k).length && !off[k] && inc.length) {
           // Свой пул пуст и не очищался руками — заполняем
           state.settings[k] = inc;
-          if (srvAt) at[k] = srvAt;
+          if (sv) sigSetVer(state.settings, k, sv, (s.sigAt || {})[k]);
           took[k] = inc.length;
         }
       }
-      state.settings.sigAt = at; state.settings.sigOff = off;
+      state.settings.sigOff = off;
     }
     if (Object.keys(took).length) {
       jlog('sig_pulled', null, took);
       save();
-      if (state.tab === 'settings' && !dirty) render();
-      // Карточки вариантов: 🔄 зависит от размера пула
-      else if (state.tab === 'generator') refreshResults();
+      // Всю вкладку ⚙ НЕ перерисовываем: в ней могут быть другие несохранённые
+      // поля (свой промпт). Обновляем только поля принятых пулов — они чистые.
+      // Ошибка интерфейса — не «сервер не ответил»: данные уже приняты и сохранены.
+      try {
+        for (const k of Object.keys(took)) {
+          const el = fields[k];
+          if (!el) continue;
+          el.value = sigList(k).join('\n---\n');
+          const lbl = el.closest('.field')?.querySelector('label');
+          if (lbl) lbl.textContent = `${SIG_LABEL[k]} — вариантов: ${sigList(k).length}`;
+        }
+        // Карточки вариантов: 🔄 зависит от размера пула
+        if (state.tab === 'generator') refreshResults();
+      } catch(e) { console.error('sig pull ui:', e); }
     }
     return true;
-  })().catch(() => false).finally(() => { _sigPullP = null; });
+  })().catch(e => { console.error('sig pull:', e); return false; }).finally(() => { _sigPullP = null; });
   return _sigPullP;
 }
 
@@ -6662,7 +6718,7 @@ function settingsTabHTML() {
           модель их не видит и не пересказывает, Сканер их не проверяет. В карточке варианта 🔄 меняет подпись
           на следующую. Пустое поле — без подписи. Варианты разделяй строкой <b>---</b>.
         </div>
-        ${[['sigGame', '🕹️ Игры'], ['sigSub', '🎮🧠 Подписки (игровые и AI)']].map(([k, lbl]) => `<div class="field">
+        ${Object.entries(SIG_LABEL).map(([k, lbl]) => `<div class="field">
           <label>${lbl} — вариантов: ${sigList(k).length}</label>
           <textarea data-sig-pool="${k}" rows="10" style="min-height:160px;font-size:13px" placeholder="⚡Вы задаетесь вопросом, зачем обращаться ко мне…&#10;---&#10;(другая версия)">${esc(sigList(k).join('\n---\n'))}</textarea>
         </div>`).join('')}
@@ -7001,7 +7057,7 @@ function bindSettingsTab() {
       if (next[k].length) delete off[k]; else off[k] = true;
       state.settings.sigOff = off;
       // Версия пула: по ней правка доезжает до остальных устройств (syncPullSigPools)
-      state.settings.sigAt = { ...(state.settings.sigAt || {}), [k]: new Date().toISOString() };
+      sigSetVer(state.settings, k, sigVerOf(state.settings, k) + 1);
     }
     save();
     toast(`Подписей: игры ${sigList('sigGame').length}, подписки ${sigList('sigSub').length}`);
@@ -12963,7 +13019,8 @@ syncPullSigPools().catch(() => {});
 document.addEventListener('visibilitychange', () => {
   try { if (document.visibilityState === 'visible' && !syncVoiceFresh()) syncPullVoice().catch(() => {}); } catch(e) {}
   // Подписи могли поправить на другом устройстве или на сервере — по версии пула
-  try { if (document.visibilityState === 'visible') syncPullSigPools().catch(() => {}); } catch(e) {}
+  // Не чаще раза в 2 минуты: перед отправкой настроек сверка идёт и так
+  try { if (document.visibilityState === 'visible' && Date.now() - _sigPullAt > SYNC_PULL_FRESH) syncPullSigPools().catch(() => {}); } catch(e) {}
 });
 
 // GFX-13: шрифты грузятся асинхронно — если канвас с текстом успел отрисоваться
