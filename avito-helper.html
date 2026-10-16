@@ -2272,6 +2272,35 @@ function syncSettingsWorth(d) {
   } catch(e) { return false; }
 }
 
+// Пулы подписей кладутся на сервер (решение Дениса 16.10, первый кусок
+// TASK-SERVERIZE): серверная сессия пишет их в документ settings, а браузер с
+// ПУСТЫМ пулом забирает их сам — без «↓ Забрать настройки», которая заменяет
+// всё целиком. Только пулы и только в пустые: свои подписи входящие не трогают.
+// Без этого первая же отправка настроек с пустым пулом (а настройки уходят
+// документом целиком, без версии) стёрла бы подписи на сервере.
+let _sigPulled = false;
+async function syncPullSigPools() {
+  if (_sigPulled) return true;
+  if (SIG_KEYS.every(k => sigList(k).length)) { _sigPulled = true; return true; }
+  const got = await syncFetch('settings');
+  // Сервер не ответил — что там лежит, неизвестно: настройки не шлём, чтобы
+  // не затереть чужие подписи пустыми. Повторим при следующей отправке.
+  if (!got || got.conflict) return false;
+  _sigPulled = true;
+  const s = got.data && got.data.settings;
+  const took = {};
+  if (s && typeof s === 'object') for (const k of SIG_KEYS) {
+    const inc = Array.isArray(s[k]) ? s[k].map(x => String(x || '').trim()).filter(Boolean) : [];
+    if (inc.length && !sigList(k).length) { state.settings[k] = inc; took[k] = inc.length; }
+  }
+  if (Object.keys(took).length) {
+    jlog('sig_pulled', null, took);
+    save();
+    if (state.tab === 'settings') render();
+  }
+  return true;
+}
+
 // Возвращает true, если отправка реально состоялась (по ней кнопка «↑ Отправить
 // сейчас» говорит правду, а не рапортует об успехе, когда запроса не было вовсе).
 async function syncPush(force) {
@@ -2337,9 +2366,10 @@ async function syncPush(force) {
         _voiceLast = 'nopull';   // сеть упала уже на отправке — то же «лежит локально»
       }
     }
+    const sigOk = await syncPullSigPools();
     const settings = syncSettingsDoc();
     const sStamp = syncStamp(settings);
-    if (syncSettingsWorth(settings) && (force || sStamp !== meta.settingsStamp)) {
+    if (sigOk && syncSettingsWorth(settings) && (force || sStamp !== meta.settingsStamp)) {
       if (await syncFetch('settings', { data: settings, device: _jDevice() })) {
         syncSetMeta({ settingsStamp: sStamp, settingsAt: new Date().toISOString() });
         sent = true;
@@ -12864,6 +12894,8 @@ jFlush();
 // почистил данные сайта, эталоны и финалы приедут обратно сами. Ошибки молчат:
 // нет токена, нет сети или эндпоинт ещё не раскатан — работаем как раньше.
 syncPullVoice().catch(() => {});
+// Подписи — тоже сразу, чтобы первая же генерация шла с ними (см. syncPullSigPools)
+syncPullSigPools().catch(() => {});
 // Вернулись на вкладку, пролежавшую в фоне, — сначала забираем, что пришло с других
 // устройств (F21); отправка и сама заберёт, но так новое видно сразу
 document.addEventListener('visibilitychange', () => {

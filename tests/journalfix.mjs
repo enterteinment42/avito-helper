@@ -185,6 +185,70 @@ export async function runJournalfix(browser, base, t) {
     await ctx.close();
   }
 
+  // ── Подписи с сервера (16.10): пустой браузер берёт пулы сам ──
+  {
+    const { ctx, page, consoleErrors } = await openApp(browser, base + '/avito-helper.html');
+    const r = await page.evaluate(async () => {
+      const out = {};
+      const SRV = { sigGame: ['Игра А.', 'Игра Б.'], sigSub: ['Подписка А.'] };
+      const net = (settingsDoc, fail) => {
+        window.__posts = [];
+        localStorage.setItem('avito_admin_token', 'test-token');
+        window.fetch = async (url, opts = {}) => {
+          const doc = String(url).split('/api/avito-sync/')[1] || '?';
+          if (fail && doc === 'settings' && (opts.method || 'GET') === 'GET') return { ok: false, status: 500, json: async () => ({}) };
+          if ((opts.method || 'GET') === 'GET') {
+            const d = doc === 'settings' ? settingsDoc : null;
+            return { ok: true, status: 200, json: async () => (d ? { ok: true, updated: '2026-10-16T10:00:00Z', data: d } : { ok: true, empty: true }) };
+          }
+          window.__posts.push({ doc, body: JSON.parse(opts.body) });
+          return { ok: true, status: 200, json: async () => ({ ok: true, updated: Date.now() }) };
+        };
+      };
+      const reset = (game, sub) => { state.settings.sigGame = game; state.settings.sigSub = sub; _sigPulled = false; };
+      state.settings.pageName = 'Своя страница'; // иначе заводские настройки не отправляются
+
+      // Пустые пулы — забираются с сервера, и в отправку уходят уже с ними
+      net({ settings: { ...SRV, pageName: 'Чужая' } });
+      reset([], []);
+      await syncPush(true);
+      const sent = window.__posts.find(p => p.doc === 'settings')?.body?.data?.settings;
+      out.pulled = { game: state.settings.sigGame, sub: state.settings.sigSub, page: state.settings.pageName,
+                     sentGame: sent?.sigGame, sentSub: sent?.sigSub };
+
+      // Свои подписи входящие не трогают; пустой — только он заполняется
+      net({ settings: SRV });
+      reset(['Своя игра.'], []);
+      await syncPush(true);
+      out.own = { game: state.settings.sigGame, sub: state.settings.sigSub };
+
+      // Сервер не ответил — настройки с пустыми пулами не уходят вовсе
+      net({ settings: SRV }, true);
+      reset([], []);
+      await syncPush(true);
+      out.failSent = window.__posts.filter(p => p.doc === 'settings').length;
+      out.failGame = state.settings.sigGame;
+
+      // На сервере настроек нет — отправка идёт как раньше
+      net(null);
+      reset([], []);
+      await syncPush(true);
+      out.emptySent = window.__posts.filter(p => p.doc === 'settings').length;
+      return out;
+    });
+    t.ok('пустые пулы забираются с сервера сами, остальные настройки не трогаются',
+      JSON.stringify(r.pulled.game) === '["Игра А.","Игра Б."]' && JSON.stringify(r.pulled.sub) === '["Подписка А."]' && r.pulled.page === 'Своя страница',
+      JSON.stringify(r.pulled));
+    t.ok('и в отправку настроек уходят уже с ними — сервер не теряет подписи',
+      JSON.stringify(r.pulled.sentGame) === '["Игра А.","Игра Б."]' && JSON.stringify(r.pulled.sentSub) === '["Подписка А."]', JSON.stringify(r.pulled));
+    t.ok('свои подписи входящие не трогают, пустой пул — заполняется',
+      JSON.stringify(r.own) === JSON.stringify({ game: ['Своя игра.'], sub: ['Подписка А.'] }), JSON.stringify(r.own));
+    t.ok('сервер не ответил — настройки с пустыми пулами не отправляются', r.failSent === 0 && r.failGame.length === 0, JSON.stringify(r));
+    t.eq('настроек на сервере нет — отправка как раньше', r.emptySent, 1);
+    t.ok('консоль чистая', consoleErrors.length === 0, consoleErrors.join('\n'));
+    await ctx.close();
+  }
+
   // ── Журнал: cv_variants и ключ записи ───────────────────
   {
     const { ctx, page, consoleErrors } = await openApp(browser, base + '/avito-helper.html');
