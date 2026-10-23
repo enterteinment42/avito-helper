@@ -5,8 +5,8 @@
 
 🔵 **16.10 → 23.10 — пулы подписей в `~/avito-sync/settings.json`.** Живые: `sigGame` 6 (Windows
 `7f4d2aa` убрала длинный), `sigSub` 3, документ с `sigVer`. ⚠️ Копию `.SAVED-20261016-sigpools`
-поверх НЕ класть — устарела (запись 23.10). `[x]` в `TASK-SIG-POOLS-VPS.md` не стоит:
-`origin/main` впереди на 15 коммитов, ждём решения пользователя о `pull --rebase` (конфликтов нет).
+поверх НЕ класть — устарела (запись 23.10). `[x]` в `TASK-SIG-POOLS-VPS.md` поставлен 23.10,
+репо сведено с origin и запушено.
 Не разобраны `TASK-HISTORY-RESCUE-VPS.md`, `TASK-STAGED-SERIES-VPS.md`.
 
 🔵 **15.10 — первый разбор журнала самообучения** (запись в `CLAUDE-VPS.md`): без правки
@@ -15,5 +15,5 @@
 **Следующий шаг:** при ≥10 публикациях после `63a1014` — повторный разбор (`/bot-selflearn-log`),
 сравнить с 15.10; дубли `posted`/`edited` снимать по `botTitle`+`region`.
 
-🔵 **23.10 — price-lookup для avito-helper** (`3735378`, не запушен): `/api/cover` и `/api/normalize`,
+🔵 **23.10 — price-lookup для avito-helper** (`3735378`, запушен): `/api/cover` и `/api/normalize`,
 CORS для github.io. Ждём от Windows замены двух `POST …/api/price-lookup` на `GET …/api/cover`.
