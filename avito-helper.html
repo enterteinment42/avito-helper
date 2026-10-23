@@ -7156,7 +7156,7 @@ const cv = {
   // Аккаунт, для которого делаем обложку (план Fotor, Ф4): его стиль и логотип. '' — первый
   acc:'',
   // рамка одиночной картинки (режим Игра)
-  gamePad:0, gameCorner:0, gameBorder:0, gameBorderColor:'#B45309', gameShadow:false,
+  gamePad:24, gameCorner:0, gameBorder:0, gameBorderColor:'#B45309', gameShadow:false,
   // кадр обложки: cover — заполнить рамку со срезом; contain — вписать целиком, поля: blur (размытая обложка) | bg (цвет фона)
   gameFit:'cover', gameFill:'blur',
   _selCell:null, _dragIdx:undefined, _canvasDrag:null,
@@ -7447,7 +7447,71 @@ function cvAddFiles(files) {
   });
 }
 
-async function cvFetchFromIGDB() {
+// Поиск обложки по имени. PS Store страхуется IGDB: Sony часто не отвечает
+// (лимит 60/час, ошибки Sony), а пустой коллаж хуже обложки из IGDB (Денис, 18.10).
+// /api/cover — отдельный эндпоинт обложек у price-lookup (Claude1, 23.10): один регион,
+// кэш, без статистики спроса; алиасы названий применяет сам
+async function cvCoverFromPS(name) {
+  const resp = await fetch(`https://api.poigraem.shop/price-lookup/api/cover?name=${encodeURIComponent(name)}`);
+  if (!resp.ok) return null;
+  const data = await resp.json();
+  return data.coverUrl ? 'https://api.poigraem.shop/igdb/img?url=' + encodeURIComponent(data.coverUrl) : null;
+}
+// Словарь названий price-lookup («FC 26» → «ea sports fc 26», «гта 5» → «grand theft auto 5»):
+// без него IGDB находил по «FC 26» не игру, а карточку из неё (Денис, 18.10).
+// Сбой нормализации поиск не роняет — ищем по названию как есть
+const _cvNormCache = new Map();
+async function cvNormName(name) {
+  if (_cvNormCache.has(name)) return _cvNormCache.get(name);
+  try {
+    const resp = await fetch(`https://api.poigraem.shop/price-lookup/api/normalize?q=${encodeURIComponent(name)}`);
+    if (resp.ok) {
+      const data = await resp.json();
+      if (typeof data.normalized === 'string' && data.normalized.trim()) {
+        const out = data.normalized.trim();
+        _cvNormCache.set(name, out); // запоминаем только ответ словаря: разовый сбой
+        return out;                  // (сеть, 429, 5xx) не выключает словарь до F5 (ревью 23.10)
+      }
+    }
+  } catch (e) {}
+  return name;
+}
+async function cvCoverFromIGDB(name) {
+  const resp = await fetch(`https://api.poigraem.shop/igdb/cover?name=${encodeURIComponent(name)}&type=game`);
+  const data = await resp.json();
+  return data.cover ? 'https://api.poigraem.shop/igdb/img?url=' + encodeURIComponent(data.cover.replace(/\/t_[a-z0-9_]+\//, '/t_1080p/')) : null;
+}
+function cvLoadCoverImg(url) {
+  return new Promise(resolve => {
+    const el = new Image();
+    el.crossOrigin = 'anonymous';
+    el.onload  = () => resolve(el);
+    el.onerror = () => resolve(null);
+    el.src = url;
+  });
+}
+// → { el, from: 'ps' | 'igdb' } или null. Ошибка PS Store не роняет поиск — идём в IGDB.
+async function cvFindCover(name, src) {
+  if (src === 'ps') {
+    try {
+      const url = await cvCoverFromPS(name);
+      const el = url && await cvLoadCoverImg(url);
+      if (el) return { el, from: 'ps' };
+    } catch (e) {}
+  }
+  // Сначала по названию из словаря, затем как есть: словарь мог развернуть неудачно
+  const norm = await cvNormName(name);
+  for (const q of norm.toLowerCase() === name.toLowerCase() ? [name] : [norm, name]) {
+    try {
+      const url = await cvCoverFromIGDB(q);
+      const el = url && await cvLoadCoverImg(url);
+      if (el) return { el, from: 'igdb' };
+    } catch (e) {}
+  }
+  return null;
+}
+
+async function cvFetchCovers(src) {
   const ta = document.getElementById('cv-igdb-names');
   if (!ta) return;
   const allNames = ta.value.split('\n').map(s => s.trim()).filter(Boolean);
@@ -7465,79 +7529,27 @@ async function cvFetchFromIGDB() {
   if (btn) btn.disabled = true;
 
   let loaded = 0;
-  const failed = [];
+  const failed = [], viaIgdb = [];
+
+  // Словарь для IGDB — сразу на все названия, а не по одному в цикле (ревью 23.10).
+  // В режиме PS Store не трогаем: там словарь применяет сервер, а IGDB нужен лишь запасным
+  if (src === 'igdb') await Promise.all(names.map(cvNormName));
 
   for (const name of names) {
-    if (prog) prog.textContent = `⏳ ${loaded}/${names.length} — ищем «${name}»...`;
-    try {
-      const resp = await fetch(`https://api.poigraem.shop/igdb/cover?name=${encodeURIComponent(name)}&type=game`);
-      const data = await resp.json();
-      if (!data.cover) { failed.push(name); continue; }
-      const url = 'https://api.poigraem.shop/igdb/img?url=' + encodeURIComponent(data.cover.replace(/\/t_[a-z0-9_]+\//, '/t_1080p/'));
-      await new Promise(resolve => {
-        const el = new Image();
-        el.crossOrigin = 'anonymous';
-        el.onload  = () => { cv.images.push({ id: ++_cvId, url: el.src, el, transform:{scale:1,ox:0,oy:0} }); loaded++; resolve(); };
-        el.onerror = () => { failed.push(name); resolve(); };
-        el.src = url;
-      });
-    } catch(e) { failed.push(name); }
+    if (prog) prog.textContent = `⏳ ${loaded}/${names.length} — ${src === 'ps' ? 'PS Store' : 'ищем'}: «${name}»...`;
+    const got = await cvFindCover(name, src);
+    if (!got) { failed.push(name); continue; }
+    if (src === 'ps' && got.from === 'igdb') viaIgdb.push(name);
+    cv.images.push({ id: ++_cvId, url: got.el.src, el: got.el, transform:{scale:1,ox:0,oy:0} });
+    loaded++;
   }
 
   if (prog) prog.textContent = `✓ Загружено: ${loaded}/${names.length}` +
+    (viaIgdb.length ? ` · Из IGDB (нет в PS Store или он не ответил): ${viaIgdb.join(', ')}` : '') +
     (failed.length ? ` · Не найдено: ${failed.join(', ')}` : '') +
     (skipped.length ? ` · Пропущено (лимит 10): ${skipped.join(', ')}` : '');
   if (btn) btn.disabled = false;
-  jlog('cv_images', null, { source: 'igdb', added: loaded, failed: failed.length, names });
-  cvRenderState();
-}
-
-async function cvFetchFromPS() {
-  const ta = document.getElementById('cv-igdb-names');
-  if (!ta) return;
-  const allNames = ta.value.split('\n').map(s => s.trim()).filter(Boolean);
-  if (!allNames.length) return;
-  cv.igdbNames = ta.value;
-
-  const prog = document.getElementById('cv-igdb-prog');
-  // F18: тот же лимит 10 фото для загрузки из PS Store
-  const room = Math.max(0, 10 - cv.images.length);
-  if (room === 0) { if (prog) prog.textContent = '⚠ Уже 10 обложек — удалите лишние, чтобы добавить'; return; }
-  const names = allNames.slice(0, room);
-  const skipped = allNames.slice(room);
-
-  const btn  = document.getElementById('cv-igdb-btn');
-  if (btn) btn.disabled = true;
-
-  let loaded = 0;
-  const failed = [];
-
-  for (const name of names) {
-    if (prog) prog.textContent = `⏳ ${loaded}/${names.length} — PS Store: «${name}»...`;
-    try {
-      const resp = await fetch('https://api.poigraem.shop/price-lookup/api/price-lookup', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ gameName: name, source: 'avito_helper' })
-      });
-      const data = await resp.json();
-      if (!data.coverUrl) { failed.push(name); continue; }
-      const url = 'https://api.poigraem.shop/igdb/img?url=' + encodeURIComponent(data.coverUrl);
-      await new Promise(resolve => {
-        const el = new Image();
-        el.crossOrigin = 'anonymous';
-        el.onload  = () => { cv.images.push({ id: ++_cvId, url: el.src, el, transform:{scale:1,ox:0,oy:0} }); loaded++; resolve(); };
-        el.onerror = () => { failed.push(name); resolve(); };
-        el.src = url;
-      });
-    } catch(e) { failed.push(name); }
-  }
-
-  if (prog) prog.textContent = `✓ Загружено: ${loaded}/${names.length}` +
-    (failed.length ? ` · Не найдено: ${failed.join(', ')}` : '') +
-    (skipped.length ? ` · Пропущено (лимит 10): ${skipped.join(', ')}` : '');
-  if (btn) btn.disabled = false;
-  jlog('cv_images', null, { source: 'ps', added: loaded, failed: failed.length, names });
+  jlog('cv_images', null, { source: src, added: loaded, failed: failed.length, names, ...(viaIgdb.length ? { fallback: viaIgdb.length } : {}) });
   cvRenderState();
 }
 
@@ -12311,7 +12323,7 @@ document.addEventListener('click', e => {
     }
 
     case 'cv-igdb-fetch':
-      if (cv.coverSource === 'ps') cvFetchFromPS(); else cvFetchFromIGDB(); break;
+      cvFetchCovers(cv.coverSource === 'ps' ? 'ps' : 'igdb'); break;
 
     case 'cv-igdb-game-fetch': {
       const inp = document.getElementById('cv-igdb-game');
@@ -12320,55 +12332,19 @@ document.addEventListener('click', e => {
       const name = inp.value.trim();
       if (!name) break;
       el.disabled = true;
-      if (cv.coverSource === 'ps') {
-        if (prog) prog.textContent = `⏳ PS Store: «${name}»...`;
-        fetch('https://api.poigraem.shop/price-lookup/api/price-lookup', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ gameName: name, source: 'avito_helper' })
-        })
-          .then(r => r.json())
-          .then(data => {
-            if (!data.coverUrl) { if (prog) prog.textContent = '❌ Не найдено'; return; }
-            const url = 'https://api.poigraem.shop/igdb/img?url=' + encodeURIComponent(data.coverUrl);
-            const img = new Image();
-            img.crossOrigin = 'anonymous';
-            img.onload = () => {
-              cvRevokeGameBlobs();
-              cv.images = [{ id: ++_cvId, url: img.src, el: img, transform:{scale:1,ox:0,oy:0} }];
-              if (prog) prog.textContent = '✓ Загружено';
-              // Ветка известна статически; читать cv.coverSource здесь нельзя —
-              // за время загрузки переключатель источника мог уехать
-              jlog('cv_images', null, { source: 'ps', mode: 'game', added: 1, names: [name] });
-              cvRenderState();
-            };
-            img.onerror = () => { if (prog) prog.textContent = '❌ Ошибка загрузки'; };
-            img.src = url;
-          })
-          .catch(() => { if (prog) prog.textContent = '❌ Ошибка запроса'; })
-          .finally(() => { el.disabled = false; });
-      } else {
-        if (prog) prog.textContent = `⏳ Ищем «${name}»...`;
-        fetch(`https://api.poigraem.shop/igdb/cover?name=${encodeURIComponent(name)}&type=game`)
-          .then(r => r.json())
-          .then(data => {
-            if (!data.cover) { if (prog) prog.textContent = '❌ Не найдено'; return; }
-            const url = 'https://api.poigraem.shop/igdb/img?url=' + encodeURIComponent(data.cover.replace(/\/t_[a-z0-9_]+\//, '/t_1080p/'));
-            const img = new Image();
-            img.crossOrigin = 'anonymous';
-            img.onload = () => {
-              cvRevokeGameBlobs();
-              cv.images = [{ id: ++_cvId, url: img.src, el: img, transform:{scale:1,ox:0,oy:0} }];
-              if (prog) prog.textContent = '✓ Загружено';
-              jlog('cv_images', null, { source: 'igdb', mode: 'game', added: 1, names: [name] });
-              cvRenderState();
-            };
-            img.onerror = () => { if (prog) prog.textContent = '❌ Ошибка загрузки'; };
-            img.src = url;
-          })
-          .catch(() => { if (prog) prog.textContent = '❌ Ошибка запроса'; })
-          .finally(() => { el.disabled = false; });
-      }
+      // Ветка известна в момент клика; читать cv.coverSource после загрузки нельзя —
+      // за это время переключатель источника мог уехать
+      const src = cv.coverSource === 'ps' ? 'ps' : 'igdb';
+      if (prog) prog.textContent = src === 'ps' ? `⏳ PS Store: «${name}»...` : `⏳ Ищем «${name}»...`;
+      cvFindCover(name, src).then(got => {
+        if (!got) { if (prog) prog.textContent = '❌ Не найдено'; return; }
+        cvRevokeGameBlobs();
+        cv.images = [{ id: ++_cvId, url: got.el.src, el: got.el, transform:{scale:1,ox:0,oy:0} }];
+        if (prog) prog.textContent = src === 'ps' && got.from === 'igdb' ? '✓ Загружено из IGDB — нет в PS Store или он не ответил' : '✓ Загружено';
+        jlog('cv_images', null, { source: src, mode: 'game', added: 1, names: [name], ...(src !== got.from ? { fallback: 1 } : {}) });
+        cvRenderState();
+      }).catch(() => { if (prog) prog.textContent = '❌ Ошибка загрузки'; }) // иначе «⏳» висел бы вечно
+        .finally(() => { el.disabled = false; });
       break;
     }
 
