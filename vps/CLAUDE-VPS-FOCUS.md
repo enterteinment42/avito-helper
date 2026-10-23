@@ -3,18 +3,17 @@
 
 ## Текущий фокус
 
-🔵 **16.10 — пулы подписей положены в `~/avito-sync/settings.json`** (`sigGame` 7, `sigSub` 3;
-проверено через GET). Копия до правки — `settings.json.SAVED-20261016-sigpools`.
-⚠️ **Не закрыто:** `[x]` в `TASK-SIG-POOLS-VPS.md` не стоит — локальный `main` разошёлся
-с origin (у нас `792f46f` не запушен, у них 7 коммитов Windows). Ждём решения пользователя:
-`pull --rebase` → отметка → коммит → пуш. Ещё не разобраны `TASK-HISTORY-RESCUE-VPS.md`, `TASK-STAGED-SERIES-VPS.md`.
+🔵 **16.10 → 23.10 — пулы подписей в `~/avito-sync/settings.json`.** Живые: `sigGame` 6 (Windows
+`7f4d2aa` убрала длинный), `sigSub` 3, документ с `sigVer`. ⚠️ Копию `.SAVED-20261016-sigpools`
+поверх НЕ класть — устарела (запись 23.10). `[x]` в `TASK-SIG-POOLS-VPS.md` не стоит:
+`origin/main` впереди на 15 коммитов, ждём решения пользователя о `pull --rebase` (конфликтов нет).
+Не разобраны `TASK-HISTORY-RESCUE-VPS.md`, `TASK-STAGED-SERIES-VPS.md`.
 
 🔵 **15.10 — первый разбор журнала самообучения** (запись в `CLAUDE-VPS.md`): без правки
-не ушло ни одно из 14, доля правки 0.35. Windows сделала все правки из
-`TASK-JOURNAL-FIXES-WINDOWS.md` в `63a1014` (16.10). Жаргон в заголовках — пока не трогаем.
+не ушло ни одно из 14, доля правки 0.35. Windows сделала правки в `63a1014` (отметки — `9a5b4eb`);
+**открыт пункт «фон обложки»**. Жаргон в заголовках — пока не трогаем.
 **Следующий шаг:** при ≥10 публикациях после `63a1014` — повторный разбор (`/bot-selflearn-log`),
 сравнить с 15.10; дубли `posted`/`edited` снимать по `botTitle`+`region`.
 
-🔵 **15.10 — папка под git.** `~/avito-helper` → `~/avito-helper-repo/vps/` (sparse-клон
-публичного `enterteinment42/avito-helper`). В начале сессии — `git -C ~/avito-helper-repo pull --ff-only`
-(при расхождении — не ребейзить молча, спросить); в конце — коммит, пуш по решению пользователя.
+🔵 **23.10 — price-lookup для avito-helper** (`3735378`, не запушен): `/api/cover` и `/api/normalize`,
+CORS для github.io. Ждём от Windows замены двух `POST …/api/price-lookup` на `GET …/api/cover`.
