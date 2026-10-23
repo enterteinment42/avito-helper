@@ -33,7 +33,13 @@
 (`792f46f`) — нарушение правила, оставлено как есть.
 
 **Git.** `origin/main` впереди на 15 коммитов Windows, `vps/` они не трогают —
-`git merge-tree` конфликтов не видит. Ребейз — по решению пользователя.
+`git merge-tree` конфликтов не видит. По решению пользователя — `pull --rebase` (чисто),
+`[x]` в `TASK-SIG-POOLS-VPS.md` с пометкой «сейчас 6 и 3, JSON устарел», пуш. `price-lookup` тоже запушен.
+
+**Что осталось.** Windows: два `POST …/api/price-lookup` → `GET …/api/cover` в `avito-helper.html`
+(без этого обложки PS Store в коллаже не заработают). Не разобраны `TASK-HISTORY-RESCUE-VPS.md`,
+`TASK-STAGED-SERIES-VPS.md`. Повторный разбор журнала — при ≥10 публикациях после `63a1014`.
+`/code-review` правки `price-lookup` не смотрел (запускался из этого каталога).
 
 **price-lookup (по запросу Claude2 от 19.10).** Правка в `~/price-lookup/server.js`, коммит
 `3735378` (не запушен): CORS для `https://enterteinment42.github.io`; публичный
