@@ -1749,6 +1749,7 @@ const state = {
 
 rebuildCats(); // категории собираются сразу после state — до первого render()
 rebuildScenes(); // и сцены интерьера: freshVision() выбирал первую ЗАВОДСКУЮ, а её могли скрыть
+subGamesInit();
 
 // ══════════════════════════════════════════
 // LOCALSTORAGE
@@ -2638,7 +2639,7 @@ async function syncPullSettings() {
       state.scenesCfg = { builtin: d.scenes.builtin || {}, custom: Array.isArray(d.scenes.custom) ? d.scenes.custom : [] };
       rebuildScenes();
     }
-    if (d.catalogs && typeof d.catalogs === 'object') state.catalogs = d.catalogs;
+    if (d.catalogs && typeof d.catalogs === 'object') { const prev = state.catalogs; state.catalogs = d.catalogs; subGamesCarry(prev); }
     if (d.settings && typeof d.settings === 'object') settingsAdopt(d.settings);
     if (Array.isArray(d.presets)) state.presets = d.presets;
     if (Array.isArray(d.queue)) state.postQueue = d.queue;
@@ -3009,6 +3010,80 @@ function getCatalogEntry(sub) {
   if (!c) return { core: [], masking: [] };
   if (Array.isArray(c)) return { core: [], masking: c }; // старый формат
   return { core: Array.isArray(c.core) ? c.core : [], masking: Array.isArray(c.masking) ? c.masking : [] };
+}
+
+// Ручной «Список игр» формы — свой у каждой подписки, полем `extra` в её каталоге.
+// Раньше поле было одно на все подписки: список PS Plus Extra (GTA 5, Hell Is Us…) при
+// переключении на EA Play оставался в форме и уходил в пул крючка названия EA Play
+// (Денис, 18.10). В каталоге он едет на сервер и в бэкап вместе с настройками.
+// state.form.games — зеркало списка текущей подписки: его читают промпт и инфографика.
+// Зеркало обновляется при каждой отрисовке поля (subGamesHTML), поэтому смену подписки
+// любым путём — выпадашка, распознавание по фото, смена категории, пресет — оно догоняет
+// до генерации (ревью 23.10: распознавание меняло подписку, а список оставался прежним).
+function subGamesOf(sub) {
+  const c = (state.catalogs || {})[sub];
+  return c && !Array.isArray(c) && typeof c.extra === 'string' ? c.extra : '';
+}
+// Список для формы f. Запись каталога непонятного формата subGamesSet не трогает —
+// тогда список живёт только в самой форме
+function subGamesFor(f) {
+  const c = (state.catalogs || {})[f.subType];
+  if (c != null && !Array.isArray(c) && typeof c !== 'object') return f.games || '';
+  return subGamesOf(f.subType);
+}
+function subGamesSet(sub, v) {
+  if (!state.catalogs) state.catalogs = {};
+  let c = state.catalogs[sub];
+  if (Array.isArray(c)) c = { core: [], masking: c }; // старый формат — список маскирующих
+  // Запись непонятного формата (строка из старого бэкапа и т.п.) не трогаем: разворот
+  // строки разложил бы её по символам, а это каталог Дениса. Список тогда живёт только в форме
+  else if (c != null && (typeof c !== 'object')) return;
+  state.catalogs[sub] = { ...(c || { core: [], masking: [] }), extra: String(v ?? '') };
+}
+// Поле «Список игр» несёт свою подписку (data-sub). Смена подписки перерисовывает форму, и
+// браузер присылает «change» поля игр уже ПОСЛЕ неё — без привязки список одной подписки
+// записывался другой (поймал тест subgames, 23.10). Форме — только если подписка та же.
+function subGamesField(el) {
+  const sub = el.dataset.sub;
+  if (!sub) return false;
+  subGamesSet(sub, el.value);
+  if (sub === state.form.subType) state.form.games = el.value;
+  return true;
+}
+function subGamesHasAny() {
+  return Object.values(state.catalogs || {}).some(c => c && !Array.isArray(c) && typeof c.extra === 'string');
+}
+// Переезд со старого общего поля, один раз: списка ещё нет ни у одной подписки, а в форме
+// он есть. Отдаём его текущей подписке, если у неё нет своего каталога; иначе — подписке
+// по умолчанию (PS Plus Extra): заводской список формы — её игры, и у Дениса так и вышло —
+// список PS Plus стоял в форме, пока выбрана была EA Play с заполненным каталогом.
+// Заводской список (DEF_FORM.games) не переносим: каталог с ним счёлся бы «своими»
+// настройками, и чистый браузер отправил бы заводские настройки поверх серверных
+// (syncSettingsWorth, ревью 23.10). В хранилище здесь не пишем: перенос повторяем на
+// каждой загрузке с тем же итогом, пока его не сохранит обычный save() — прямая запись
+// при старте будила плашку «вкладка устарела» во всех открытых вкладках.
+function subGamesInit() {
+  const f = state.form;
+  if (!f) return;
+  const old = String(f.games || '').trim();
+  if (old && f.games !== DEF_FORM.games && !subGamesHasAny()) {
+    const cat = getCatalogEntry(f.subType);
+    const to = (cat.core.length || cat.masking.length) ? DEF_FORM.subType : f.subType;
+    subGamesSet(to, f.games);
+  }
+  if (f.subType) f.games = subGamesFor(f);
+}
+// Каталоги заменены целиком (сервер, импорт бэкапа). Если пришедшие записаны страницей
+// старше 23.10, списков игр в них нет — переносим списки ВСЕХ подписок из прежних
+// каталогов, а не только текущей. Пришедший список (даже пустой) главнее своего.
+function subGamesCarry(prev) {
+  for (const [sub, c] of Object.entries(prev || {})) {
+    if (!c || Array.isArray(c) || typeof c !== 'object' || typeof c.extra !== 'string') continue;
+    const n = state.catalogs[sub];
+    if (n && !Array.isArray(n) && typeof n === 'object' && typeof n.extra === 'string') continue;
+    subGamesSet(sub, c.extra);
+  }
+  if (state.form?.subType) state.form.games = subGamesFor(state.form);
 }
 
 // Раньше отдавал один перемешанный список без различия ядро/маскировка —
@@ -5026,6 +5101,7 @@ function visionPickOption(key, val) {
   const fd = catDef(state.form.category).fields.find(x => x.key === key);
   if (!fd) return;
   state.form[key] = fd.type === 'chips' ? [val] : val;
+  if (key === 'subType') state.form.games = subGamesFor(state.form); // список — у выбранной подписки
   v.picks = { ...(v.picks || {}), [key]: val };
   v.appliedForm = JSON.stringify(state.form); // выбор — часть применённого, а не правка человека
   save();
@@ -5071,6 +5147,7 @@ function visionApplyToForm(r) {
     }
   }
   if (r.notes) f.notes = String(r.notes).slice(0, 300);
+  if (f.subType) f.games = subGamesFor(f); // подписка могла смениться — список берём её (ревью 23.10)
   save();
 
   // Модель могла ответить категорией не из списка (напр. "Игра" вместо "game") —
@@ -5778,6 +5855,7 @@ function formHTML() {
   // Список игр у подписки — единственное поле с живой подсказкой: вид зависит
   // от того, заполнен ли каталог этого типа подписки в Настройках.
   function subGamesHTML() {
+    f.games = subGamesFor(f); // зеркало — список текущей подписки, как бы она ни сменилась
     const cat = getCatalogEntry(f.subType);
     if (cat.core.length || cat.masking.length) return `
       <div class="field">
@@ -5786,7 +5864,7 @@ function formHTML() {
           <span style="color:var(--teal-h)">${cat.masking.length} маскирующих</span>
           <span style="color:var(--muted);font-size:11px;margin-left:4px">— список рандомизируется при каждой генерации</span>
         </label>
-        <input type="text" data-act="field" data-k="games"
+        <input type="text" data-act="field" data-k="games" data-sub="${esc(f.subType)}"
           placeholder="Доп. игры через запятую (необязательно)"
           value="${esc(f.games)}" style="font-size:13px">
       </div>`;
@@ -5795,7 +5873,7 @@ function formHTML() {
         <label>Список игр
           <span style="color:var(--warn);font-size:11px;margin-left:6px">каталог не заполнен — укажите игры вручную или заполните каталог в Настройках</span>
         </label>
-        <textarea data-act="field" data-k="games" rows="4"
+        <textarea data-act="field" data-k="games" data-sub="${esc(f.subType)}" rows="4"
           placeholder="GTA 5, Spider-Man 2, God of War…">${esc(f.games)}</textarea>
       </div>`;
   }
@@ -7003,7 +7081,9 @@ function bindSettingsTab() {
     const core    = (document.getElementById('cat-core')?.value || '').split('\n').map(s => s.trim()).filter(Boolean);
     const masking = (document.getElementById('cat-mask')?.value || '').split('\n').map(s => s.trim()).filter(Boolean);
     if (!state.catalogs) state.catalogs = {};
-    state.catalogs[state.catEditSub] = { core, masking };
+    // Через разворот: в записи каталога живёт и ручной список игр формы (extra) — не стирать
+    const prev = state.catalogs[state.catEditSub];
+    state.catalogs[state.catEditSub] = { ...(prev && !Array.isArray(prev) ? prev : {}), core, masking };
     save();
     toast(`Сохранено: ${core.length} ядровых + ${masking.length} маскирующих — ${state.catEditSub}`);
   });
@@ -11027,7 +11107,7 @@ function bindDbTab() {
             state.scenesCfg = { builtin: obj.scenes.builtin || {}, custom: arr(obj.scenes.custom) };
             rebuildScenes();
           }
-          if (obj.catalogs && typeof obj.catalogs === 'object') state.catalogs = obj.catalogs;
+          if (obj.catalogs && typeof obj.catalogs === 'object') { const prev = state.catalogs; state.catalogs = obj.catalogs; subGamesCarry(prev); }
           if (obj.settings && typeof obj.settings === 'object') settingsAdopt(obj.settings);
           if (obj.cv && typeof obj.cv === 'object') {
             // Только известные поля, старый формат переводится в слои — всё в cvApplyCfg
@@ -12073,6 +12153,9 @@ document.addEventListener('click', e => {
       const p = state.presets.find(x => x.id === id);
       if (!p) break;
       state.form = { ...DEF_FORM, ...p.form };
+      // Список игр живёт у подписки, а не в пресете: пресеты до 23.10 могли сохранить
+      // список чужой подписки, а у пресета без поля подставился бы заводской список формы
+      if (state.form.category === 'gaming_sub') state.form.games = subGamesFor(state.form);
       save();
       const fb = document.getElementById('form-box');
       if (fb) fb.innerHTML = formHTML();
@@ -12894,9 +12977,11 @@ document.addEventListener('change', e => {
     state.form.category = el.value; save(); reForm(); return;
   }
   if (act === 'field') {
+    if (el.dataset.k === 'games' && subGamesField(el)) { save(); return; }
     state.form[el.dataset.k] = el.value;
     if (el.dataset.k === 'subType') {
       const t = el.value;
+      state.form.games = subGamesFor(state.form); // список игр — свой у каждой подписки
       if (t.startsWith('PS Plus')) state.form.platforms = ['PS4', 'PS5'];
       else if (t === 'Game Pass Ultimate') state.form.platforms = ['Xbox'];
       else if (t === 'EA Play') state.form.platforms = ['PS4', 'PS5', 'Xbox'];
@@ -12916,7 +13001,7 @@ document.addEventListener('input', e => {
   const el = e.target;
   const act = el.dataset.act;
   if (act === 'field') {
-    state.form[el.dataset.k] = el.value;
+    if (!(el.dataset.k === 'games' && subGamesField(el))) state.form[el.dataset.k] = el.value;
     clearTimeout(el._t); el._t = setTimeout(save, 400);
   }
   if (act === 'dur-price') {

@@ -28,6 +28,7 @@ import { runStorage } from './storage.mjs';
 import { runMobile } from './mobile.mjs';
 import { runRawsafe } from './rawsafe.mjs';
 import { runJournalfix } from './journalfix.mjs';
+import { runSubgames } from './subgames.mjs';
 
 const only = process.argv[2]; // node run.mjs parity|editor|regress — прогнать одну секцию
 
@@ -65,6 +66,7 @@ try {
   if (!only || only === 'icons')   await runIcons(browser, base, t);
   if (!only || only === 'brand')   await runBrand(browser, base, t);
   if (!only || only === 'journalfix') await runJournalfix(browser, base, t);
+  if (!only || only === 'subgames') await runSubgames(browser, base, t);
   if (!only || only === 'regress') await runRegress(browser, base, t);
 } catch (e) {
   console.error('\nСтенд упал:', e);

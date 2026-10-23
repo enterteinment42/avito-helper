@@ -32,6 +32,9 @@ export async function runBrand(browser, base, t) {
       const draw = page => page.evaluate(async () => {
         await document.fonts.load(`700 40px 'JetBrains Mono'`, 'АяAz');
         await document.fonts.load(`400 40px Literata`, 'АяAz');
+        // Список игр формы — одинаковый у обеих: с 23.10 заводской список на чистом браузере
+        // в инфографику не идёт (он — пример, а не игры продавца; subgames), а тест про стиль
+        state.form.games = 'GTA 5, God of War';
         for (const type of ['sticker', 'ribbon', 'text', 'infog', 'icon', 'plat']) cvAddLayer(type);
         cv._selLayer = null;
         const c = document.createElement('canvas'); cvDrawGame(c, cv.images[0], {});
