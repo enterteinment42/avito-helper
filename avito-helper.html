@@ -2311,7 +2311,12 @@ function syncSettingsWorth(d) {
     const scenes = d.scenes || {};
     if (Object.keys(scenes.builtin || {}).length || (scenes.custom || []).length) return true;
     if ((d.presets || []).length || (d.queue || []).length) return true;
-    if (Object.keys(d.catalogs || {}).length || d.cv) return true;
+    // Каталог «свой», только если в нём есть игры каталога. Один ручной «Список игр» формы
+    // (extra) не в счёт: иначе новое устройство, набрав игру, отправило бы заводские
+    // категории и пресеты поверх серверных (ревью 23.10)
+    const catOwn = c => Array.isArray(c) ? c.length > 0
+      : c && typeof c === 'object' ? !!((c.core || []).length || (c.masking || []).length) : !!c;
+    if (Object.values(d.catalogs || {}).some(catOwn) || d.cv) return true;
     // Сами настройки считаем своими, если хоть одно поле отличается от заводского:
     // имя страницы, модель, список регионов и свой системный промпт — всё это
     // правки человека, и терять их на сервере незачем.
@@ -3024,11 +3029,9 @@ function subGamesOf(sub) {
   const c = (state.catalogs || {})[sub];
   return c && !Array.isArray(c) && typeof c.extra === 'string' ? c.extra : '';
 }
-// Список для формы f. Запись каталога непонятного формата subGamesSet не трогает —
-// тогда список живёт только в самой форме
+// Список для формы f. У записи каталога непонятного формата (её subGamesSet не трогает)
+// списка нет — пусто, а не f.games: там список ПРЕЖНЕЙ подписки (ревью 23.10)
 function subGamesFor(f) {
-  const c = (state.catalogs || {})[f.subType];
-  if (c != null && !Array.isArray(c) && typeof c !== 'object') return f.games || '';
   return subGamesOf(f.subType);
 }
 function subGamesSet(sub, v) {
@@ -7083,7 +7086,7 @@ function bindSettingsTab() {
     if (!state.catalogs) state.catalogs = {};
     // Через разворот: в записи каталога живёт и ручной список игр формы (extra) — не стирать
     const prev = state.catalogs[state.catEditSub];
-    state.catalogs[state.catEditSub] = { ...(prev && !Array.isArray(prev) ? prev : {}), core, masking };
+    state.catalogs[state.catEditSub] = { ...(prev && typeof prev === 'object' && !Array.isArray(prev) ? prev : {}), core, masking };
     save();
     toast(`Сохранено: ${core.length} ядровых + ${masking.length} маскирующих — ${state.catEditSub}`);
   });
@@ -7541,8 +7544,14 @@ async function cvCoverFromPS(name) {
 // без него IGDB находил по «FC 26» не игру, а карточку из неё (Денис, 18.10).
 // Сбой нормализации поиск не роняет — ищем по названию как есть
 const _cvNormCache = new Map();
+// Сбой словаря (сеть, 429, 5xx) выключает его на 5 минут для всех названий: служба
+// общая с магазином, и долбить её, пока она лежит или упёрлась в лимит, нельзя.
+// Навсегда до F5 тоже нельзя — тогда «FC 26» снова искался бы как карточка (ревью 23.10)
+const CV_NORM_PAUSE = 5 * 60 * 1000;
+let _cvNormDownAt = 0;
 async function cvNormName(name) {
   if (_cvNormCache.has(name)) return _cvNormCache.get(name);
+  if (Date.now() - _cvNormDownAt < CV_NORM_PAUSE) return name;
   try {
     const resp = await fetch(`https://api.poigraem.shop/price-lookup/api/normalize?q=${encodeURIComponent(name)}`);
     if (resp.ok) {
@@ -7552,8 +7561,10 @@ async function cvNormName(name) {
         _cvNormCache.set(name, out); // запоминаем только ответ словаря: разовый сбой
         return out;                  // (сеть, 429, 5xx) не выключает словарь до F5 (ревью 23.10)
       }
+      return name; // ответил, но пусто — это не сбой службы
     }
   } catch (e) {}
+  _cvNormDownAt = Date.now();
   return name;
 }
 async function cvCoverFromIGDB(name) {
@@ -7611,24 +7622,31 @@ async function cvFetchCovers(src) {
   let loaded = 0;
   const failed = [], viaIgdb = [];
 
-  // Словарь для IGDB — сразу на все названия, а не по одному в цикле (ревью 23.10).
-  // В режиме PS Store не трогаем: там словарь применяет сервер, а IGDB нужен лишь запасным
-  if (src === 'igdb') await Promise.all(names.map(cvNormName));
+  // try/finally: исключение в цикле не оставляет кнопку выключенной до F5 (ревью 23.10)
+  try {
+    // Словарь для IGDB — сразу на все названия, а не по одному в цикле (ревью 23.10).
+    // В режиме PS Store не трогаем: там словарь применяет сервер, а IGDB нужен лишь запасным
+    if (src === 'igdb') await Promise.all(names.map(cvNormName));
 
-  for (const name of names) {
-    if (prog) prog.textContent = `⏳ ${loaded}/${names.length} — ${src === 'ps' ? 'PS Store' : 'ищем'}: «${name}»...`;
-    const got = await cvFindCover(name, src);
-    if (!got) { failed.push(name); continue; }
-    if (src === 'ps' && got.from === 'igdb') viaIgdb.push(name);
-    cv.images.push({ id: ++_cvId, url: got.el.src, el: got.el, transform:{scale:1,ox:0,oy:0} });
-    loaded++;
+    for (const name of names) {
+      // Место проверяем на каждом шаге: пока идёт поиск, человек мог добавить фото руками
+      if (cv.images.length >= 10) { skipped.push(name); continue; }
+      if (prog) prog.textContent = `⏳ ${loaded}/${names.length} — ${src === 'ps' ? 'PS Store' : 'ищем'}: «${name}»...`;
+      const got = await cvFindCover(name, src);
+      if (!got) { failed.push(name); continue; }
+      if (cv.images.length >= 10) { skipped.push(name); continue; }
+      if (src === 'ps' && got.from === 'igdb') viaIgdb.push(name);
+      cv.images.push({ id: ++_cvId, url: got.el.src, el: got.el, transform:{scale:1,ox:0,oy:0} });
+      loaded++;
+    }
+  } finally {
+    if (btn) btn.disabled = false;
   }
 
   if (prog) prog.textContent = `✓ Загружено: ${loaded}/${names.length}` +
     (viaIgdb.length ? ` · Из IGDB (нет в PS Store или он не ответил): ${viaIgdb.join(', ')}` : '') +
     (failed.length ? ` · Не найдено: ${failed.join(', ')}` : '') +
     (skipped.length ? ` · Пропущено (лимит 10): ${skipped.join(', ')}` : '');
-  if (btn) btn.disabled = false;
   jlog('cv_images', null, { source: src, added: loaded, failed: failed.length, names, ...(viaIgdb.length ? { fallback: viaIgdb.length } : {}) });
   cvRenderState();
 }

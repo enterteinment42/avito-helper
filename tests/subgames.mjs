@@ -42,6 +42,29 @@ export async function runSubgames(browser, base, t) {
     try {
       const st = await page.evaluate(() => [Object.keys(state.catalogs).length, syncSettingsWorth(syncSettingsDoc())]);
       t.ok('чистый браузер: каталоги пусты, заводские настройки на сервер не просятся', st[0] === 0 && st[1] === false, JSON.stringify(st));
+      // Набрал игру на новом устройстве — это ещё не повод слать заводские настройки поверх серверных
+      const typed = await page.evaluate(() => {
+        subGamesSet('PS Plus Extra', 'Astro Bot');
+        const onlyExtra = syncSettingsWorth(syncSettingsDoc());
+        state.catalogs['EA Play'] = { core: ['FC 26'], masking: [] };
+        return [onlyExtra, syncSettingsWorth(syncSettingsDoc())];
+      });
+      t.eq('один «Список игр» — не свои настройки; каталог с играми — свои', JSON.stringify(typed), JSON.stringify([false, true]));
+      // Запись каталога непонятного формата (строка из старого бэкапа)
+      const legacy = await page.evaluate(() => {
+        state.catalogs['Game Pass Ultimate'] = 'Halo, Forza';
+        state.form.category = 'gaming_sub'; state.form.subType = 'PS Plus Extra'; state.form.games = 'Astro Bot';
+        state.form.subType = 'Game Pass Ultimate';
+        const leak = subGamesFor(state.form);
+        state.tab = 'settings'; render();
+        document.getElementById('cat-sub-sel').value = 'Game Pass Ultimate';
+        document.getElementById('cat-sub-sel').dispatchEvent(new Event('change'));
+        document.getElementById('cat-core').value = 'Starfield';
+        document.getElementById('cat-save').click();
+        return [leak, JSON.stringify(state.catalogs['Game Pass Ultimate'])];
+      });
+      t.eq('строковая запись: список прежней подписки не протекает', legacy[0], '');
+      t.eq('«Сохранить каталог» не раскладывает строку по символам', legacy[1], JSON.stringify({ core: ['Starfield'], masking: [] }));
     } finally { await ctx.close(); }
   }
 
