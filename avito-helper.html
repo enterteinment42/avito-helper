@@ -173,6 +173,9 @@
     input:focus, select:focus, textarea:focus { border-color: var(--teal); }
     select { cursor: pointer; }
     textarea { resize: vertical; min-height: 76px; font-family: var(--fm); font-size: 13px; }
+    /* «Доп. указания» — главная задача генератору, а не пара слов: поле растёт
+       вниз по тексту (field-sizing там, где браузер умеет, иначе — JS в обработчике input). */
+    textarea.notes-grow { min-height: 120px; max-height: 60vh; field-sizing: content; font-family: inherit; font-size: 14px; line-height: 1.45; }
 
     .check-group { display: flex; flex-wrap: wrap; gap: 6px; }
     .chip {
@@ -1173,7 +1176,44 @@ const BUILTIN_CATS = [
 - Название товара ОБЯЗАТЕЛЬНО пиши по-разному в разных вариантах — это и есть антидубль: «PS5 Pro» / «ПС5 Про» / «PlayStation 5 Pro» / «плейстейшн 5 про»
 - Добивай лимит 50 символов: 32 использованных символа — это потерянное место под крючок`,
   },
+  // Услуга от себя (решение Дениса 03.11.2026): первой будет настройка чат-ботов
+  // малому бизнесу. Проект ещё не запущен — это ЗАГОТОВКА: поля и правила собраны,
+  // эталонов нет, проверять тексты живьём. Поля правятся в редакторе категорий.
+  {
+    id: 'service', label: '🛠 Услуга (заготовка)', pName: 'Услуга', builtin: true,
+    visionHint: 'УСЛУГА, которую продавец оказывает сам: настройка чат-ботов, разработка, консультации. Обычно на фото — скриншот, схема или макет, а не вещь.',
+    // «Заказать», «оплата» для своей работы — обычные слова; платформы и
+    // «оформляется онлайн» к услуге не относятся; цена «от» в тексте уместна.
+    // Мессенджеры остаются под надзором: бот «в Telegram» — норма, «пишите в
+    // Telegram» — снятие объявления.
+    scanRules: { payment: false, platform: false, digital_phrase: false, game_price: false },
+    fields: [
+      { key: 'srvName', type: 'text', label: 'Что за услуга', ph: 'Чат-бот для записи клиентов',
+        p: 'Услуга', req: 'название услуги', isName: true },
+      { key: 'srvFor', type: 'text', label: 'Для кого', ph: 'салоны красоты, автосервисы, кофейни',
+        p: 'Для кого', pSkipEmpty: true },
+      { key: 'srvIncludes', type: 'area', label: 'Что входит', rows: 3,
+        ph: 'Запись клиентов, ответы на частые вопросы, напоминания, выгрузка заявок…',
+        p: 'Что входит', req: 'что входит в услугу' },
+      { key: 'srvResult', type: 'area', label: 'Что получит клиент', rows: 2,
+        ph: 'Заявки не теряются ночью, администратор не отвечает на одно и то же…',
+        p: 'Результат для клиента', pEmpty: '(не указан — не выдумывай цифр)' },
+      { key: 'srvTerms', type: 'text', label: 'Сроки', ph: 'от 3 дней', p: 'Сроки', pSkipEmpty: true },
+      { key: 'srvFormat', type: 'select', label: 'Формат', options: () => SRV_FORMATS, p: 'Формат' },
+      { key: 'srvPrice', type: 'num', label: 'Цена от, ₽', ph: '15000', p: 'Цена от', pSuffix: ' руб', isPrice: true, pSkipEmpty: true },
+    ],
+    extra: () => `
+ЭТО УСЛУГА — продавец делает работу сам, а не продаёт вещь или подписку:
+- Пиши от первого лица живого специалиста: «настрою», «соберу», «покажу, как работает». Без «наша компания», «команда профессионалов»
+- Главное — польза для бизнеса клиента простыми словами: что перестанет теряться, что сэкономит время. Технологии — второстепенно и без жаргона
+- Цифры результата («+30% заявок») НЕ выдумывай: только если продавец их дал
+- Мессенджеры упоминай ТОЛЬКО как площадку, где будет работать бот («бот в Telegram»). Никогда — как способ связаться с продавцом: «пишите в Telegram» Авито снимает
+- Цену, если она есть, давай как «от N ₽» — точная сумма зависит от задачи
+- Уместно: как проходит работа по шагам, что нужно от клиента, что будет после запуска (поддержка, правки)`,
+  },
 ];
+
+const SRV_FORMATS = ['Удалённо', 'Удалённо или встреча', 'С выездом'];
 
 const PHYS_STATES = ['Новое', 'Как новое', 'Отличное', 'Хорошее', 'Б/у с дефектами'];
 const PHYS_KIT = ['Коробка', 'Документы', 'Провода', 'Чехол', 'Гарантийный талон'];
@@ -1660,6 +1700,14 @@ const DEF_FORM = {
   physPrice: '',
   physBargain: false,
   physDelivery: false,
+  srvName: '',
+  srvFor: '',
+  srvIncludes: '',
+  srvResult: '',
+  srvTerms: '',
+  srvFormat: 'Удалённо',
+  srvPrice: '',
+  physMode: false,   // режим «физический» для подписок и игр — см. PHYS_MODE_CATS
   notes: '',
   style: 'selling',
   customStyle: '',
@@ -1726,6 +1774,7 @@ const state = {
   // флаг гасил бы чужие строки) и последний результат — он живёт в state, потому
   // что фильтр по товару перерисовывает вкладку на каждый символ.
   rotBusy:  new Set(),
+  spec: null,        // сверка характеристик во вкладке «Сканер»: { loading, product, result, error }
   rotResult: null,   // { recId, mode, title, desc, dupAcc }
   rotPanel: null,    // id записи, у которой открыта панель ротации
   conveyorMode: false,
@@ -1954,6 +2003,7 @@ function dbFillFrom(local, inc) {
   local.finalTitle = inc.finalTitle; local.finalDesc = inc.finalDesc;
   local.editShare = inc.editShare;
   if (!local._category && inc._category) local._category = inc._category;
+  if (!local._phys && inc._phys) local._phys = true;
   return n + 1;
 }
 // У эталона недостающее — разобранные приёмы (платный разбор). Массива нет =
@@ -2912,7 +2962,7 @@ const J_UI_ACTS = new Set([
   'db-export','db-add','db-final','ref-add','ref-tricks','ref-preview','ref-voice','conv-photo',
   'db-rotate','db-rot-panel','db-rot-posted','db-show-due',
   'vision-recognize','vision-price','vision-apply-price','vision-covers','vision-undo','vision-pick',
-  'staged-gen','staged-covers','staged-download','staged-scene','staged-quality',
+  'staged-gen','staged-polish','staged-covers','staged-download','staged-scene','staged-quality',
   'staged-series-first','staged-series-rest','staged-series-covers','staged-series-download',
 ]);
 
@@ -2943,7 +2993,7 @@ function jActBusy(act, el) {
       case 'ref-tricks':                                  return !!state._refTricksLoading;
       case 'vision-recognize':                            return state.vision.loading;
       case 'vision-price':                                return state.vision.priceLoading;
-      case 'staged-gen': case 'staged-series-first':
+      case 'staged-gen': case 'staged-polish': case 'staged-series-first':
       case 'staged-series-rest':                          return state.vision.staged.loading;
       default:                                           return false;
     }
@@ -3231,13 +3281,32 @@ const SYS_TAIL = `
 // Системный промпт под конкретную категорию: запреты из SYS_BANS попадают в него
 // только там, где включено соответствующее правило. Без категории (или для той,
 // где всё включено) получается ровно прежний текст — это проверяется паритетом.
-function buildSys(category) {
+// Физ.-режим правит сам системный промпт, а не только перекрывает его блоком в
+// сообщении: иначе модель получала два указания разом («пиши „оформляется онлайн“»
+// и «не пиши») и часто выбирала первое (ревью 03.11). Каждая замена обязана найти
+// свою строку — это держит тест nov03, чтобы правка SYS_HEAD не выключила её молча.
+const SYS_PHYS_EDITS = [
+  ['  * С ценой за месяц: "PS Plus Extra 12 мес — от 608₽/мес, пс4/пс5"\n', ''],
+  ['- Цены подавать по-разному: просто цена / цена за месяц / цена-за-месяц-при-годовом-тарифе / экономия-vs-помесячной-оплаты',
+   '- Цены подавать по-разному: просто цена / цена за весь срок / выгода против покупки игр по отдельности. Цену за месяц НЕ считай и не выноси'],
+  ['- После этого — короткие практические детали (платформа, «оформляется онлайн»)',
+   '- После этого — короткие практические детали (платформа, что входит)'],
+  ['- Как получают товар — пиши «онлайн» («оформляется онлайн»). «В цифре», «цифровая версия» — НЕ пиши: продавец так не говорит',
+   '- Как получают товар — по правилам режима «физический товар» из сообщения. «Оформляется онлайн», «в цифре», «цифровая версия» — НЕ пиши'],
+  [' Правильная нейтральная формулировка — «оформляется онлайн». НЕ пиши «оформляется онлайн на ваш аккаунт» — только «оформляется онлайн», без уточнений.', ''],
+  ['"price_format": "помесячная|общая|цена-за-месяц|экономия-vs-помесячной"', '"price_format": "общая|за-весь-срок|выгода-vs-по-отдельности"'],
+];
+function buildSys(category, phys = false) {
   // Своё правило категории сюда НЕ дописывается: оно уже уходит в пользовательском
   // сообщении через catInfoBlock (c.extra) — иначе текст задваивался бы.
   const bans = SYS_BANS
     .filter(b => category == null || scanRuleOn(category, b.rule))
     .map(b => typeof b.text === 'function' ? b.text(category) : b.text);
-  return SYS_HEAD + (bans.length ? '\n' + bans.join('\n') : '') + SYS_TAIL;
+  let sys = SYS_HEAD + (bans.length ? '\n' + bans.join('\n') : '') + SYS_TAIL;
+  if (phys && PHYS_MODE_CATS.includes(category)) {
+    for (const [from, to] of SYS_PHYS_EDITS) sys = sys.split(from).join(to);
+  }
+  return sys;
 }
 
 // ══════════════════════════════════════════
@@ -3276,7 +3345,7 @@ async function callAI(messages, opts = {}) {
   // общий SYS с правилами Авито там только мешает, и пользовательский customSys к ней не относится.
   // opts.category — под какую категорию собирать запреты (см. buildSys). Не передали —
   // собирается прежний полный набор, то есть путь без категории деградирует безопасно.
-  const sys = buildSys(opts.category);
+  const sys = buildSys(opts.category, !!opts.phys);
   const system = opts.system || (state.settings.customSys ? sys + '\n\n' + state.settings.customSys : sys);
 
   if (provider === 'claude') {
@@ -3442,6 +3511,55 @@ function parseVariants(text) {
 
 // Данные о товаре без стиля/количества/few-shot — общий блок,
 // переиспользуется и полной генерацией, и шагом «сначала заголовки».
+// ══════════════════════════════════════════
+// РЕЖИМ «ФИЗИЧЕСКИЙ» (просьба Дениса 03.11.2026)
+// ══════════════════════════════════════════
+// Подписки и игры Денис часть объявлений размещает как физический товар — и пишет их
+// другим словарём: не «подписка», а «пакет», «доступ», реже «набор»/«комплект» игр;
+// без «месяц»/«в месяц», без «цифра». Это ВТОРОЙ промпт рядом с обычным, а не замена:
+// нужны оба, тумблер выключен — всё как раньше.
+// ⚠️ Словарь ниже — со слов Дениса. Точные формулировки из его объявлений разбирает
+// сервер (запрос Claude1 от 03.11) — по итогам PHYS_MODE_RULES и PHYS_MODE_BANS
+// уточняются, а не пишутся заново.
+const PHYS_MODE_CATS = ['gaming_sub', 'ai_sub', 'game'];
+function physModeOn(f) {
+  return !!(f && f.physMode && PHYS_MODE_CATS.includes(f.category));
+}
+// Слова, которых в физ.-режиме быть не должно. Ими же чистится корпус примеров:
+// образец со словом «подписка» научил бы модель ровно тому, от чего режим уводит.
+const PHYS_MODE_BANS = [
+  { re: /подписк/i, level: 'error', label: '«Подписка» — в физ. режиме пишут «пакет», «доступ», реже «набор»/«комплект»' },
+  { re: /(?<![а-яё])(месяц[а-яё]*|мес\.?|помесячн[а-яё]*|ежемесячн[а-яё]*)(?![а-яё])/i, level: 'error', label: '«Месяц», «в месяц», «/мес» — в физ. режиме не используются' },
+  { re: /(?<![а-яё])циф(р[а-яё]*|е)(?![а-яё])/i, level: 'error', label: '«Цифра», «цифровой» — в физ. режиме не используются' },
+  { re: /оформля[а-яё]*\s+онлайн/i, level: 'warn', label: '«Оформляется онлайн» — в физ. режиме лучше обойтись без него' },
+];
+// Латиница внутри русских слов («Пoдпиcкa», «цифpе» — o, c, p, a латинские) стоит
+// в части эталонов намеренно (разбор Claude1 03.11: 13 эталонов «Игровой подписки»).
+// Слово-фильтр без замены её не видит, поэтому перед проверкой похожие латинские
+// буквы приводятся к русским. Только для проверки — сам текст не меняется.
+const HOMOGLYPHS = { a: 'а', c: 'с', e: 'е', o: 'о', p: 'р', x: 'х', y: 'у', k: 'к', m: 'м',
+  A: 'А', B: 'В', C: 'С', E: 'Е', H: 'Н', K: 'К', M: 'М', O: 'О', P: 'Р', T: 'Т', X: 'Х' };
+// Слово целиком латинское («MechWarrior», «Mecha») — это название, его не трогаем:
+// иначе «Mech» превращался в «Месh» и ловился как «мес» (ревью 03.11).
+function deHomoglyph(text) {
+  return String(text || '').replace(/[a-zа-яё]+/gi, w => /[а-яё]/i.test(w)
+    ? w.replace(/[aceopxykmABCEHKMOPTX]/g, ch => HOMOGLYPHS[ch]) : w);
+}
+function physModeDirty(text) {
+  const t = deHomoglyph(text);
+  return PHYS_MODE_BANS.some(b => b.level === 'error' && b.re.test(t));
+}
+const PHYS_MODE_RULES = `
+
+РЕЖИМ «ФИЗИЧЕСКИЙ ТОВАР» — это объявление размещается как физический товар. Правила ниже ГЛАВНЕЕ любых правил системного промпта о формулировках (в том числе про «оформляется онлайн» и помесячную цену):
+- Слово «подписка» и производные НЕ используй нигде — ни в названии, ни в описании. Вместо него — «пакет», «доступ»; реже «набор» или «комплект» игр. Часто сильнее построить фразу так, чтобы слово вообще не понадобилось
+- «Месяц», «в месяц», «помесячно», «ежемесячно», «/мес» — НЕ используй. Срок называй иначе («на год», «полгода») или не называй вовсе — он виден в параметрах объявления. Цену за месяц не считай и не выноси
+- «Цифра», «цифровой», «в цифре», «цифровая версия», «оформляется онлайн» — НЕ используй
+- Особенно строго — в деталях и практической части: там эти слова проскакивают чаще всего
+- Синонимы подбирай живые и разные между вариантами, не повторяй «пакет» в каждой фразе
+- Покупатель всё равно должен ясно понять, что получает и как этим пользоваться: что входит, на чём работает, на какой срок — прямо, просто другими словами
+- В поле price_format не используй помесячные форматы`;
+
 function catInfoBlock(f) {
   const c = catDef(f.category);
   const lines = [`Категория: ${c.pName || c.label}`];
@@ -3461,9 +3579,12 @@ function catInfoBlock(f) {
       continue;
     }
     const txt = fd.type === 'chips' ? v.join(', ') : String(v);
+    // pSkipEmpty: необязательное поле без значения молчит — «Цена от:  руб» модель
+    // приняла бы за данные и выдумала сумму (ревью 03.11, категория «Услуга»)
+    if (fd.pSkipEmpty && !txt.trim()) continue;
     lines.push(`${fd.p}: ${txt || fd.pEmpty || txt}${fd.pSuffix || ''}`);
   }
-  return lines.join('\n') + (c.extra ? c.extra(f) : '');
+  return lines.join('\n') + (c.extra ? c.extra(f) : '') + (physModeOn(f) ? PHYS_MODE_RULES : '');
 }
 
 function styleLabel(f) {
@@ -3558,8 +3679,8 @@ function formPlats(f) {
 // (ротация записи Истории, вкладка «Сканер»), проверки PS4 нет вовсе.
 function variantScan(v, category, form) {
   if (!v) return v;
-  if (form) v._plats = formPlats(form);
-  v._scan = checkAds(v.title || '', v.description || '', category, v._plats || []);
+  if (form) { v._plats = formPlats(form); v._phys = physModeOn(form); }
+  v._scan = checkAds(v.title || '', v.description || '', category, v._plats || [], { phys: !!v._phys });
   return v;
 }
 
@@ -3570,7 +3691,7 @@ function variantFinish(v, category, form) {
   return variantScan(v, category, form);
 }
 
-function fewShotSamples(category) {
+function fewShotSamples(category, phys = false) {
   // Финальные тексты с Авито — самый сильный образец голоса: вариант из избранного
   // написала модель и человек его одобрил, а финал он ДОРАБОТАЛ СВОЕЙ РУКОЙ уже в
   // форме Авито. Берём только реально изменённые: диалог финала подставляет
@@ -3597,7 +3718,9 @@ function fewShotSamples(category) {
     .filter(r => r.source === 'mine' && (r.title || r.desc))
     .map(r => ({ title: r.title || '', desc: r.desc || '', cat: r.category }));
   // Подпись продавца модели не показываем — её приклеивает код (sigAttach)
-  const all = [...fromFinal, ...fromFav, ...fromRefs].map(x => ({ ...x, desc: sigStrip(x.desc) }));
+  let all = [...fromFinal, ...fromFav, ...fromRefs].map(x => ({ ...x, desc: sigStrip(x.desc) }));
+  // Физ.-режим: примеры со словами «подписка»/«месяц»/«цифра» тянули бы модель обратно
+  if (phys) all = all.filter(x => !physModeDirty(x.title + '\n' + x.desc));
   const own = all.filter(x => x.cat === category);
   // Своя категория в приоритете: факты и правила («оформляется онлайн», запрет
   // цены в тексте) у каждой свои, и переносить их нельзя. Своих нет — берём чужие
@@ -3775,7 +3898,7 @@ function refTricksBlock(category) {
 // одна из осей вариации, схлопывать её в строку значит прятать её от модели.
 function fewShotBlock(f) {
   const category = f.category;
-  const { list, own, all } = fewShotSamples(category);
+  const { list, own, all } = fewShotSamples(category, physModeOn(f));
   if (!list.length) return '';
   const idf = fewShotIdf(all);
   const picks = fewShotPicks(list, fewShotQuery(f), FEWSHOT_N, idf);
@@ -3823,8 +3946,10 @@ function titleSamplesBlock(f) {
     ...(state.favorites || []).filter(v => v.title).map(v => ({ t: v.title, cat: v._category })),
     ...(state.refs || []).filter(r => r.source === 'mine' && r.title).map(r => ({ t: r.title, cat: r.category })),
   ];
-  const own = pool.filter(x => x.cat === f.category);
-  const list = own.length ? own : pool;
+  const phys = physModeOn(f);
+  const clean = phys ? pool.filter(x => !physModeDirty(x.t)) : pool;
+  const own = clean.filter(x => x.cat === f.category);
+  const list = own.length ? own : clean;
   const uniq = [...new Set(list.map(x => String(x.t).trim()).filter(Boolean))];
   if (!uniq.length) return '';
   // Правленые рукой идут первыми и не вытесняются жребием — их единицы против
@@ -3842,14 +3967,28 @@ function learnedBlock(f) {
   return fewShotBlock(f) + titleSamplesBlock(f) + refTricksBlock(f.category);
 }
 
+// «Доп. указания» — для продавца это ГЛАВНАЯ задача объявления, а не приписка:
+// туда он пишет, вокруг чего строить текст целиком (решение Дениса 03.11.2026).
+// Поэтому блок идёт ПЕРВЫМ в сообщении и прямо назван главным. Правила Авито и
+// запреты системного промпта он не отменяет — только расставляет акценты.
+function notesBlock(f) {
+  const t = String(f.notes || '').trim();
+  if (!t) return '';
+  return `ГЛАВНАЯ ЗАДАЧА ОТ ПРОДАВЦА — строй вокруг неё всё объявление: крючок названия, первую фразу, структуру и акценты описания. Где она расходится с привычками стиля или шаблона — побеждает она. Правила Авито, лимиты и запреты из системного промпта остаются в силе.
+<<<
+${t}
+>>>
+
+`;
+}
+
 function buildMsg(overrideCount, excludeTitles = [], formOverride = null) {
   const f = formOverride || state.form;
   const count = overrideCount ?? f.count;
   const excl = excludeTitles.length ? `\nИсключить названия (уже есть): ${excludeTitles.join('; ')}` : '';
-  const notes = f.notes ? `\nДополнительно: ${f.notes}` : '';
-  return `${catInfoBlock(f)}
+  return `${notesBlock(f)}${catInfoBlock(f)}
 Стиль: ${styleLabel(f)}
-Вариантов: ${count}${excl}${notes}${learnedBlock(f)}`;
+Вариантов: ${count}${excl}${learnedBlock(f)}`;
 }
 
 // ══════════════════════════════════════════
@@ -3919,7 +4058,7 @@ async function doGenerate() {
     // которое человек переключил уже после отправки запроса.
     const want = state.form.count;
     const text = await callAI([{ role: 'user', content: buildMsg() }], {
-      webSearch, category: state.form.category,
+      webSearch, category: state.form.category, phys: physModeOn(state.form),
       max_tokens: genTokens(want), onTruncated: () => { truncated = true; },
       truncHint: 'уменьшите число вариантов или длину доп. указаний',
     });
@@ -3936,7 +4075,7 @@ async function doGenerate() {
     state.conveyorIdx = 0;
     save();
     jlog('generated', jChain, {
-      path: 'main', category: state.form.category, product: currentProductName(state.form),
+      path: 'main', category: state.form.category, ...(physModeOn(state.form) ? { physMode: true } : {}), product: currentProductName(state.form),
       provider: state.settings.provider, model: state.settings.provider === 'claude' ? state.settings.model : state.settings.orModel,
       style: state.form.style, notes: state.form.notes || '', webSearch,
       latencyMs: Date.now() - jT0, variants: jVariants(state.results),
@@ -3967,7 +4106,7 @@ async function doGenerateMore() {
     let truncated = false;
     const want = snapForm.count; // до await: снимка может не быть, и тогда это живая форма
     const text = await callAI([{ role: 'user', content: buildMsg(want, excl, snapForm) }], {
-      webSearch, category: snapForm.category,
+      webSearch, category: snapForm.category, phys: physModeOn(snapForm),
       max_tokens: genTokens(want), onTruncated: () => { truncated = true; },
     });
     const fresh = parseVariants(text);
@@ -4026,7 +4165,7 @@ async function doBatchGenerate() {
       try {
         const msg = buildMsg(chunk.length, variants.map(v => v.title));
         const text = await callAI([{ role: 'user', content: msg }], {
-          webSearch, category: state.form.category, max_tokens: genTokens(chunk.length),
+          webSearch, category: state.form.category, phys: physModeOn(state.form), max_tokens: genTokens(chunk.length),
           onTruncated: () => { truncated = true; },
           truncHint: 'уменьшите число регионов в пакете',
         });
@@ -4054,7 +4193,7 @@ async function doBatchGenerate() {
     state.batchExpanded = null;
     save();
     jlog('generated', jChain, {
-      path: 'batch', category: state.form.category, product: currentProductName(state.form),
+      path: 'batch', category: state.form.category, ...(physModeOn(state.form) ? { physMode: true } : {}), product: currentProductName(state.form),
       provider: state.settings.provider, model: state.settings.provider === 'claude' ? state.settings.model : state.settings.orModel,
       regions, chunkFails, latencyMs: Date.now() - jT0,
       ...(truncated ? { truncated: true } : {}), // хотя бы один чанк не уместился в лимит
@@ -4080,8 +4219,7 @@ async function doBatchGenerate() {
 
 function buildTitlesMsg(n) {
   const f = state.form;
-  const notes = f.notes ? `\nДополнительно: ${f.notes}` : '';
-  return `${catInfoBlock(f)}${notes}
+  return `${notesBlock(f)}${catInfoBlock(f)}
 
 ЗАДАЧА: сгенерируй ${n} вариантов НАЗВАНИЙ (только названия, БЕЗ описаний) для одного и того же объявления. Каждое — из РАЗНОЙ точки пространства вариаций (разный крючок, разное написание/сокращение, разный порядок слов). Строго следуй формуле и правилам названий из системного промпта (лимит 50 символов, запрещённые слова, для игр — без цены).${learnedBlock(f)}
 
@@ -4116,7 +4254,7 @@ async function doGenTitlesOnly() {
     const n = Math.max(8, Math.min(12, (state.form.count || 5) * 2));
     let truncated = false;
     const text = await callAI([{ role: 'user', content: buildTitlesMsg(n) }], {
-      webSearch, category: state.form.category,
+      webSearch, category: state.form.category, phys: physModeOn(state.form),
       max_tokens: titleTokens(n, webSearch), onTruncated: () => { truncated = true; },
     });
     const titles = parseTitles(text)
@@ -4132,7 +4270,7 @@ async function doGenTitlesOnly() {
     if (truncated && titles.length < n) toast(`⚠️ Ответ оборвался — названий пришло ${titles.length} из ${n}.`);
     state.titleStep = { titles, selected: {}, form: JSON.parse(JSON.stringify(state.form)), _chain: jChain };
     jlog('generated', jChain, {
-      path: 'titles', category: state.form.category, product: currentProductName(state.form),
+      path: 'titles', category: state.form.category, ...(physModeOn(state.form) ? { physMode: true } : {}), product: currentProductName(state.form),
       latencyMs: Date.now() - jT0, titles: titles.map(t => t.title),
       ...(truncated ? { truncated: true } : {}),
     });
@@ -4166,9 +4304,8 @@ async function doGenDescriptionsForTitles() {
   try {
     const f = step.form;
     const webSearch = f.isPreorder && f.category === 'game';
-    const notes = f.notes ? `\nДополнительно: ${f.notes}` : '';
     const list = chosen.map((t, i) => `${i + 1}. "${t.title}" (крючок: ${t.hook || '—'})`).join('\n');
-    const msg = `${catInfoBlock(f)}${notes}
+    const msg = `${notesBlock(f)}${catInfoBlock(f)}
 Стиль: ${styleLabel(f)}
 
 Названия УЖЕ ВЫБРАНЫ продавцом — менять текст названия НЕЛЬЗЯ, перенеси его в поле title символ-в-символ:
@@ -4179,7 +4316,7 @@ ${list}
 {"variants":[{"id":1,"title":"(как в списке, без изменений)","title_length":число,"description":"...","style":"...","price_format":"...","hook":"...","structure":"..."}]}`;
     let truncated = false;
     const text = await callAI([{ role: 'user', content: msg }], {
-      webSearch, category: f.category, max_tokens: genTokens(chosen.length),
+      webSearch, category: f.category, phys: physModeOn(f), max_tokens: genTokens(chosen.length),
       onTruncated: () => { truncated = true; },
       truncHint: 'выберите меньше названий за один раз',
     });
@@ -4221,7 +4358,7 @@ ${list}
     state.titleStep = null;
     save();
     jlog('generated', jChain, {
-      path: 'descriptions', category: f.category, product: currentProductName(f),
+      path: 'descriptions', category: f.category, ...(physModeOn(f) ? { physMode: true } : {}), product: currentProductName(f),
       offered: step.titles.length, chosen: chosen.map(t => t.title), // выбор Дениса из предложенных заголовков
       latencyMs: Date.now() - jT0, variants: jVariants(state.results),
       ...(truncated ? { truncated: true } : {}),
@@ -4256,7 +4393,7 @@ async function doGenAltTitles(id) {
     // titleTokens (он же учитывает надбавку на веб-поиск).
     let truncated = false;
     const text = await callAI([{ role: 'user', content: msg }], {
-      webSearch, category: snapForm.category, max_tokens: titleTokens(5, webSearch),
+      webSearch, category: snapForm.category, phys: physModeOn(snapForm), max_tokens: titleTokens(5, webSearch),
       onTruncated: () => { truncated = true; },
     });
     const alt = parseTitles(text).map(t => ({ ...t, len: [...t.title].length }));
@@ -4289,7 +4426,7 @@ async function doRegen(id) {
     const webSearch = snapForm.isPreorder && category === 'game';
     let truncated = false;
     const text = await callAI([{ role: 'user', content: buildMsg(1, excl, snapForm) }],
-      { webSearch, category, onTruncated: () => { truncated = true; } });
+      { webSearch, category, phys: physModeOn(snapForm), onTruncated: () => { truncated = true; } });
     const [v] = parseVariants(text);
     sigAttach(v, category); // до записи в журнал: after — это текст, который увидит продавец
     const { arr, idx } = findResultRef(id);
@@ -4334,9 +4471,9 @@ async function doRephrase(vid, fid) {
     const msg = `Перефразируй это объявление для Авито. Сделай его СТРУКТУРНО ДРУГИМ — как будто писал другой продавец:
 - Другая структура описания (поменяй порядок блоков)
 - Другой крючок в названии: для подписок/AI — другая игра, фича или подача цены; для игры — другая форма написания названия (рус/англ/аббревиатура) и другой продающий довод (не образ); цена в названии игры ЗАПРЕЩЕНА
-- Другая подача цены в описании (если помесячная — сделай общую, и наоборот); для игры цену в описании не упоминать
+- ${v._phys ? 'Другая подача цены в описании, но БЕЗ помесячной: месяц не упоминать' : 'Другая подача цены в описании (если помесячная — сделай общую, и наоборот)'}; для игры цену в описании не упоминать
 - Другой тон (если деловой — сделай более живым, и наоборот)
-- Название строго до 50 символов
+- Название строго до 50 символов${v._phys ? PHYS_MODE_RULES : ''}
 
 Исходное название: «${v.title}»
 Исходное описание:
@@ -4348,7 +4485,7 @@ ${sigStrip(v.description)}
     const webSearch = state.form.isPreorder && state.form.category === 'game';
     let truncated = false;
     const text = await callAI([{ role: 'user', content: msg }], {
-      webSearch, category: v._category || state.form.category,
+      webSearch, category: v._category || state.form.category, phys: !!v._phys,
       max_tokens: genTokens(1), onTruncated: () => { truncated = true; },
     });
     const [nv] = parseVariants(text);
@@ -4389,8 +4526,8 @@ ${sigStrip(v.description)}
     box._rephResult = {
       ...nv, id: vid, _fid: Date.now(),
       _chain: v._chain || null, _product: v._product || null, _category: v._category || null,
-      _plats: v._plats || [],
-      _scan: checkAds(nv.title || '', nv.description || '', v._category || state.form.category, v._plats || []),
+      _plats: v._plats || [], _phys: !!v._phys,
+      _scan: checkAds(nv.title || '', nv.description || '', v._category || state.form.category, v._plats || [], { phys: !!v._phys }),
     };
   } catch(e) {
     box.innerHTML = `<div style="padding:8px 12px;color:var(--err);font-size:13px">✗ ${esc(e.message)}</div>`;
@@ -4424,15 +4561,17 @@ function rotUsedTitles(rec, crossAcc = false) {
   return out;
 }
 
-function rotPrompt(mode, live, used) {
-  const exclude = used.length
+// phys — запись размещена в режиме «физический» (rec._phys): ротация не должна
+// вернуть в текст «подписку» и помесячную цену (ревью 03.11)
+function rotPrompt(mode, live, used, phys = false) {
+  const exclude = (used.length
     ? `\n\nЭТИ НАЗВАНИЯ УЖЕ ЗАНЯТЫ — повторять их ЗАПРЕЩЕНО (дубль на площадке):\n${used.map(t => `- ${t}`).join('\n')}`
-    : '';
+    : '') + (phys ? PHYS_MODE_RULES : '');
   if (mode === 'mid') {
     return `Перепиши это объявление для Авито СТРУКТУРНО ДРУГИМ — как будто писал другой продавец:
 - Другой порядок блоков описания
 - Другой крючок в названии
-- Другая подача цены (была помесячная — сделай общую, и наоборот); для игры цену в описании не упоминать
+- ${phys ? 'Другая подача цены, но БЕЗ помесячной: месяц не упоминать' : 'Другая подача цены (была помесячная — сделай общую, и наоборот)'}; для игры цену в описании не упоминать
 - Другой тон (деловой ↔ живой)
 - Факты (что входит, сроки, состояние, комплектация) НЕ менять и НЕ выдумывать
 - Название строго до 50 символов
@@ -4494,8 +4633,8 @@ async function doRotate(recId, mode) {
     const used = rotUsedTitles(rec, crossAcc);
     let truncated = false;
     // Подпись модели не показываем: прокрутит её — получится пересказ, а не подпись
-    const text = await callAI([{ role: 'user', content: rotPrompt(mode, { ...live, desc: sigStrip(live.desc) }, used) }], {
-      category: rec._category || state.form.category,
+    const text = await callAI([{ role: 'user', content: rotPrompt(mode, { ...live, desc: sigStrip(live.desc) }, used, !!rec._phys) }], {
+      category: rec._category || state.form.category, phys: !!rec._phys,
       max_tokens: genTokens(1), onTruncated: () => { truncated = true; },
     });
     const [nv] = parseVariants(text);
@@ -4509,11 +4648,11 @@ async function doRotate(recId, mode) {
 
     state.rotResult = {
       recId, mode, title: nv.title || '', desc: nv.description || '', dupAcc,
-      scan: checkAds(nv.title || '', nv.description || '', rec._category || state.form.category),
+      scan: checkAds(nv.title || '', nv.description || '', rec._category || state.form.category, [], { phys: !!rec._phys }),
     };
     jlog('generated', rec._chain || null, {
       path: mode === 'mid' ? 'rotate_mid' : 'rotate',
-      product: rec.product || null, category: rec._category || null,
+      product: rec.product || null, category: rec._category || null, ...(rec._phys ? { physMode: true } : {}),
       baseTitle: live.title, excluded: used.length,
       variants: [{ title: nv.title || '', description: nv.description || '' }],
       ...(truncated ? { truncated: true } : {}),
@@ -5432,28 +5571,48 @@ async function stagedRequest(prompt, refs, quality) {
   return stagedExtractImage(await r.json());
 }
 
-async function doStagedPhoto() {
+// «Доделать в финал» (просьба Дениса 03.11.2026): раньше финал рисовался заново по
+// одному фото товара — и комната выходила другой, хотя черновик уже устроил. Теперь
+// черновик идёт ВТОРЫМ референсом, как кадр-комната в серии. Копии один в один это
+// не даёт (модель перерисовывает), но сцена, ракурс и свет держатся.
+const STAGED_POLISH_RULE = [
+  '',
+  'К ЗАПРОСУ ПРИЛОЖЕНЫ ДВЕ КАРТИНКИ:',
+  '- Первая — фото товара. Товар бери ТОЛЬКО с неё: модель, цвет, надписи, состояние.',
+  '- Вторая — черновик этого же кадра, который продавца УЖЕ УСТРОИЛ. Повтори его как можно точнее: та же комната, мебель, расстановка, ракурс камеры, положение товара в кадре, свет и время суток.',
+  '- Задача — тот же кадр в лучшем качестве: чище детали, фактуры, резкость, естественный свет. Ничего не переставляй и не придумывай новое.',
+  '- Если товар на черновике отличается от фото — прав фото: исправь товар, а не обстановку.',
+].join('\n');
+
+async function doStagedPhoto(polish = false) {
   const v = state.vision;
   const st = v.staged;
   if (st.loading || !v.dataUrl) return;
+  if (polish && !(st.img && st.img.quality !== 'high')) return;
   st.loading = true; st.error = '';
   reForm();
   const jT0 = Date.now();
   // Снимок всего, что уйдёт в промпт и в журнал, — ДО await. Форма во время
   // генерации не заблокирована (а идти она может минуту), и переключённая
   // категория иначе уехала бы в журнал как та, по которой строился промпт.
-  const scene = st.scene;
-  const quality = st.quality;
+  // При доводке сцена и уточнение — черновика, а не выбранные в карточке сейчас:
+  // их могли переключить после черновика, а повторять надо именно его.
+  const base = polish ? st.img : null;
+  const scene = base ? base.scene : st.scene;
+  const extra = base ? (base.extra ?? st.extra) : st.extra;
+  const quality = polish ? 'high' : st.quality;
   const jCategory = state.form.category;
   const jProduct = currentProductName(state.form);
   try {
-    const dataUrl = await stagedRequest(stagedPrompt(), [v.dataUrl], quality);
-    st.img = { dataUrl, scene, quality };
+    const refs = base ? [v.dataUrl, await stagedJpeg(base.dataUrl, STAGED_ROOM_PX)] : [v.dataUrl];
+    const prompt = stagedPrompt({ scene, extra }) + (base ? '\n' + STAGED_POLISH_RULE : '');
+    const dataUrl = await stagedRequest(prompt, refs, quality);
+    st.img = { dataUrl, scene, quality, extra, polished: !!base };
     st.count++;
     sceneUsed(scene);   // сцена уходит наверх списка — им и пользуются чаще всего
     jlog('staged', null, {
-      ok: true, phase: 'generate', scene, quality, aspect: STAGED_ASPECT,
-      extra: st.extra.trim().slice(0, 200),
+      ok: true, phase: base ? 'polish' : 'generate', scene, quality, aspect: STAGED_ASPECT,
+      extra: extra.trim().slice(0, 200),
       category: jCategory, product: jProduct,
       attempt: st.count, latencyMs: Date.now() - jT0,
     });
@@ -5738,6 +5897,7 @@ function stagedCardHTML() {
       <button class="vision-btn vision-btn-main" data-act="staged-gen" ${busy ? 'disabled' : ''}>
         ${st.loading ? '⏳ Рисую сцену…' : st.img ? '↻ Ещё вариант' : '🏠 Поставить в интерьер'}
       </button>
+      ${st.img && st.img.quality !== 'high' ? `<button class="vision-btn" data-act="staged-polish" title="Тот же кадр в качестве «Финал»: черновик идёт образцом, комната и ракурс сохраняются (точной копии не будет — модель перерисует детали)" ${busy ? 'disabled' : ''}>💎 Доделать в финал · ${stagedUsd('high', 1)}</button>` : ''}
       ${st.img ? `<button class="vision-btn" data-act="staged-covers" ${busy ? 'disabled' : ''}>🖼 → в обложки</button>` : ''}
       ${st.img ? `<button class="vision-btn" data-act="staged-download" ${busy ? 'disabled' : ''}>⬇ Скачать</button>` : ''}
     </div>
@@ -5971,12 +6131,16 @@ function formHTML() {
       <select data-act="cat">
         ${CATS.map(c => `<option value="${esc(c.id)}" ${f.category===c.id?'selected':''}>${esc(c.label)}</option>`).join('')}
       </select>
+      ${PHYS_MODE_CATS.includes(f.category) ? `<div class="pills" style="margin-top:8px">
+        <span class="pill ${f.physMode ? '' : 'on'}" data-act="physmode" data-val="0" title="Обычный словарь: «подписка», сроки в месяцах, «оформляется онлайн»">💾 Цифровой</span>
+        <span class="pill ${f.physMode ? 'on' : ''}" data-act="physmode" data-val="1" title="Объявление как физический товар: «пакет», «доступ» вместо «подписка», без «месяц» и «цифра»">📦 Физический</span>
+      </div>` : ''}
     </div>
     ${catFields}
     <div class="field">
       <label>Доп. указания</label>
-      <input type="text" value="${esc(f.notes)}" data-act="field" data-k="notes"
-        placeholder="Акцент на цену/мес, объединить с Deluxe…">
+      <textarea data-act="field" data-k="notes" rows="5" class="notes-grow"
+        placeholder="Главная задача для генератора: что подчеркнуть, о чём молчать, кому продаём…">${esc(f.notes)}</textarea>
     </div>
     <div class="field">
       <label>Стиль</label>
@@ -6188,7 +6352,7 @@ async function doStartSession() {
         const jT0 = Date.now();
         let truncated = false;
         const text = await callAI([{ role: 'user', content: buildMsg(1, [], form) }],
-          { webSearch, category: form.category, onTruncated: () => { truncated = true; } });
+          { webSearch, category: form.category, phys: physModeOn(form), onTruncated: () => { truncated = true; } });
         const v = parseVariants(text)[0] || null;
         // Это платные генерации, и раньше они не попадали в журнал вообще: путь «очередь →
         // сессия постинга» выглядел как размещения без единой генерации, а posted уходил
@@ -6200,7 +6364,7 @@ async function doStartSession() {
           v._category = form.category;
           variantFinish(v, form.category, form);
           jlog('generated', jChain, {
-            path: 'session', category: form.category, product: v._product, region: it.region || null,
+            path: 'session', category: form.category, ...(physModeOn(form) ? { physMode: true } : {}), product: v._product, region: it.region || null,
             provider: state.settings.provider, model: state.settings.provider === 'claude' ? state.settings.model : state.settings.orModel,
             webSearch, latencyMs: Date.now() - jT0, variants: jVariants([v]),
             ...(truncated ? { truncated: true } : {}),
@@ -11567,7 +11731,9 @@ function scanRuleOn(catId, ruleId) {
 
 // plats — платформы из формы генератора (необязательно): по ним Сканер видит,
 // что модель выбросила PS4, которую продавец отметил.
-function checkAds(title, desc, category, plats) {
+// opts.phys — объявление в режиме «физический» (см. PHYS_MODE_BANS)
+function checkAds(title, desc, category, plats, opts = {}) {
+  const phys = !!opts.phys && PHYS_MODE_CATS.includes(category);
   // Подпись продавца Сканер не проверяет (решение Дениса 15.10): это его
   // осознанный текст, и цена-приманка в ней («условно 1000 руб») для игр давала
   // бы красный бейдж на каждом варианте. Слова подписи не засчитываются и в
@@ -11620,7 +11786,18 @@ function checkAds(title, desc, category, plats) {
     }
   }
 
-  if (on('digital_phrase')) {
+  if (phys) {
+    let hit = false;
+    const plain = deHomoglyph(full);
+    for (const b of PHYS_MODE_BANS) {
+      if (!b.re.test(plain)) continue;
+      (b.level === 'error' ? errors : warnings).push('Физ. режим: ' + b.label); hit = true;
+    }
+    if (!hit) ok.push('Физ. режим: «подписка», «месяц», «цифра» не найдены');
+  }
+
+  // В физ.-режиме «оформляется онлайн» не требуется — наоборот, его избегают
+  if (on('digital_phrase') && !phys) {
     if (!DIGITAL_RE.test(full)) {
       warnings.push('Нет фразы «оформляется онлайн» — обязательно для игр');
     } else {
@@ -11680,6 +11857,87 @@ function scanBadgeHTML(v) {
   return `<span class="scan-badge" style="color:${color}" title="${esc(tip)}">${icon}</span>`;
 }
 
+// ══════════════════════════════════════════
+// СВЕРКА ХАРАКТЕРИСТИК (просьба Дениса 03.11.2026)
+// ══════════════════════════════════════════
+// Для незнакомых товаров: в тексте легко написать 1 ТБ вместо 512 ГБ или не ту
+// влагозащиту чехла — и объявление обманет покупателя, а продавец получит возврат.
+// Сканер запрещёнки такое не видит: это вопрос фактов, а не слов. Модель с
+// веб-поиском вытаскивает технические утверждения и сверяет каждое с источниками.
+// Только по кнопке (решение Дениса): каждая сверка — платный поиск.
+const SPEC_CHECK_SYS = `Ты — технический фактчекер объявлений о продаже товаров. Тебе дают текст объявления.
+1) Определи, что за товар (бренд, модель, ревизия). Если продавец назвал модель отдельно — она главнее текста.
+2) Выпиши из текста ВСЕ проверяемые технические утверждения: объём памяти и накопителя, размеры, вес, материалы, степень защиты (IP, водонепроницаемость), совместимость, версии и ревизии, порты, ёмкость батареи, комплектацию «из коробки», поддерживаемые форматы и т.п. Маркетинговые оценки («удобный», «надёжный») и состояние конкретного экземпляра (царапины, износ) НЕ проверяй — их по сети не сверить.
+3) Каждое утверждение проверь веб-поиском по официальным характеристикам производителя, крупным магазинам, обзорам. Учитывай, что у модели бывает несколько версий: если утверждение верно только для одной из них — так и скажи.
+4) Не придумывай. Не нашёл подтверждения — verdict "unclear", а не "ok".
+Ответ — строго JSON без markdown-обёртки:
+{"product":"что за товар по твоему мнению","items":[{"claim":"что написано в тексте","actual":"как на самом деле (с единицами)","verdict":"ok|wrong|unclear","source":"сайт или документ, откуда факт","note":"коротко: в чём расхождение или оговорка"}],"summary":"одна-две фразы: можно ли публиковать как есть"}`;
+
+function specResultsHTML() {
+  const sp = state.spec;
+  if (!sp) return '';
+  if (sp.error) return `<div class="vision-err" style="margin-top:10px">⚠ ${esc(sp.error)}</div>`;
+  if (!sp.result) return '';
+  const r = sp.result;
+  const items = Array.isArray(r.items) ? r.items : [];
+  const V = {
+    ok:      { i: '✅', c: 'var(--ok)',   t: 'сходится' },
+    wrong:   { i: '❌', c: 'var(--err)',  t: 'не сходится' },
+    unclear: { i: '⚠',  c: 'var(--warn)', t: 'не подтверждено' },
+  };
+  const order = { wrong: 0, unclear: 1, ok: 2 };
+  const rows = items.slice().sort((a, b) => (order[a.verdict] ?? 1) - (order[b.verdict] ?? 1)).map(it => {
+    const v = V[it.verdict] || V.unclear;
+    return `<tr>
+      <td style="padding:6px 8px;vertical-align:top;white-space:nowrap;color:${v.c}" title="${v.t}">${v.i}</td>
+      <td style="padding:6px 8px;vertical-align:top">${esc(String(it.claim || ''))}</td>
+      <td style="padding:6px 8px;vertical-align:top">${esc(String(it.actual || ''))}${it.note ? `<div style="font-size:12px;color:var(--muted);margin-top:2px">${esc(String(it.note))}</div>` : ''}</td>
+      <td style="padding:6px 8px;vertical-align:top;font-size:12px;color:var(--muted);word-break:break-word">${esc(String(it.source || ''))}</td>
+    </tr>`;
+  }).join('');
+  const bad = items.filter(x => x.verdict === 'wrong').length;
+  const unc = items.filter(x => x.verdict === 'unclear').length;
+  return `<div style="margin-top:12px">
+    <div style="font-size:13px;margin-bottom:6px"><b>${esc(String(r.product || 'Товар не определён'))}</b> · утверждений: ${items.length}${bad ? ` · <span style="color:var(--err)">❌ ${bad}</span>` : ''}${unc ? ` · <span style="color:var(--warn)">⚠ ${unc}</span>` : ''}</div>
+    ${items.length ? `<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:13px">
+      <thead><tr style="text-align:left;color:var(--muted);font-size:12px"><th></th><th style="padding:4px 8px">Написано</th><th style="padding:4px 8px">На самом деле</th><th style="padding:4px 8px">Источник</th></tr></thead>
+      <tbody>${rows}</tbody></table></div>` : '<div style="font-size:13px;color:var(--muted)">Проверяемых технических утверждений в тексте не нашлось.</div>'}
+    ${r.summary ? `<div class="vision-hint" style="margin-top:8px">${esc(String(r.summary))}</div>` : ''}
+    <div style="font-size:11px;color:var(--muted);margin-top:6px">Модель тоже ошибается: ❌ — повод перепроверить по источнику, а не готовый вердикт.</div>
+  </div>`;
+}
+
+async function doSpecCheck(title, desc, product) {
+  const text = [title, sigStrip(desc || '')].filter(x => String(x || '').trim()).join('\n\n');
+  if (!text.trim()) { toast('Вставьте название или описание'); return; }
+  if (state.spec?.loading) return;
+  state.spec = { loading: true, product: product.trim(), result: null, error: '' };
+  const repaint = () => {
+    const btn = document.getElementById('spec-run');
+    if (btn) { btn.disabled = !!state.spec.loading; btn.textContent = state.spec.loading ? '⏳ Сверяю — до пары минут…' : '🔬 Сверить характеристики'; }
+    const out = document.getElementById('spec-results');
+    if (out) out.innerHTML = specResultsHTML();
+  };
+  repaint();
+  const t0 = Date.now();
+  try {
+    const msg = `${product.trim() ? `Модель товара (со слов продавца): ${product.trim()}\n\n` : ''}Текст объявления:\n<<<\n${text.slice(0, 6000)}\n>>>`;
+    const out = await callAI([{ role: 'user', content: msg }], {
+      provider: 'claude', system: SPEC_CHECK_SYS, webSearch: true, max_tokens: 8000, temperature: 0.1, thinking: true,
+    });
+    const r = JSON.parse(extractJSON(out));
+    if (!r || !Array.isArray(r.items)) throw new Error('Ответ модели не разобрался — попробуйте ещё раз');
+    state.spec.result = r;
+  } catch (e) {
+    state.spec.error = e.message || String(e);
+    console.error(e);
+    jlog('error', null, { stage: 'spec_check', message: String(e.message || '').slice(0, 300), latencyMs: Date.now() - t0 });
+  } finally {
+    state.spec.loading = false;
+    repaint();
+  }
+}
+
 function scannerTabHTML() {
   // UX-7: приходит с карточки объявления через goToScanner() — пред-заполняет поля
   const pre = state._scanPrefill;
@@ -11710,14 +11968,24 @@ function scannerTabHTML() {
           <label>Описание объявления</label>
           <textarea id="scan-desc" rows="11" placeholder="Вставьте полный текст описания...">${esc(pre?.desc||'')}</textarea>
         </div>
+        <label style="display:flex;gap:8px;align-items:center;font-size:13px;margin-bottom:6px;cursor:pointer" title="Только для подписок и игр: ловит «подписка», «месяц», «цифра»">
+          <input type="checkbox" id="scan-phys" ${pre?.phys ? 'checked' : ''} style="width:auto"> 📦 Физический режим
+        </label>
         <div id="scan-results"></div>
+        <div style="margin-top:16px;padding-top:14px;border-top:1px solid var(--border)">
+          <div style="font-size:14px;font-weight:600;margin-bottom:4px">🔬 Сверка характеристик</div>
+          <div style="font-size:12px;color:var(--muted);margin-bottom:8px">Модель с веб-поиском находит в тексте технические утверждения (память, влагозащита, размеры, версии, совместимость) и сверяет каждое с источниками. Нужна для незнакомых товаров. Стоит денег за поиск — только по кнопке.</div>
+          <input type="text" id="spec-product" placeholder="Точная модель товара, если в тексте её нет (необязательно): Sony PS5 Slim CFI-2008" style="margin-bottom:8px" value="${esc(state.spec?.product || '')}">
+          <button class="vision-btn" id="spec-run" ${state.spec?.loading ? 'disabled' : ''}>${state.spec?.loading ? '⏳ Сверяю — до пары минут…' : '🔬 Сверить характеристики'}</button>
+          <div id="spec-results">${specResultsHTML()}</div>
+        </div>
       </div>
     </div>
   </div>`;
 }
 
-function goToScanner(title, desc, category) {
-  state._scanPrefill = { title: title || '', desc: desc || '', category: category || 'gaming_sub' };
+function goToScanner(title, desc, category, phys = false) {
+  state._scanPrefill = { title: title || '', desc: desc || '', category: category || 'gaming_sub', phys: !!phys };
   state.tab = 'scanner';
   render();
 }
@@ -11728,6 +11996,7 @@ function bindScannerTab() {
   const catEl     = document.getElementById('scan-cat');
   const lenEl     = document.getElementById('scan-len');
   const resultsEl = document.getElementById('scan-results');
+  const physEl    = document.getElementById('scan-phys');
 
   function runCheck() {
     const title = titleEl.value;
@@ -11741,7 +12010,7 @@ function bindScannerTab() {
 
     if (!title && !desc) { resultsEl.innerHTML = ''; return; }
 
-    const { errors, warnings, ok } = checkAds(title, desc, cat);
+    const { errors, warnings, ok } = checkAds(title, desc, cat, [], { phys: !!physEl?.checked });
 
     const errBlock = errors.length ? `
       <div style="margin-bottom:12px">
@@ -11773,6 +12042,10 @@ function bindScannerTab() {
   titleEl?.addEventListener('input', runCheck);
   descEl?.addEventListener('input', runCheck);
   catEl?.addEventListener('change', runCheck);
+  physEl?.addEventListener('change', runCheck);
+  document.getElementById('spec-run')?.addEventListener('click', () => {
+    doSpecCheck(titleEl.value, descEl.value, document.getElementById('spec-product')?.value || '');
+  });
 
   // UX-7: пришли с карточки объявления — поля уже заполнены шаблоном, сразу прогнать проверку
   if (state._scanPrefill) { state._scanPrefill = null; runCheck(); }
@@ -12075,6 +12348,7 @@ document.addEventListener('click', e => {
 
     // «Товар в интерьере» (направление 2б)
     case 'staged-gen':         doStagedPhoto(); break;
+    case 'staged-polish':      doStagedPhoto(true); break;
     case 'staged-covers':      stagedToCovers(); break;
     case 'staged-download':    stagedDownload(); break;
     case 'staged-scene':
@@ -12276,6 +12550,7 @@ document.addEventListener('click', e => {
           // Категория нужна финальному тексту: он идёт в примеры генерации, а правила
           // и факты у категорий разные — без неё финал некуда положить
           _category: item.variant?._category || null,
+          ...(item.variant?._phys ? { _phys: true } : {}),
         });
         save();
         // Журнал: в сессии постинга диалог финала не показываем (не рвём конвейерный темп) —
@@ -12339,6 +12614,10 @@ document.addEventListener('click', e => {
 
     case 'style':
       state.form.style = el.dataset.val; save(); reForm();
+      break;
+
+    case 'physmode':
+      state.form.physMode = el.dataset.val === '1'; save(); reForm();
       break;
 
     case 'count':
@@ -12564,6 +12843,7 @@ document.addEventListener('click', e => {
         title: res.title, description: res.desc,
         status: 'active', note: src.note || '',
         _category: src._category || null, _chain: src._chain || null,
+        ...(src._phys ? { _phys: true } : {}),
         _rotFrom: src._uid || null,        // связь с предшественником — для разбора журнала
       };
       state.db.push(fresh);
@@ -12789,7 +13069,7 @@ document.addEventListener('click', e => {
         v = fid ? state.favorites.find(f => f._fid === fid) : findResult(vid);
       }
       if (!v) break;
-      goToScanner(v.title, v.description, v._category || state.form.category);  // F4: категория из варианта
+      goToScanner(v.title, v.description, v._category || state.form.category, !!v._phys);  // F4: категория из варианта
       break;
     }
 
@@ -12823,6 +13103,7 @@ document.addEventListener('click', e => {
         // которую переключён генератор, и финал по вещи уехал бы в примеры игр —
         // с ценой в теле, которую правила игр запрещают. Нет штампа — пусть null.
         _category: v._category || null,
+        ...(v._phys ? { _phys: true } : {}),
       });
       save();
       // rec — ключ записи Истории: по нему разбор склеивает posted и все edited
@@ -12875,6 +13156,7 @@ document.addEventListener('click', e => {
         status: 'active', note: '', date: new Date().toLocaleDateString('ru'),
         _chain: item.variant._chain || null,
         _category: item.variant._category || null,
+        ...(item.variant._phys ? { _phys: true } : {}),
       });
       save();
       jlog('posted', item.variant._chain || null, {
@@ -13020,6 +13302,10 @@ document.addEventListener('input', e => {
   const act = el.dataset.act;
   if (act === 'field') {
     if (!(el.dataset.k === 'games' && subGamesField(el))) state.form[el.dataset.k] = el.value;
+    // Запасной путь для браузеров без field-sizing: подгоняем высоту по тексту
+    if (el.classList.contains('notes-grow') && !CSS.supports('field-sizing', 'content')) {
+      el.style.height = 'auto'; el.style.height = el.scrollHeight + 2 + 'px';
+    }
     clearTimeout(el._t); el._t = setTimeout(save, 400);
   }
   if (act === 'dur-price') {

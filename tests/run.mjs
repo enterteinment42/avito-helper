@@ -29,6 +29,7 @@ import { runMobile } from './mobile.mjs';
 import { runRawsafe } from './rawsafe.mjs';
 import { runJournalfix } from './journalfix.mjs';
 import { runSubgames } from './subgames.mjs';
+import { runNov03 } from './nov03.mjs';
 
 const only = process.argv[2]; // node run.mjs parity|editor|regress — прогнать одну секцию
 
@@ -67,6 +68,7 @@ try {
   if (!only || only === 'brand')   await runBrand(browser, base, t);
   if (!only || only === 'journalfix') await runJournalfix(browser, base, t);
   if (!only || only === 'subgames') await runSubgames(browser, base, t);
+  if (!only || only === 'nov03')   await runNov03(browser, base, t);
   if (!only || only === 'regress') await runRegress(browser, base, t);
 } catch (e) {
   console.error('\nСтенд упал:', e);
