@@ -50,7 +50,13 @@ S6-база — копия журнала перед каждым разборо
 Решение Дениса — метка, а не пропуск: витрина `13c6735` (`session_start.admin`), разбор — `poigraem-backend` `a22aaf3`
 (`tools/journal-analysis/owner-filter.js`). Метка — только в браузерах, где был вход в админку.
 
-**Что осталось.** Windows — `TASK-JOURNAL-FIXES-2-WINDOWS.md`. Следующий разбор —
+**Ночью — модели (инфраструктура, по просьбе Дениса).** DeepSeek V4.1 Flash (1017) на кодовом стенде REV-1+2 через Go —
+**23/26** против 18/26 у V4 Pro на той же базе `063f228`, ≈ $0,06 против $0,27; лимит Go на Flash $100/мес против $15.
+Стенд поправлен: `code-bench.sh` — `BASE`, `code-grade.js` — коммиты от `ref`. Ночная смена (`cx` и `oc`) и профиль Codex
+`chatgpt` → **GPT-6.2 Sol** (вышла 17.11, пробы ✓); OpenCode на сервере 1.19.6. Всё — `~/bin/AI-SHELLS.md` (18.11),
+ревью — `~/bin/model-bench/results-code/2026-11-18/REVIEW-go-flash.md`, строка в `~/INFRA-JOURNAL.md`.
+
+**Что осталось.** Windows — `TASK-JOURNAL-FIXES-2-WINDOWS.md`. Пин OpenCode 1.19.5 в `restore.sh` и `ai-setup.ps1` (сервер уже 1.19.6) и профиль chatgpt на Windows (6.1) — решить. Следующий разбор —
 после выкатки этих правок и ≥10 новых цифровых публикаций: тело без подписи, предзаказ, написания названия, physMode.
 Пуш `avito-helper` и `poigraem-backend` — решение Дениса.
 
