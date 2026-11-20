@@ -105,6 +105,27 @@ async function snapshot(page) {
 
 const swap = s => EXPECTED_SWAPS.reduce((acc, [from, to]) => acc.split(from).join(to), s);
 
+function expectedPrompt(name, text) {
+  if (name.startsWith('ai_sub:')) return text.replace(/\nЦена: [^\n]*/, '');
+  if (name === 'game: предзаказ') return text.replace(
+    /\nОбязательно включи в описание:\n- Объяснение предзаказа[^\n]*\n- Конкретные бонусы предзаказа[^\n]*\n- Акцент: цена зафиксирована[^\n]*/,
+    '\nВ описании укажи факт предзаказа и конкретные подтверждённые бонусы. Не обещай фиксированную цену и не объясняй механику предзаказа.',
+  );
+  return text;
+}
+
+function expectedSystem(id, text) {
+  const base = text.replace(
+    'Допустимо только в контексте фиксации: «цена не изменится», «цена зафиксирована». Для указания суммы пиши ',
+    'Если в категории разрешена сумма, пиши ',
+  );
+  const extra = {
+    game: 'В описании используй естественное альтернативное написание названия игры из заголовка, если такое есть (NHL 27 → НХЛ 27, GTA VI → ГТА 6, CoD MW4 → Call of Duty Modern Warfare 4). У предзаказа упоминай факт и подтверждённые бонусы, без обещания цены и пересказа механики.',
+    ai_sub: 'Не указывай денежные суммы в названии или описании. Достаточно строки «💲 Стоимость указана за <срок из формы>».',
+  }[id];
+  return extra && !base.endsWith(extra) ? base + '\n' + extra : base;
+}
+
 function cases_serializable() { return CASES.map(c => ({ name: c.name, form: c.form, catalogs: c.catalogs || null })); }
 
 export async function runParity(browser, base, t) {
@@ -113,7 +134,7 @@ export async function runParity(browser, base, t) {
   const old = await openApp(browser, `${base}/baseline/avito-helper.html`);
   try {
     const a = await snapshot(cur.page);
-    const b = (await snapshot(old.page)).map(x => ({ ...x, info: swap(x.info), msg: swap(x.msg) }));
+    const b = (await snapshot(old.page)).map(x => ({ ...x, info: expectedPrompt(x.name, swap(x.info)), msg: expectedPrompt(x.name, swap(x.msg)) }));
     t.eq('число форм совпало', a.length, b.length);
     for (let i = 0; i < a.length; i++) {
       t.ok(`[${a[i].name}] блок категории идентичен`, a[i].info === b[i].info,
@@ -126,7 +147,7 @@ export async function runParity(browser, base, t) {
     // Системный промпт при заводских настройках категорий
     const ids = ['gaming_sub', 'ai_sub', 'digital', 'game'];
     const sysA = await sysSnapshot(cur.page, ids);
-    const sysB = Object.fromEntries(Object.entries(await sysSnapshot(old.page, ids)).map(([k, v]) => [k, swap(v)]));
+    const sysB = Object.fromEntries(Object.entries(await sysSnapshot(old.page, ids)).map(([k, v]) => [k, expectedSystem(k, swap(v))]));
     for (const id of [...ids, '__none']) {
       // Из нового промпта вычитаем строки, которые добавлены осознанно, —
       // всё остальное обязано совпасть дословно

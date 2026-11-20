@@ -1062,7 +1062,7 @@ const BUILTIN_CATS = [
       { key: 'games', type: 'subGames', label: 'Список игр',
         pRender: f => {
           const { core, masking } = buildGamesLists(f.subType);
-          const extraGames = f.games?.trim();
+          const extraGames = [f.catalogGames, f.games].filter(Boolean).map(text => text.trim()).join(', ');
           // Ручной ввод продавца считаем ядром — крючок можно брать и оттуда
           const hookPool = [core, extraGames].filter(Boolean).join(', ');
           return (hookPool || masking)
@@ -1073,7 +1073,7 @@ const BUILTIN_CATS = [
         reqCheck: f => {
           const cat = getCatalogEntry(f.subType);
           const hasCat = cat.core.length || cat.masking.length;
-          return (!hasCat && !(f.games || '').trim())
+          return (!hasCat && ![f.games, f.catalogGames].some(text => (text || '').trim()))
             ? 'список игр (или заполните каталог в Настройках)' : '';
         } },
     ],
@@ -1118,10 +1118,7 @@ const BUILTIN_CATS = [
     ],
     extra: f => f.isPreorder ? `
 ЭТО ПРЕДЗАКАЗ. Найди через веб-поиск актуальные бонусы предзаказа для "${f.gameName}" и используй их в описании.
-Обязательно включи в описание:
-- Объяснение предзаказа БЕЗ путаницы: покупатель оформляет игру сейчас и СРАЗУ получает её онлайн — просто играть можно будет начиная с дня релиза. Не «платишь сейчас и ждёшь» — а «игра уже твоя, просто старт в день выхода»
-- Конкретные бонусы предзаказа (найди через поиск — скины, миссии, контент и т.п.)
-- Акцент: цена зафиксирована — даже если игра подорожает. Писать БЕЗ суммы: просто «Цена зафиксирована» или «стоимость не изменится» — никаких чисел и ₽
+В описании укажи факт предзаказа и конкретные подтверждённые бонусы. Не обещай фиксированную цену и не объясняй механику предзаказа.
 В названии слово «предзаказ» — МОЖНО, но не обязательно. Иногда сильнее зайти с другого угла: топ-бонус, дата выхода, название игры без «предзаказа»` : '',
   },
   // Физический товар (этап 4 направления 1) — вещь из рук в руки, а не цифра.
@@ -1999,9 +1996,15 @@ function dbFillFrom(local, inc) {
   // тогда входящее старое значение уже не воскресит выключенную ротацию.
   if (local.rotDays == null && inc.rotDays != null) { local.rotDays = inc.rotDays; n++; }
   if (local.rotOff == null && inc.rotOff != null) { local.rotOff = inc.rotOff; n++; }
-  if (!inc.finalDesc || local.finalDesc) return n;
-  local.finalTitle = inc.finalTitle; local.finalDesc = inc.finalDesc;
-  local.editShare = inc.editShare;
+  const localFinal = finalSnapshot(local);
+  const incomingFinal = finalSnapshot(inc);
+  const useIncoming = incomingFinal && (!localFinal || incomingFinal.at > localFinal.at);
+  const changedVersions = retainFinalVersions(local, [localFinal, incomingFinal, ...finalVersions(inc)],
+    useIncoming ? incomingFinal : localFinal);
+  if (!useIncoming) return n + Number(changedVersions);
+  local.finalTitle = incomingFinal.title; local.finalDesc = incomingFinal.desc;
+  local.editShare = incomingFinal.editShare;
+  if (incomingFinal.at) local._finalAt = incomingFinal.at;
   if (!local._category && inc._category) local._category = inc._category;
   if (!local._phys && inc._phys) local._phys = true;
   return n + 1;
@@ -2315,6 +2318,173 @@ async function syncFetch(doc, body) {
   try { return await r.json(); } catch(e) { return null; }
 }
 
+const PRODUCT_CATALOG_STORAGE = 'avito_product_catalog';
+const PRODUCT_CATALOG_NAMES = [...SUB_TYPES.filter(name => name.startsWith('PS Plus')), ...AI_SERVICES.filter(name => name !== 'Другой')];
+const productCatalog = ls(PRODUCT_CATALOG_STORAGE, { products: {} });
+const catalogPendingPrefix = name => PRODUCT_CATALOG_STORAGE + ':pending:' + name + ':';
+
+function catalogPendingEdits(name) {
+  const prefix = catalogPendingPrefix(name);
+  try {
+    return Object.keys(localStorage).filter(key => key.startsWith(prefix))
+      .map(key => JSON.parse(lsRaw(key) || 'null')).filter(entry => entry?.id)
+      .sort((a, b) => b.at - a.at || b.id.localeCompare(a.id));
+  } catch (error) { return []; }
+}
+
+function readCatalogPending(name) {
+  return catalogPendingEdits(name)[0] || null;
+}
+
+function saveCatalogPending(name, entry, replaces) {
+  const pending = { ...entry, at: Date.now(), id: newUid() };
+  localStorage.setItem(catalogPendingPrefix(name) + pending.id, JSON.stringify(pending));
+  if (replaces) localStorage.removeItem(catalogPendingPrefix(name) + replaces);
+  return pending;
+}
+
+function forgetCatalogPending(name, entry) {
+  if (entry?.id) localStorage.removeItem(catalogPendingPrefix(name) + entry.id);
+}
+
+const equalCatalog = (a, b) => JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
+
+if (productCatalog.pending) {
+  try {
+    for (const name of PRODUCT_CATALOG_NAMES) {
+      if (productCatalog.pending[name] && !readCatalogPending(name)) saveCatalogPending(name, productCatalog.pending[name]);
+    }
+    delete productCatalog.pending;
+    storeProductCatalog();
+  } catch (error) { console.error('catalog migration:', error); }
+}
+let catalogRequest = null;
+let catalogStatus = '';
+let catalogReady = false;
+let catalogPullAt = 0;
+let catalogFormIsNew = !lsRaw('avito_form');
+
+function catalogProductName(form) {
+  const name = form.category === 'gaming_sub' ? form.subType : form.category === 'ai_sub' ? form.aiService : '';
+  return PRODUCT_CATALOG_NAMES.includes(name) ? name : '';
+}
+
+function catalogProduct(name) {
+  const shared = ls(PRODUCT_CATALOG_STORAGE, productCatalog);
+  const confirmed = shared.products?.[name];
+  const pending = readCatalogPending(name);
+  return pending && equalCatalog(confirmed, pending.before) ? pending.value : confirmed;
+}
+
+function applyCatalogProduct(form) {
+  const name = catalogProductName(form);
+  if (!name) {
+    if (form.category === 'gaming_sub' && form.catalogGames !== undefined) {
+      form.durations = [{ period: DURATIONS[0], price: '' }];
+      delete form.catalogGames;
+    }
+    if (form.category === 'ai_sub') { form.aiPrice = ''; form.aiFeatures = ''; }
+    delete form._catalogApplied;
+    return;
+  }
+  const product = catalogProduct(name);
+  if (form.category === 'gaming_sub') {
+    form.durations = Object.entries(product?.prices || {}).map(([period, price]) => ({ period, price: String(price) }));
+    if (!form.durations.length) form.durations = [{ period: DURATIONS[0], price: '' }];
+    form.catalogGames = product?.games || '';
+  } else {
+    form.aiPrice = String(product?.prices?.[form.aiDuration] || '');
+    form.aiFeatures = product?.features || '';
+  }
+  form._catalogApplied = form.category === 'gaming_sub'
+    ? { name, durations: form.durations.map(period => ({ ...period })) }
+    : { name, aiPrice: form.aiPrice, aiFeatures: form.aiFeatures };
+}
+
+function generationForm(source = state.form) {
+  const form = JSON.parse(JSON.stringify(source));
+  const name = catalogProductName(form);
+  if (!name || (!catalogReady && !catalogProduct(name))) return form;
+  const previous = form._catalogApplied?.name === name ? form._catalogApplied : DEF_FORM;
+  applyCatalogProduct(form);
+  if (form.category === 'gaming_sub') {
+    const baseline = new Map(previous.durations.map(row => [row.period, row.price]));
+    const manual = new Map(source.durations.map(row => [row.period, row.price]));
+    const latest = new Map(form.durations.map(row => [row.period, row.price]));
+    for (const period of baseline.keys()) {
+      if (!manual.has(period)) latest.delete(period);
+    }
+    for (const [period, price] of manual) {
+      if (!baseline.has(period) || baseline.get(period) !== price) latest.set(period, price);
+    }
+    form.durations = [...latest].map(([period, price]) => ({ period, price }));
+  } else {
+    if (String(source.aiPrice ?? '') !== String(previous.aiPrice ?? '')) form.aiPrice = source.aiPrice;
+    if ((source.aiFeatures || '') !== (previous.aiFeatures || '')) form.aiFeatures = source.aiFeatures;
+  }
+  return form;
+}
+
+function storeProductCatalog() {
+  localStorage.setItem(PRODUCT_CATALOG_STORAGE, JSON.stringify(productCatalog));
+}
+
+function catalogStatusText(text) {
+  catalogStatus = text;
+  const el = document.getElementById('product-catalog-status');
+  if (el) el.textContent = text;
+}
+
+function syncProductCatalog() {
+  if (catalogRequest) return catalogRequest;
+  catalogRequest = (async () => {
+    const remote = await syncFetch('catalog');
+    if (!remote?.data?.products || Array.isArray(remote.data.products) || !Object.hasOwn(remote, 'updated')) {
+      catalogStatusText('Серверный каталог недоступен. Изменения хранятся в этом браузере.');
+      return;
+    }
+    catalogReady = true;
+    catalogPullAt = Date.now();
+    productCatalog.products = Object.fromEntries(PRODUCT_CATALOG_NAMES
+      .filter(name => Object.hasOwn(remote.data.products, name))
+      .map(name => [name, remote.data.products[name]]));
+    storeProductCatalog();
+    if (catalogFormIsNew) {
+      applyCatalogProduct(state.form);
+      catalogFormIsNew = false;
+      reForm();
+    }
+    const pending = PRODUCT_CATALOG_NAMES.map(name => [name, readCatalogPending(name)]).filter(([, entry]) => entry);
+    const outgoing = [];
+    for (const [name, entry] of pending) {
+      if (equalCatalog(productCatalog.products[name], entry.value)) forgetCatalogPending(name, entry);
+      else if (equalCatalog(productCatalog.products[name], entry.before)) outgoing.push([name, entry]);
+    }
+    if (outgoing.length) {
+      const products = { ...remote.data.products, ...Object.fromEntries(outgoing.map(([name, entry]) => [name, entry.value])) };
+      const saved = await syncFetch('catalog', { base: remote.updated, data: { products }, device: _jDevice() });
+      if (!saved || saved.conflict || !Object.hasOwn(saved, 'updated')) {
+        catalogStatusText('Каталог пока не отправлен. Локальные правки сохранены.');
+        return;
+      }
+      productCatalog.products = products;
+      for (const [name, entry] of outgoing) forgetCatalogPending(name, entry);
+    }
+    storeProductCatalog();
+    const conflicts = PRODUCT_CATALOG_NAMES.filter(name => readCatalogPending(name));
+    catalogStatusText(conflicts.length
+      ? 'На сервере тоже менялся товар. Проверь локальную версию и сохрани её ещё раз, чтобы применить: ' + conflicts.join(', ')
+      : 'Каталог синхронизирован');
+    const form = document.getElementById('product-catalog-fields');
+    if (form && form.dataset.dirty !== 'true' && !form.contains(document.activeElement)) {
+      renderProductCatalogFields(document.getElementById('product-catalog-name').value);
+    }
+  })().catch(error => {
+    catalogStatusText('Не удалось сохранить каталог: ' + error.message);
+  }).finally(() => { catalogRequest = null; });
+  return catalogRequest;
+}
+
 let _syncT = null, _syncBusy = false;
 // F21: когда в ЭТОЙ сессии последний раз удалось забрать voice с сервера, и какая
 // версия сервера при этом пришла. Только в памяти: новая загрузка страницы обязана
@@ -2626,10 +2796,11 @@ async function syncPullVoice(opts = {}) {
     _voicePullAt = Date.now(); takeBase(got);
     if (changed) {
       save();
-      // Во время генерации не перерисовываем: ввод токена на первом запросе
-      // запускает забирание прямо посреди генерации (ревью 15.10). Данные уже в
-      // state и покажутся при следующей перерисовке.
-      if (!state.loading) render();
+      // Фоновое забирание не должно заменять открытые поля и результат перефраза.
+      const favorites = document.getElementById('fav-box');
+      if (favorites && !favorites.contains(document.activeElement) && !favorites.querySelector('[id^="reph-"]:not(:empty)')) refreshFavs();
+      const history = document.getElementById('db-content');
+      if (history && !history.contains(document.activeElement) && !state.dbEditId) renderDb();
       // После слияния локальный набор БОГАЧЕ серверного (наши записи там ещё не
       // лежат). Отправляем объединение сразу и принудительно: иначе подпись,
       // посчитанная от уже слитого документа, сделала бы отправку ненужной, и
@@ -3251,7 +3422,7 @@ const SYS_BANS = [
   // Хвост про «оформляешь» уместен только там, где слова оплаты запрещены.
   // В категории, где «купить» разрешено (физтовар), он бы противоречил её же
   // правилу «НЕ используй „оформляется“» — модель получала бы два указания разом.
-  { rule: 'price_label', text: cat => '- Слово «цена» как ценник: «цена — 7500», «цена: 7500 руб» — ЗАПРЕЩЕНО. Допустимо только в контексте фиксации: «цена не изменится», «цена зафиксирована». Для указания суммы пиши '
+  { rule: 'price_label', text: cat => '- Слово «цена» как ценник: «цена — 7500», «цена: 7500 руб» — ЗАПРЕЩЕНО. Если в категории разрешена сумма, пиши '
       + (cat == null || scanRuleOn(cat, 'payment') ? '«оформляешь за X руб» или просто «X руб»' : 'просто «X руб»') },
   { rule: 'gift',        text: '- «В подарок», «подарок», «в качестве подарка» — ЗАПРЕЩЕНО в любом контексте' },
   { rule: 'selling_word', text: '- «Продаю», «продам», «продаётся» — ЗАПРЕЩЕНО и в названии, и в описании. Так начинает половина Авито, объявление сразу теряется. Начинай с самого товара, выгоды или живой детали' },
@@ -3306,6 +3477,8 @@ function buildSys(category, phys = false) {
   if (phys && PHYS_MODE_CATS.includes(category)) {
     for (const [from, to] of SYS_PHYS_EDITS) sys = sys.split(from).join(to);
   }
+  if (category === 'game') sys += '\nВ описании используй естественное альтернативное написание названия игры из заголовка, если такое есть (NHL 27 → НХЛ 27, GTA VI → ГТА 6, CoD MW4 → Call of Duty Modern Warfare 4). У предзаказа упоминай факт и подтверждённые бонусы, без обещания цены и пересказа механики.';
+  if (category === 'ai_sub' && !phys) sys += '\nНе указывай денежные суммы в названии или описании. Достаточно строки «💲 Стоимость указана за <срок из формы>».';
   return sys;
 }
 
@@ -3321,7 +3494,7 @@ function getProxyToken() {
     t = (prompt('Введите админ-токен (тот же, что в админке магазина Поиграем):') || '').trim();
     // Токен появился — сырьё с сервера забираем сразу: при старте без токена
     // забрать было нечем, а отправлять, не забрав, нельзя (F21)
-    if (t) { localStorage.setItem('avito_admin_token', t); syncPullVoice().catch(() => {}); }
+    if (t) { localStorage.setItem('avito_admin_token', t); syncPullVoice().catch(() => {}); syncProductCatalog(); }
   }
   return t;
 }
@@ -3565,6 +3738,7 @@ function catInfoBlock(f) {
   const lines = [`Категория: ${c.pName || c.label}`];
   for (const fd of c.fields) {
     if (!FIELD_TYPES.includes(fd.type)) continue; // поля нет в форме — не должно быть и в промпте
+    if (f.category === 'ai_sub' && !physModeOn(f) && fd.isPrice) continue;
     if (fd.pRender) { const s = fd.pRender(f); if (s) lines.push(s); continue; }
     if (!fd.p) continue; // поле не для промпта (цена игры, тумблеры)
     const v = fieldVal(f, fd);
@@ -3667,6 +3841,19 @@ function sigAttach(v, category) {
   return v;
 }
 
+const DIGITAL_HEADER = 'Перед покупкой сначала свяжитесь со мной через кнопку «написать» для уточнения деталей.';
+
+function stripDigitalHeader(text) {
+  const value = String(text || '');
+  return value.startsWith(DIGITAL_HEADER) ? value.slice(DIGITAL_HEADER.length).trimStart() : value;
+}
+
+function attachDigitalHeader(v, category, phys) {
+  if (!v || phys || !['digital', 'ai_sub', 'game'].includes(category)) return;
+  const body = stripDigitalHeader(v.description).trim();
+  v.description = body ? DIGITAL_HEADER + '\n\n' + body : DIGITAL_HEADER;
+}
+
 // Платформы из формы генератора — по категории
 function formPlats(f) {
   if (!f) return [];
@@ -3687,6 +3874,7 @@ function variantScan(v, category, form) {
 // Общий хвост всех путей генерации: подпись, затем Сканер.
 function variantFinish(v, category, form) {
   if (!v) return v;
+  attachDigitalHeader(v, category, physModeOn(form));
   sigAttach(v, category);
   return variantScan(v, category, form);
 }
@@ -3718,7 +3906,7 @@ function fewShotSamples(category, phys = false) {
     .filter(r => r.source === 'mine' && (r.title || r.desc))
     .map(r => ({ title: r.title || '', desc: r.desc || '', cat: r.category }));
   // Подпись продавца модели не показываем — её приклеивает код (sigAttach)
-  let all = [...fromFinal, ...fromFav, ...fromRefs].map(x => ({ ...x, desc: sigStrip(x.desc) }));
+  let all = [...fromFinal, ...fromFav, ...fromRefs].map(x => ({ ...x, desc: stripDigitalHeader(sigStrip(x.desc)) }));
   // Физ.-режим: примеры со словами «подписка»/«месяц»/«цифра» тянули бы модель обратно
   if (phys) all = all.filter(x => !physModeDirty(x.title + '\n' + x.desc));
   const own = all.filter(x => x.cat === category);
@@ -4040,25 +4228,27 @@ function warnIfPartial(list, want, truncated) {
 
 async function doGenerate() {
   if (state.loading) return;
-  const miss = validateForm();
+  if (resultRequestActive()) { toast('Дождитесь ответа по текущим вариантам'); return; }
+  const form = generationForm();
+  const miss = validateForm(form);
   if (miss.length) { toast('Заполните: ' + miss.join(', ')); return; }
   if (state.batchMode && !state.batchRegions.length) { toast('Пакетный режим включён — выберите хотя бы один регион'); return; }
-  if (state.batchMode && state.batchRegions.length) { doBatchGenerate(); return; }
+  if (state.batchMode && state.batchRegions.length) { doBatchGenerate(form); return; }
   state.loading = true; state.error = null; state.loadingKind = null;
-  state.batchResults = []; state.titleStep = null; state.extraResults = [];
+  state.batchResults = []; state.titleStep = null; state.extraResults = []; state.altTitles = {};
   refreshResults();
   scrollToResults(); // UX-11
   const jChain = 'gen-' + Date.now(); // журнал: одна генерация и вся её судьба — одна цепочка
   const jT0 = Date.now();
   try {
-    const webSearch = state.form.isPreorder && state.form.category === 'game';
+    const webSearch = form.isPreorder && form.category === 'game';
     let truncated = false;
     // Кнопки количества во время генерации не заблокированы: сколько вариантов
     // заказывали, надо запомнить ДО await, иначе предупреждение сравнит с числом,
     // которое человек переключил уже после отправки запроса.
-    const want = state.form.count;
-    const text = await callAI([{ role: 'user', content: buildMsg() }], {
-      webSearch, category: state.form.category, phys: physModeOn(state.form),
+    const want = form.count;
+    const text = await callAI([{ role: 'user', content: buildMsg(want, [], form) }], {
+      webSearch, category: form.category, phys: physModeOn(form),
       max_tokens: genTokens(want), onTruncated: () => { truncated = true; },
       truncHint: 'уменьшите число вариантов или длину доп. указаний',
     });
@@ -4066,18 +4256,18 @@ async function doGenerate() {
     warnIfPartial(state.results, want, truncated);
     // F4: снимок формы + штамп товара/категории на каждый вариант — чтобы действия
     // карточки (Размещено/Сканер/Экспорт/↻×5) не читали форму, переключённую позже
-    state.resultsForm = JSON.parse(JSON.stringify(state.form));
+    state.resultsForm = form;
     state.results.forEach(v => {
-      v._product = currentProductName(state.form); v._category = state.form.category;
-      variantFinish(v, state.form.category, state.form); // подпись + автопроверка сразу после генерации
+      v._product = currentProductName(form); v._category = form.category;
+      variantFinish(v, form.category, form);
       v._chain = jChain;
     });
     state.conveyorIdx = 0;
     save();
     jlog('generated', jChain, {
-      path: 'main', category: state.form.category, ...(physModeOn(state.form) ? { physMode: true } : {}), product: currentProductName(state.form),
+      path: 'main', category: form.category, ...(physModeOn(form) ? { physMode: true } : {}), product: currentProductName(form),
       provider: state.settings.provider, model: state.settings.provider === 'claude' ? state.settings.model : state.settings.orModel,
-      style: state.form.style, notes: state.form.notes || '', webSearch,
+      style: form.style, notes: form.notes || '', webSearch,
       latencyMs: Date.now() - jT0, variants: jVariants(state.results),
       ...(truncated ? { truncated: true } : {}), // обрыв по лимиту — видно при разборе журнала
     });
@@ -4093,27 +4283,34 @@ async function doGenerate() {
 
 // UX-15: «➕ Ещё варианты» — дописывает в отдельный список, НЕ трогая основной набор
 // (в отличие от doGenerate/doRegen, которые заменяют state.results целиком)
+function resultRequestActive() {
+  return state.extraLoading || state.regenId !== null || state.altTitlesLoading !== null;
+}
+
 async function doGenerateMore() {
-  if (state.loading || state.extraLoading || !state.results.length) return;
+  if (state.loading || resultRequestActive() || !state.results.length) return;
+  const originalResults = state.results;
+  const original = originalResults[0];
+  const snapForm = state.resultsForm || JSON.parse(JSON.stringify(state.form));
+  const product = original._product || currentProductName(snapForm);
+  const category = original._category || snapForm.category;
   state.extraLoading = true;
   refreshResults();
   const jChain = state.results[0]?._chain || ('gen-' + Date.now()); // журнал: «ещё» — та же цепочка, что основной набор
   const jT0 = Date.now();
   try {
-    const snapForm = state.resultsForm || state.form; // F4: та же форма, что породила основной набор
     const excl = resultsPool().map(v => v.title);
     const webSearch = snapForm.isPreorder && snapForm.category === 'game';
     let truncated = false;
     const want = snapForm.count; // до await: снимка может не быть, и тогда это живая форма
     const text = await callAI([{ role: 'user', content: buildMsg(want, excl, snapForm) }], {
-      webSearch, category: snapForm.category, phys: physModeOn(snapForm),
+      webSearch, category, phys: physModeOn(snapForm),
       max_tokens: genTokens(want), onTruncated: () => { truncated = true; },
     });
     const fresh = parseVariants(text);
     if (!fresh.length) throw new Error('AI не вернул варианты');
     warnIfPartial(fresh, want, truncated);
-    const product  = state.results[0]?._product  || currentProductName(snapForm);
-    const category = state.results[0]?._category || snapForm.category;
+    if (state.results !== originalResults) return;
     // Bug #11: parseVariants нумерует ответ заново с 1, поэтому «Ещё варианты»
     // получали те же id, что и основной набор, а findResult()/findResultRef()
     // ищут сначала в state.results — все действия карточки (↻, ☆, 🔎, 🔍, ✓ Размещено)
@@ -4141,12 +4338,13 @@ async function doGenerateMore() {
   }
 }
 
-async function doBatchGenerate() {
-  const regions = state.batchRegions;
+async function doBatchGenerate(form = generationForm()) {
+  if (state.loading || resultRequestActive()) return;
+  const regions = [...state.batchRegions];
   state.loading = true; state.error = null; state.loadingKind = null; state.batchResults = []; state.titleStep = null; state.extraResults = [];
   // Пакет и обычные варианты взаимоисключающие — чистим обычный набор,
   // чтобы он не всплыл после «✕ Очистить» или перезагрузки (UX-3)
-  state.results = []; state.conveyorIdx = 0;
+  state.results = []; state.conveyorIdx = 0; state.altTitles = {};
   // F2: один запрос на весь пакет при фиксированном max_tokens обрезал JSON на 7+ регионах
   // (список регионов не ограничен, до 25 по умолчанию) — бьём на чанки, каждый со своим бюджетом
   const CHUNK = 4;
@@ -4158,14 +4356,14 @@ async function doBatchGenerate() {
   const jChain = 'batch-' + Date.now(); // журнал: пакет по регионам — одна цепочка
   const jT0 = Date.now();
   try {
-    const webSearch = state.form.isPreorder && state.form.category === 'game';
+    const webSearch = form.isPreorder && form.category === 'game';
     const variants = [];
     let chunkFails = 0, truncated = false;
     for (const chunk of chunks) {
       try {
-        const msg = buildMsg(chunk.length, variants.map(v => v.title));
+        const msg = buildMsg(chunk.length, variants.map(v => v.title), form);
         const text = await callAI([{ role: 'user', content: msg }], {
-          webSearch, category: state.form.category, phys: physModeOn(state.form), max_tokens: genTokens(chunk.length),
+          webSearch, category: form.category, phys: physModeOn(form), max_tokens: genTokens(chunk.length),
           onTruncated: () => { truncated = true; },
           truncHint: 'уменьшите число регионов в пакете',
         });
@@ -4179,8 +4377,8 @@ async function doBatchGenerate() {
     if (!variants.length) throw new Error('Не удалось сгенерировать ни одного варианта — все запросы завершились ошибкой');
     // F4: штамп товара/категории по форме на момент генерации (регион у пакета свой на каждой позиции)
     variants.forEach(v => {
-      v._product = currentProductName(state.form); v._category = state.form.category;
-      variantFinish(v, state.form.category, state.form); // подпись + автопроверка сразу после генерации
+      v._product = currentProductName(form); v._category = form.category;
+      variantFinish(v, form.category, form);
       v._chain = jChain;
     });
     if (variants.length < regions.length) {
@@ -4193,7 +4391,7 @@ async function doBatchGenerate() {
     state.batchExpanded = null;
     save();
     jlog('generated', jChain, {
-      path: 'batch', category: state.form.category, ...(physModeOn(state.form) ? { physMode: true } : {}), product: currentProductName(state.form),
+      path: 'batch', category: form.category, ...(physModeOn(form) ? { physMode: true } : {}), product: currentProductName(form),
       provider: state.settings.provider, model: state.settings.provider === 'claude' ? state.settings.model : state.settings.orModel,
       regions, chunkFails, latencyMs: Date.now() - jT0,
       ...(truncated ? { truncated: true } : {}), // хотя бы один чанк не уместился в лимит
@@ -4217,8 +4415,7 @@ async function doBatchGenerate() {
 // только потом AI пишет описания под уже выбранные варианты.
 // ══════════════════════════════════════════
 
-function buildTitlesMsg(n) {
-  const f = state.form;
+function buildTitlesMsg(n, f = state.form) {
   return `${notesBlock(f)}${catInfoBlock(f)}
 
 ЗАДАЧА: сгенерируй ${n} вариантов НАЗВАНИЙ (только названия, БЕЗ описаний) для одного и того же объявления. Каждое — из РАЗНОЙ точки пространства вариаций (разный крючок, разное написание/сокращение, разный порядок слов). Строго следуй формуле и правилам названий из системного промпта (лимит 50 символов, запрещённые слова, для игр — без цены).${learnedBlock(f)}
@@ -4229,7 +4426,9 @@ function buildTitlesMsg(n) {
 
 async function doGenTitlesOnly() {
   if (state.loading) return;
-  const miss = validateForm();
+  if (resultRequestActive()) { toast('Дождитесь ответа по текущим вариантам'); return; }
+  const form = generationForm();
+  const miss = validateForm(form);
   if (miss.length) { toast('Заполните: ' + miss.join(', ')); return; }
   // F28: сохранённый пакет (переживает F5) рисуется в блоке результатов первым и
   // закрывал собой и спиннер, и шаг заголовков — платная генерация шла невидимо,
@@ -4244,17 +4443,17 @@ async function doGenTitlesOnly() {
     state.batchResults = []; state.batchExpanded = null;
   }
   state.loading = true; state.error = null; state.loadingKind = 'titles';
-  state.titleStep = null;
+  state.titleStep = null; state.altTitles = {};
   refreshResults();
   scrollToResults(); // UX-11
   const jChain = 'gen-' + Date.now(); // журнал: воронка (заголовки + описания) — одна цепочка
   const jT0 = Date.now();
   try {
-    const webSearch = state.form.isPreorder && state.form.category === 'game';
-    const n = Math.max(8, Math.min(12, (state.form.count || 5) * 2));
+    const webSearch = form.isPreorder && form.category === 'game';
+    const n = Math.max(8, Math.min(12, (form.count || 5) * 2));
     let truncated = false;
-    const text = await callAI([{ role: 'user', content: buildTitlesMsg(n) }], {
-      webSearch, category: state.form.category, phys: physModeOn(state.form),
+    const text = await callAI([{ role: 'user', content: buildTitlesMsg(n, form) }], {
+      webSearch, category: form.category, phys: physModeOn(form),
       max_tokens: titleTokens(n, webSearch), onTruncated: () => { truncated = true; },
     });
     const titles = parseTitles(text)
@@ -4268,9 +4467,9 @@ async function doGenTitlesOnly() {
     // и упереться в лимит уже на посторонней прозе (при веб-поиске это штатно —
     // F3), и тогда «пришло 12 из 12» было бы ложной тревогой.
     if (truncated && titles.length < n) toast(`⚠️ Ответ оборвался — названий пришло ${titles.length} из ${n}.`);
-    state.titleStep = { titles, selected: {}, form: JSON.parse(JSON.stringify(state.form)), _chain: jChain };
+    state.titleStep = { titles, selected: {}, form, _chain: jChain };
     jlog('generated', jChain, {
-      path: 'titles', category: state.form.category, ...(physModeOn(state.form) ? { physMode: true } : {}), product: currentProductName(state.form),
+      path: 'titles', category: form.category, ...(physModeOn(form) ? { physMode: true } : {}), product: currentProductName(form),
       latencyMs: Date.now() - jT0, titles: titles.map(t => t.title),
       ...(truncated ? { truncated: true } : {}),
     });
@@ -4292,6 +4491,7 @@ async function doGenTitlesOnly() {
 }
 
 async function doGenDescriptionsForTitles() {
+  if (state.loading || resultRequestActive()) return;
   const step = state.titleStep;
   if (!step) return;
   const chosen = step.titles.filter(t => step.selected[t.id]);
@@ -4374,12 +4574,13 @@ ${list}
 }
 
 async function doGenAltTitles(id) {
-  if (state.altTitlesLoading !== null) return;
+  if (state.loading || resultRequestActive()) return;
+  const v = findResult(id);
+  if (!v) return;
   state.altTitlesLoading = id;
   delete state.altTitles[id];
   refreshResults();
   try {
-    const v = findResult(id);
     const base = buildMsg(1, [], state.resultsForm);  // F4: промпт из формы на момент генерации, не из живой
     const msg = `${base}
 Текущее название: ${v?.title || ''}
@@ -4398,6 +4599,7 @@ async function doGenAltTitles(id) {
     });
     const alt = parseTitles(text).map(t => ({ ...t, len: [...t.title].length }));
     if (!alt.length) throw new Error(truncated ? 'Ответ модели оборвался — названий не разобрать' : 'AI не вернул названия');
+    if (findResult(id) !== v) return;
     state.altTitles[id] = alt;
     jlog('generated', v?._chain || null, {
       path: 'alt_titles', baseTitle: v?.title || '', titles: state.altTitles[id].map(t => t.title),
@@ -4412,14 +4614,16 @@ async function doGenAltTitles(id) {
 }
 
 async function doRegen(id) {
-  if (state.regenId !== null) return;
+  if (state.loading || resultRequestActive()) return;
+  const prev = findResult(id);
+  if (!prev) return;
+  const before = { title: prev.title || '', description: prev.description || '', scan: jScanLevel(prev) };
   state.regenId = id; refreshResults();
   try {
     // F12: перегенерация одного варианта должна опираться на форму НА МОМЕНТ генерации
     // (снимок resultsForm + штампы варианта), а не на живую форму — иначе после переключения
     // формы ↻ выдаёт ДРУГОЙ товар, теряет _product/_category и не ищет бонусы предзаказа (Bug #6).
-    const prev = findResult(id) || {};
-    const snapForm = state.resultsForm || state.form;
+    const snapForm = state.resultsForm || JSON.parse(JSON.stringify(state.form));
     const category = prev._category || snapForm.category;
     const product  = prev._product  || currentProductName(snapForm);
     const excl = resultsPool().filter(v => v.id !== id).map(v => v.title);
@@ -4428,19 +4632,24 @@ async function doRegen(id) {
     const text = await callAI([{ role: 'user', content: buildMsg(1, excl, snapForm) }],
       { webSearch, category, phys: physModeOn(snapForm), onTruncated: () => { truncated = true; } });
     const [v] = parseVariants(text);
-    sigAttach(v, category); // до записи в журнал: after — это текст, который увидит продавец
+    variantFinish(v, category, snapForm);
     const { arr, idx } = findResultRef(id);
-    if (arr && idx !== -1 && v) {
+    if (arr && arr[idx] === prev && v) {
       // Журнал: перегенерация = «этот вариант не устроил». Старый текст пишем ДО перезаписи —
       // после неё он безвозвратен (правило «логировать до перезаписи»).
       jlog('regen', prev._chain || null, {
         category, product,
-        before: { title: prev.title || '', description: prev.description || '', scan: jScanLevel(prev) },
+        before,
         after:  { title: v.title || '', description: v.description || '' },
         ...(truncated ? { truncated: true } : {}),
       });
-      arr[idx] = { ...v, id, _product: product, _category: category, _chain: prev._chain }; // штампы F4 сохраняются
-      variantScan(arr[idx], category, snapForm); // бейдж под НОВЫЙ текст
+      if (before.title !== (prev.title || '') || before.description !== (prev.description || '')) {
+        const nextId = resultsPool().reduce((max, variant) => Math.max(max, variant.id), 0) + 1;
+        state.extraResults.push({ ...v, id: nextId, _product: product, _category: category, _chain: prev._chain });
+        toast('Правки сохранены. Ответ модели добавлен отдельным вариантом.');
+      } else {
+        arr[idx] = { ...v, id, _product: product, _category: category, _chain: prev._chain };
+      }
       save();
     }
   } catch(e) {
@@ -4477,7 +4686,7 @@ async function doRephrase(vid, fid) {
 
 Исходное название: «${v.title}»
 Исходное описание:
-${sigStrip(v.description)}
+${stripDigitalHeader(sigStrip(v.description))}
 
 Верни ОДИН вариант в JSON:
 {"variants": [{"id": 1, "title": "...", "title_length": 0, "description": "...", "style": "...", "price_format": "...", "hook": "...", "structure": "..."}]}`;
@@ -4490,6 +4699,7 @@ ${sigStrip(v.description)}
     });
     const [nv] = parseVariants(text);
     if (!nv) throw new Error('Пустой ответ от AI');
+    attachDigitalHeader(nv, v._category, !!v._phys);
     sigAttach(nv, v._category || state.form.category);
     jlog('generated', v._chain || null, {
       path: 'rephrase', baseTitle: v.title || '',
@@ -4633,12 +4843,13 @@ async function doRotate(recId, mode) {
     const used = rotUsedTitles(rec, crossAcc);
     let truncated = false;
     // Подпись модели не показываем: прокрутит её — получится пересказ, а не подпись
-    const text = await callAI([{ role: 'user', content: rotPrompt(mode, { ...live, desc: sigStrip(live.desc) }, used, !!rec._phys) }], {
+    const text = await callAI([{ role: 'user', content: rotPrompt(mode, { ...live, desc: stripDigitalHeader(sigStrip(live.desc)) }, used, !!rec._phys) }], {
       category: rec._category || state.form.category, phys: !!rec._phys,
       max_tokens: genTokens(1), onTruncated: () => { truncated = true; },
     });
     const [nv] = parseVariants(text);
     if (!nv) throw new Error('Пустой ответ от AI');
+    attachDigitalHeader(nv, rec._category, !!rec._phys);
     sigAttach(nv, rec._category || state.form.category);
 
     // Совпадение с названием на ДРУГОМ аккаунте не запрещено (решение владельца),
@@ -4756,6 +4967,50 @@ function tlenHTML(len, cls, style) {
 // VARIANT CARD HTML
 // ══════════════════════════════════════════
 
+function editTextField(field, value, css = '') {
+  const title = field === 'title';
+  return `<textarea class="${css}" data-result-edit="${field}" aria-label="${title ? 'Название' : 'Описание'}"
+    rows="${title ? 1 : 6}" style="width:100%;resize:vertical">\n${esc(value || '')}</textarea>`;
+}
+
+function editorScanHTML(v) {
+  const scan = v._scan;
+  return scan ? [scanBadgeHTML(v), ...[...scan.errors, ...scan.warnings].map(message => esc(message))].join(' · ') : '';
+}
+
+function rememberGenerated(v) {
+  v._generated ??= { title: v.title || '', description: v.description || '' };
+}
+
+function updateResultEditor(el) {
+  const editor = el.closest('[data-result-editor]');
+  if (!editor) return;
+  const address = editor.dataset.resultEditor;
+  const v = address === 'session' ? state.postSession.items[state.postSession.idx]?.variant
+    : address.startsWith('batch:') ? state.batchResults[Number(address.slice(6))]?.variant
+    : findResult(Number(address));
+  if (!v) return;
+  rememberGenerated(v);
+  v[el.dataset.resultEdit] = el.value;
+  variantScan(v, v._category || state.form.category);
+  const counter = editor.querySelector('[data-edit-count]');
+  if (counter) counter.innerHTML = tlenHTML([...(v.title || '')].length);
+  const scan = editor.querySelector('[data-edit-scan]');
+  if (scan) scan.innerHTML = editorScanHTML(v);
+  const preview = editor.querySelector('.batch-title-preview');
+  if (preview) preview.textContent = v.title || '—';
+  for (const button of editor.querySelectorAll('[data-j]:not([data-jreph])')) {
+    if (button.dataset.j === 'both') {
+      button.dataset.t = v.title || '';
+      button.dataset.d = v.description || '';
+    } else {
+      button.dataset.text = (button.dataset.j === 'title' ? v.title : v.description) || '';
+    }
+  }
+  clearTimeout(el._t);
+  el._t = setTimeout(save, 250);
+}
+
 function vcardHTML(v, inFav) {
   const len  = v.title ? [...v.title].length : 0;
   const fav  = isFav(v);
@@ -4774,10 +5029,10 @@ function vcardHTML(v, inFav) {
   // иначе событие copied описало бы одноимённый вариант ТЕКУЩЕГО набора.
   const jAttr = inFav && v._fid ? `data-jfid="${v._fid}"` : `data-jvid="${v.id}"`;
 
-  return `<div class="vcard ${fav ? 'is-fav' : ''}" data-vid="${v.id}" data-fid="${fidAttr}">
+  return `<div class="vcard ${fav ? 'is-fav' : ''}" data-vid="${v.id}" data-fid="${fidAttr}" ${inFav ? '' : `data-result-editor="${v.id}"`}>
   <div class="vcard-head">
     <span class="vnum">#${v.id}</span>
-    ${scanBadgeHTML(v)}
+    ${inFav ? scanBadgeHTML(v) : `<span data-edit-scan>${editorScanHTML(v)}</span>`}
     <div class="vtags">
       ${v.style        ? `<span class="vtag">${esc(v.style)}</span>` : ''}
       ${v.price_format ? `<span class="vtag">${esc(v.price_format)}</span>` : ''}
@@ -4797,8 +5052,8 @@ function vcardHTML(v, inFav) {
   </div>
 
   <div class="title-row">
-    <span class="title-val">${titleEsc}</span>
-    ${tlenHTML(len)}
+    ${inFav ? `<span class="title-val">${titleEsc}</span>` : editTextField('title', v.title, 'title-val')}
+    <span data-edit-count>${tlenHTML(len)}</span>
   </div>
   <div class="copy-row">
     <button class="btn-copy" data-act="copy" data-text="${tAttr}" data-j="title" ${jAttr}>📋 Название</button>
@@ -4821,7 +5076,7 @@ function vcardHTML(v, inFav) {
   <hr class="div">
 
   <div class="desc-label">Описание</div>
-  <div class="desc-val">${descEsc}</div>
+  ${inFav ? `<div class="desc-val">${descEsc}</div>` : editTextField('description', v.description, 'desc-val')}
   <div class="copy-row">
     <button class="btn-copy" data-act="copy" data-text="${dAttr}" data-j="desc" ${jAttr}>📋 Описание</button>
     <button class="btn-copy" data-act="copy-both"
@@ -4850,7 +5105,7 @@ function conveyorHTML() {
   const tAttr = (v.title || '').replace(/&/g,'&amp;').replace(/"/g,'&quot;');
   const dAttr = (v.description || '').replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/\n/g,'&#10;');
 
-  return `<div class="conv-wrap" id="conv-wrap">
+  return `<div class="conv-wrap" id="conv-wrap" data-result-editor="${v.id}">
     <div class="conv-nav">
       <button class="conv-nav-btn" data-act="conv-prev" ${idx===0?'disabled':''}>←</button>
       <div class="conv-counter">Вариант ${idx+1} из ${variants.length}</div>
@@ -4858,8 +5113,9 @@ function conveyorHTML() {
     </div>
 
     <div>
-      <div class="conv-title">${esc(v.title || '')}</div>
-      <div class="conv-tlen-row">${tlenHTML(len)}</div>
+      ${editTextField('title', v.title, 'conv-title')}
+      <div class="conv-tlen-row" data-edit-count>${tlenHTML(len)}</div>
+      <div data-edit-scan>${editorScanHTML(v)}</div>
     </div>
 
     <button class="conv-btn conv-btn-title" data-act="conv-copy-title" data-text="${tAttr}" data-j="title" data-jvid="${v.id}">
@@ -4870,7 +5126,7 @@ function conveyorHTML() {
 
     <div>
       <div class="desc-label">Описание</div>
-      <div class="conv-desc">${esc(v.description || '')}</div>
+      ${editTextField('description', v.description, 'conv-desc')}
     </div>
 
     <div class="conv-actions-row">
@@ -5028,12 +5284,12 @@ function refreshBatchResults() {
     const tAttr = (item.variant?.title || '').replace(/&/g,'&amp;').replace(/"/g,'&quot;');
     const dAttr = (item.variant?.description || '').replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/\n/g,'&#10;');
     const expanded = state.batchExpanded === i;
-    return `<div class="batch-row ${expanded?'expanded':''}" data-batch-i="${i}">
+    return `<div class="batch-row ${expanded?'expanded':''}" data-batch-i="${i}" data-result-editor="batch:${i}">
       <div class="batch-row-head" data-act="batch-expand" data-i="${i}">
         <span class="batch-region-badge">📍 ${esc(item.region)}</span>
-        ${scanBadgeHTML(item.variant)}
+        <span data-edit-scan>${item.variant ? editorScanHTML(item.variant) : ''}</span>
         <span class="batch-title-preview">${esc(item.variant?.title || '—')}</span>
-        ${tlenHTML(len, 'batch-tlen')}
+        <span data-edit-count>${tlenHTML(len, 'batch-tlen')}</span>
         <div class="batch-row-btns">
           <button class="btn-copy" data-act="copy" data-text="${tAttr}" data-j="title" data-jbi="${i}" title="Копировать название">📋 Назв</button>
           <button class="btn-copy" data-act="copy" data-text="${dAttr}" data-j="desc" data-jbi="${i}" title="Копировать описание">📋 Опис</button>
@@ -5044,7 +5300,7 @@ function refreshBatchResults() {
         </div>
       </div>
       <div class="batch-row-body">
-        <div class="batch-desc-box">${esc(item.variant?.description || '')}</div>
+        ${item.variant ? editTextField('title', item.variant.title) + editTextField('description', item.variant.description, 'batch-desc-box') : ''}
         <div class="batch-copy-row">
           <button class="btn-copy" data-act="copy" data-text="${tAttr}" data-j="title" data-jbi="${i}">📋 Копировать название</button>
           <button class="btn-copy" data-act="copy" data-text="${dAttr}" data-j="desc" data-jbi="${i}">📋 Копировать описание</button>
@@ -6136,6 +6392,7 @@ function formHTML() {
         <span class="pill ${f.physMode ? 'on' : ''}" data-act="physmode" data-val="1" title="Объявление как физический товар: «пакет», «доступ» вместо «подписка», без «месяц» и «цифра»">📦 Физический</span>
       </div>` : ''}
     </div>
+    ${catalogProductName(f) ? '<button class="btn-sm" data-act="catalog-apply">Подставить цены и условия из каталога</button>' : ''}
     ${catFields}
     <div class="field">
       <label>Доп. указания</label>
@@ -6327,7 +6584,8 @@ async function doStartSession() {
   const q = state.postQueue;
   if (!q.length) return;
 
-  const autoItems = q.filter(item => item.source === 'auto');
+  const autoItems = q.filter(item => item.source === 'auto')
+    .map(item => ({ ...item, form: generationForm(item.form || state.form) }));
   const autoVariants = {}; // сгенерированный вариант для каждой авто-позиции по её id
 
   if (autoItems.length) {
@@ -6347,7 +6605,7 @@ async function doStartSession() {
       // Старые позиции без снимка — из текущей формы (обратная совместимость).
       for (let i = 0; i < autoItems.length; i++) {
         const it = autoItems[i];
-        const form = it.form || state.form;
+        const form = it.form;
         const webSearch = form.isPreorder && form.category === 'game';
         const jT0 = Date.now();
         let truncated = false;
@@ -6384,13 +6642,9 @@ async function doStartSession() {
   }
 
   const items = q.map(item => {
-    if (item.source === 'fav') {
-      // UX-6: искать по стабильному _fid, не по индексу (индекс ломался при изменении избранного)
-      const fav = state.favorites.find(f => f._fid === item.favId);
-      return { ...item, variant: item.variant || fav || null };
-    } else {
-      return { ...item, variant: item.variant || autoVariants[item.id] || null };
-    }
+    const source = item.source === 'fav' ? state.favorites.find(f => f._fid === item.favId) : autoVariants[item.id];
+    const variant = item.variant || source;
+    return { ...item, variant: variant ? { ...variant } : null };
   });
 
   state.postSession = { active: true, idx: 0, items };
@@ -6435,7 +6689,7 @@ function renderSession() {
       </div>
       <button class="btn-sm" data-act="session-close" style="flex-shrink:0;">✕ Завершить</button>
     </div>
-    <div class="session-body">
+    <div class="session-body" data-result-editor="session">
       <div>
         <div class="session-label">Регион</div>
         <span class="session-region-badge">📍 ${esc(item.region)}</span>
@@ -6443,13 +6697,14 @@ function renderSession() {
       </div>
       ${v ? `
       <div>
-        <div class="session-label">Название ${tlenHTML(v.title ? [...v.title].length : 0, '', 'margin-left:6px;')}</div>
-        <div class="session-title-val">${esc(v.title||'')}</div>
+        <div class="session-label">Название <span data-edit-count>${tlenHTML(v.title ? [...v.title].length : 0, '', 'margin-left:6px;')}</span></div>
+        ${editTextField('title', v.title, 'session-title-val')}
+        <div data-edit-scan>${editorScanHTML(v)}</div>
         <button class="conv-btn conv-btn-title" data-act="conv-copy-title" data-text="${tAttr}" data-j="title" data-jsess="1" style="margin-top:6px;">📋 Копировать название</button>
       </div>
       <div>
         <div class="session-label">Описание</div>
-        <div class="session-desc-val">${esc(v.description||'')}</div>
+        ${editTextField('description', v.description, 'session-desc-val')}
         <button class="conv-btn conv-btn-desc" data-act="conv-copy-desc" data-text="${dAttr}" data-j="desc" data-jsess="1" style="margin-top:8px;">📋 Копировать описание</button>
       </div>` : `<div style="color:var(--muted);font-size:13px;">⚠️ Нет варианта для этой позиции</div>`}
       <div class="session-actions">
@@ -6822,9 +7077,43 @@ function buildStamp() {
   return `${p(d.getDate())}.${p(d.getMonth() + 1)}.${d.getFullYear()} ${p(d.getHours())}:${p(d.getMinutes())}`;
 }
 
+function productCatalogFieldsHTML(name) {
+  const item = readCatalogPending(name)?.value || catalogProduct(name);
+  const games = name.startsWith('PS Plus');
+  return DURATIONS.map(period => `<label class="field">${period}, ₽
+    <input type="number" min="1" step="1" data-catalog-price="${period}" value="${esc(item?.prices?.[period] || '')}"></label>`).join('')
+    + `<label class="field">${games ? 'Игры, по одной на строку' : 'Возможности и условия'}
+      <textarea id="product-catalog-details" rows="4">\n${esc((games ? item?.games : item?.features) || '')}</textarea>
+    </label>`;
+}
+
+function renderProductCatalogFields(name) {
+  const fields = document.getElementById('product-catalog-fields');
+  if (!fields) return;
+  fields.innerHTML = productCatalogFieldsHTML(name);
+  fields.dataset.dirty = 'false';
+  fields.dataset.product = name;
+  fields.dataset.base = JSON.stringify(productCatalog.products[name] || null);
+  fields.dataset.pendingId = readCatalogPending(name)?.id || '';
+}
+
 function settingsTabHTML() {
   const isCustom = !!state.settings.customSys;
   return `<div style="max-width:860px">
+    <div class="card" style="margin-bottom:16px">
+      <div class="card-title">Единый каталог подписок</div>
+      <div class="form-body">
+        <label class="field">Товар
+          <select id="product-catalog-name" data-act="catalog-select">${PRODUCT_CATALOG_NAMES.map(name => `<option>${esc(name)}</option>`).join('')}</select>
+        </label>
+        <div id="product-catalog-fields" data-product="${PRODUCT_CATALOG_NAMES[0]}" data-base="${esc(JSON.stringify(productCatalog.products[PRODUCT_CATALOG_NAMES[0]] || null))}" data-pending-id="${esc(readCatalogPending(PRODUCT_CATALOG_NAMES[0])?.id || '')}">${productCatalogFieldsHTML(PRODUCT_CATALOG_NAMES[0])}</div>
+        <div>
+          <button class="btn-sm" data-act="catalog-save">Сохранить товар</button>
+          <button class="btn-sm" data-act="catalog-refresh">Обновить с сервера</button>
+        </div>
+        <div id="product-catalog-status" role="status">${esc(catalogStatus)}</div>
+      </div>
+    </div>
     <div class="card" style="margin-bottom:16px">
       <div class="card-title">Профиль</div>
       <div class="form-body">
@@ -11408,6 +11697,60 @@ function bindDbTab() {
 // правится руками → кандидаты в SYS-промпт при месячном разборе.
 // ══════════════════════════════════════════
 
+function finalSnapshot(rec) {
+  if (!rec.finalDesc) return null;
+  return { title: rec.finalTitle || '', desc: rec.finalDesc, at: rec._finalAt || 0, editShare: rec.editShare };
+}
+
+function finalVersions(rec) {
+  return Array.isArray(rec._finalVersions) ? rec._finalVersions : [];
+}
+
+function retainFinalVersions(rec, candidates, current) {
+  const before = finalVersions(rec);
+  const seen = new Set(current ? [JSON.stringify([current.title, current.desc])] : []);
+  const kept = [];
+  for (const version of [...before, ...candidates]) {
+    if (!version?.desc) continue;
+    const key = JSON.stringify([version.title, version.desc]);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    kept.push(version);
+  }
+  if (JSON.stringify(before) === JSON.stringify(kept)) return false;
+  if (kept.length) rec._finalVersions = kept;
+  else delete rec._finalVersions;
+  return true;
+}
+
+function writeFinalText(rec, title, description) {
+  const previous = finalSnapshot(rec);
+  rec.finalTitle = title;
+  rec.finalDesc = description;
+  rec.editShare = jEditShare(rec.description || '', description);
+  rec._finalAt = Math.max(Date.now(), (rec._finalAt || 0) + 1);
+  retainFinalVersions(rec, [previous], finalSnapshot(rec));
+}
+
+function editedData(rec) {
+  return {
+    rec: rec._uid || null, product: rec.product, region: rec.region, physMode: !!rec._phys,
+    botTitle: rec.title || '', finalTitle: rec.finalTitle, titleChanged: rec.finalTitle !== (rec.title || ''),
+    botDescription: rec.description || '', finalDescription: rec.finalDesc,
+    editShare: rec.editShare, descPasted: rec.finalDesc.trim() !== (rec.description || '').trim(),
+  };
+}
+
+function capturePublishedText(rec, variant) {
+  if (!variant) return rec;
+  if (variant._generated) {
+    rec.title = variant._generated.title;
+    rec.description = variant._generated.description;
+  }
+  writeFinalText(rec, (variant.title || '').trim(), (variant.description || '').trim());
+  return rec;
+}
+
 function showFinalDialog(recId) {
   try {
     const r = state.db.find(x => x.id === recId);
@@ -11419,6 +11762,7 @@ function showFinalDialog(recId) {
     const hadFinal = !!r.finalDesc;
     const preTitle = r.finalTitle || r.title || '';
     const preDesc  = hadFinal ? r.finalDesc : '';
+    const alternatives = finalVersions(r);
     document.getElementById('final-overlay')?.remove();
     const ov = document.createElement('div');
     ov.id = 'final-overlay';
@@ -11439,6 +11783,10 @@ function showFinalDialog(recId) {
           <label>Финальное описание${hadFinal ? ' (сохранённый финал — правь поверх)' : ' — вставь как ушло на Авито (Ctrl+V)'}</label>
           <textarea id="final-desc" rows="8" placeholder="${hadFinal ? 'Очистить поле нельзя: пустое = оставить сохранённый финал как есть' : 'Пусто = «описание не менял, взять сгенерированное как финал»'}">${esc(preDesc)}</textarea>
         </div>
+        ${alternatives.length ? `<label class="field">Сохранённые версии финала
+          <select id="final-versions"><option value="">Выбрать для просмотра</option>
+          ${alternatives.map((version, index) => `<option value="${index}">${esc(version.title || version.desc.slice(0, 60))}</option>`).join('')}</select>
+        </label>` : ''}
         <div style="display:flex;gap:8px">
           <button class="btn-gen" id="final-save" style="flex:1;padding:10px">✓ Сохранить финал</button>
           <button class="btn-gen-secondary" id="final-skip" style="width:auto;margin-top:0;padding:10px 18px">Пропустить</button>
@@ -11461,6 +11809,14 @@ function showFinalDialog(recId) {
       ov.remove();
     };
     ov.querySelector('#final-skip').addEventListener('click', closeFinal);
+    ov.querySelector('#final-versions')?.addEventListener('change', event => {
+      const index = event.target.value;
+      if (index === '') return;
+      if (finalDirty() && !confirm('Подставить другую версию вместо текста в полях?')) { event.target.value = ''; return; }
+      const version = alternatives[Number(index)];
+      ov.querySelector('#final-title').value = version.title;
+      ov.querySelector('#final-desc').value = version.desc;
+    });
     ov.addEventListener('click', e => { if (e.target === ov) closeFinal(); });
     ov.querySelector('#final-save').addEventListener('click', () => {
       const ft = (ov.querySelector('#final-title')?.value || '').trim();
@@ -11472,25 +11828,14 @@ function showFinalDialog(recId) {
       // Открыл посмотреть и нажал «Сохранить» — ничего не изменилось. Второе
       // событие edited с тем же текстом задвоило бы пару «бот → правка» при
       // разборе и потянуло бы медиану editShare, поэтому просто закрываем.
-      if (hadFinal && fd === r.finalDesc && ft === (r.finalTitle || '')) {
+      if (hadFinal && (!finalDirty() || (fd === r.finalDesc && ft === (r.finalTitle || '')))) {
         ov.remove();
         toast('Финал не изменился');
         return;
       }
-      r.finalTitle = ft; r.finalDesc = fd;
-      r.editShare = jEditShare(r.description || '', fd);
+      writeFinalText(r, ft, fd);
       save();
-      jlog('edited', r._chain || null, {
-        rec: r._uid || null, product: r.product, region: r.region,
-        botTitle: r.title || '', finalTitle: ft, titleChanged: ft !== (r.title || ''),
-        botDescription: r.description || '', finalDescription: fd,
-        // descPasted отвечает на один вопрос разбора: финал ОТЛИЧАЕТСЯ от
-        // сгенерированного? Считать по «поле было непустым» больше нельзя — поле
-        // теперь предзаполняется, и правка одного заголовка притащила бы в выборку
-        // editShare структурный ноль (финал равен бот-версии), ради исключения
-        // которого фильтр `descPasted === true` в анализаторе и заведён.
-        editShare: r.editShare, descPasted: fd.trim() !== (r.description || '').trim(),
-      });
+      jlog('edited', r._chain || null, editedData(r));
       ov.remove();
       toast(r.editShare != null ? `Финал сохранён — изменено ~${Math.round(r.editShare * 100)}% описания` : 'Финал сохранён');
       if (state.tab === 'database') renderDb();
@@ -11637,8 +11982,9 @@ function dupCheck(vid, fid) {
   }
   // UX-4: сравнение также с историей уже размещённых объявлений (не только текущей сессией)
   for (const r of state.db) {
-    if (!r.title && !r.description) continue;
-    const key = (r.title || '') + (r.description || '');
+    const { title, desc } = rotLiveText(r);
+    if (!title && !desc) continue;
+    const key = title + ' ' + desc;
     if (seen.has(key)) continue;
     seen.add(key);
     const score = _dupSim(curText, key);
@@ -11738,7 +12084,7 @@ function checkAds(title, desc, category, plats, opts = {}) {
   // осознанный текст, и цена-приманка в ней («условно 1000 руб») для игр давала
   // бы красный бейдж на каждом варианте. Слова подписи не засчитываются и в
   // обязательные фразы — проверяется тело.
-  desc = sigStrip(desc);
+  desc = stripDigitalHeader(sigStrip(desc));
   const full = title + '\n' + desc;
   const errors = [], warnings = [], ok = [];
 
@@ -12160,7 +12506,7 @@ function bindAISettings() {
     const input = prompt('Админ-токен (оставьте пустым и нажмите OK, чтобы удалить):', cur);
     if (input === null) return; // отмена — ничего не трогаем
     const val = input.trim();
-    if (val) { localStorage.setItem('avito_admin_token', val); toast('Токен сохранён'); syncPullVoice().catch(() => {}); }
+    if (val) { localStorage.setItem('avito_admin_token', val); toast('Токен сохранён'); syncPullVoice().catch(() => {}); syncProductCatalog(); }
     else { localStorage.removeItem('avito_admin_token'); toast('Токен удалён — при следующем запросе спросит заново'); }
     const c = aiSettingsContainer(); if (c) c.innerHTML = settingsHTML();
     bindAISettings();
@@ -12386,7 +12732,10 @@ document.addEventListener('click', e => {
       if (v && alts?.[tidx]) {
         // Журнал: выбор из ↻×5 — какое название победило и что оно заменило (старое — до перезаписи)
         jlog('applied_title', v._chain || null, { before: v.title || '', after: alts[tidx].title, pickedIdx: tidx });
-        v.title = alts[tidx].title; delete state.altTitles[vid]; save(); refreshResults();
+        rememberGenerated(v);
+        v.title = alts[tidx].title; delete state.altTitles[vid];
+        variantScan(v, v._category || state.form.category);
+        save(); refreshResults();
       }
       break;
     }
@@ -12427,6 +12776,39 @@ document.addEventListener('click', e => {
 
     case 'copy-both': copyBtn(el.dataset.t + '\n\n' + el.dataset.d, el); if (el.dataset.j) jCopied(el); break;
 
+    case 'catalog-apply':
+      catalogFormIsNew = false; applyCatalogProduct(state.form); save(); reForm(); break;
+
+    case 'catalog-refresh':
+      syncProductCatalog(); break;
+
+    case 'catalog-save': {
+      const fields = document.getElementById('product-catalog-fields');
+      const name = fields?.dataset.product;
+      if (!PRODUCT_CATALOG_NAMES.includes(name)) break;
+      const inputs = [...fields.querySelectorAll('[data-catalog-price]')];
+      const invalid = inputs.find(input => !input.validity.valid);
+      if (invalid) { invalid.reportValidity(); break; }
+      const prices = Object.fromEntries(inputs.filter(input => input.value).map(input => [input.dataset.catalogPrice, Number(input.value)]));
+      const details = fields.querySelector('textarea').value.trim();
+      const value = name.startsWith('PS Plus') ? { prices, games: details } : { prices, features: details };
+      const previous = readCatalogPending(name);
+      const before = previous && previous.id === fields.dataset.pendingId && fields.dataset.dirty !== 'true'
+        ? productCatalog.products[name] || null : JSON.parse(fields.dataset.base || 'null');
+      let pending;
+      try { pending = saveCatalogPending(name, { before, value }, fields.dataset.pendingId); }
+      catch (error) {
+        catalogStatusText('Каталог не сохранён: ' + error.message);
+        break;
+      }
+      fields.dataset.dirty = 'false';
+      fields.dataset.pendingId = pending.id;
+      catalogStatusText('Сохранено в этом браузере. Сверяю с сервером…');
+      if (catalogRequest) catalogRequest.then(() => { if (readCatalogPending(name)?.id === pending.id) syncProductCatalog(); });
+      else syncProductCatalog();
+      break;
+    }
+
     case 'preset-save': {
       const name = prompt('Название пресета:', state.form.subType || state.form.aiService || state.form.digitalName || state.form.gameName || 'Новый пресет');
       if (!name || !name.trim()) break;
@@ -12444,6 +12826,7 @@ document.addEventListener('click', e => {
       if (!id) { toast('Выберите пресет из списка'); break; }
       const p = state.presets.find(x => x.id === id);
       if (!p) break;
+      catalogFormIsNew = false;
       state.form = { ...DEF_FORM, ...p.form };
       // Список игр живёт у подписки, а не в пресете: пресеты до 23.10 могли сохранить
       // список чужой подписки, а у пресета без поля подставился бы заводской список формы
@@ -12498,8 +12881,9 @@ document.addEventListener('click', e => {
     case 'queue-add': {
       const qf = state.queueForm;
       if (!qf.region.trim()) { toast('Укажите регион'); break; }
+      const form = qf.source === 'auto' ? generationForm() : null;
       if (qf.source === 'auto') {
-        const miss = validateForm();
+        const miss = validateForm(form);
         if (miss.length) { toast('Форма генератора не заполнена для «авто»: ' + miss.join(', ')); break; }
       }
       const product = qf.product.trim() || (qf.source === 'auto' ? currentProductName(state.form) : '');
@@ -12509,7 +12893,7 @@ document.addEventListener('click', e => {
         source: qf.source,
         favId: qf.source === 'fav' ? (qf.favId ?? state.favorites[0]?._fid ?? null) : null,
         // «авто» снимает снимок текущей формы — каждая позиция генерируется из своего товара (UX-1)
-        form: qf.source === 'auto' ? JSON.parse(JSON.stringify(state.form)) : null,
+        form,
       });
       save(); render();
       jlog('queue_add', null, { source: qf.source, product, region: qf.region.trim() });
@@ -12518,7 +12902,7 @@ document.addEventListener('click', e => {
 
     case 'queue-add-batch':
       state.batchResults.forEach(item => {
-        state.postQueue.push({ id: Date.now() + Math.random(), product: currentProductName(state.form), region: item.region, source: 'batch', favId: null, variant: item.variant });
+        state.postQueue.push({ id: Date.now() + Math.random(), product: item.variant?._product || currentProductName(state.form), region: item.region, source: 'batch', favId: null, variant: item.variant });
       });
       save(); render();
       jlog('queue_add', state.batchResults[0]?.variant?._chain || null, { source: 'batch', count: state.batchResults.length });
@@ -12541,8 +12925,8 @@ document.addEventListener('click', e => {
       const item = si.items[si.idx];
       if (item) {
         const recUid = newUid();
-        state.db.push({
-          id: Date.now(), _uid: recUid, product: item.product, region: item.region,
+        const rec = capturePublishedText({
+          id: Date.now(), _uid: recUid, product: item.variant?._product || item.product, region: item.region,
           title: item.variant?.title || '', description: item.variant?.description || '',
           account: accActive(),
           status: 'active', note: '', date: new Date().toLocaleDateString('ru'),
@@ -12551,14 +12935,16 @@ document.addEventListener('click', e => {
           // и факты у категорий разные — без неё финал некуда положить
           _category: item.variant?._category || null,
           ...(item.variant?._phys ? { _phys: true } : {}),
-        });
+        }, item.variant);
+        state.db.push(rec);
         save();
         // Журнал: в сессии постинга диалог финала не показываем (не рвём конвейерный темп) —
         // финал доносится кнопкой «📥 финал» в Истории
         jlog('posted', item.variant?._chain || null, {
-          rec: recUid, product: item.product, region: item.region, title: item.variant?.title || '',
-          scan: jScanLevel(item.variant), session: true,
+          rec: recUid, product: rec.product, region: item.region, title: item.variant?.title || '',
+          scan: jScanLevel(item.variant), physMode: !!item.variant?._phys, session: true,
         });
+        if (item.variant?._generated) jlog('edited', rec._chain, editedData(rec));
       }
       si.idx++;
       renderSession();
@@ -12852,7 +13238,7 @@ document.addEventListener('click', e => {
       save(); renderDb();
       jlog('posted', fresh._chain, {
         rec: fresh._uid, product: fresh.product, category: fresh._category, region: fresh.region,
-        title: fresh.title, rotated: res.mode, account: fresh.account,
+        title: fresh.title, physMode: !!fresh._phys, rotated: res.mode, account: fresh.account,
       });
       showFinalDialog(fresh.id);
       break;
@@ -13084,14 +13470,14 @@ document.addEventListener('click', e => {
       // одной публикации потом сбивают с толку: финал доносится в одну, вторая
       // остаётся пустой. Переспрашиваем, а не запрещаем: одно объявление в разных
       // регионах — нормальный рабочий сценарий.
-      const already = state.db.filter(r => (r.title || '') === (v.title || '') && (r.title || ''));
+      const already = state.db.filter(r => v.title && (r.finalTitle || r.title) === v.title);
       if (already.length && !confirm(
         `Это объявление уже отмечено размещённым (${already.length}): ${already.map(r => r.region).join(', ')}.\n\nДобавить ещё одну публикацию?`
       )) break;
       const region = prompt('Регион размещения?', (state.settings.regions || REGIONS)[0] || 'Москва');
       if (!region || !region.trim()) break;
       const recId = Date.now(), recUid = newUid();
-      state.db.push({
+      const rec = capturePublishedText({
         id: recId, _uid: recUid,
         product: v._product || currentProductName(state.form), region: region.trim(),  // F4: товар из варианта
         title: v.title || '', description: v.description || '',
@@ -13104,14 +13490,16 @@ document.addEventListener('click', e => {
         // с ценой в теле, которую правила игр запрещают. Нет штампа — пусть null.
         _category: v._category || null,
         ...(v._phys ? { _phys: true } : {}),
-      });
+      }, v);
+      state.db.push(rec);
       save();
       // rec — ключ записи Истории: по нему разбор склеивает posted и все edited
       // одной публикации, а повтор с тем же eid — это переотправка, а не новое событие
       jlog('posted', v._chain || null, {
         rec: recUid, product: v._product || null, category: v._category || null, region: region.trim(),
-        title: v.title || '', scan: jScanLevel(v),
+        title: v.title || '', scan: jScanLevel(v), physMode: !!v._phys,
       });
+      if (v._generated) jlog('edited', rec._chain, editedData(rec));
       toast('Отмечено как размещено: ' + region.trim());
       showFinalDialog(recId); // необязательная вставка финального текста с Авито (выбор Дениса: вариант А)
       break;
@@ -13143,12 +13531,12 @@ document.addEventListener('click', e => {
       // предохранителя, что остальным: переспрос от случайного повторного нажатия
       // и постоянный _uid (без него две записи с одинаковым товаром/регионом/
       // названием/датой схлопнулись бы в одну на другом устройстве при слиянии).
-      const dupB = state.db.filter(r => (r.title || '') === (item.variant.title || '') && (r.title || ''));
+      const dupB = state.db.filter(r => item.variant.title && (r.finalTitle || r.title) === item.variant.title);
       if (dupB.length && !confirm(
         `Это объявление уже отмечено размещённым (${dupB.length}): ${dupB.map(r => r.region).join(', ')}.\n\nДобавить ещё одну публикацию?`
       )) break;
       const recId = Date.now(), recUid = newUid();
-      state.db.push({
+      const rec = capturePublishedText({
         id: recId, _uid: recUid,
         product: item.variant._product || currentProductName(state.form), region: item.region,  // F4: товар из варианта
         title: item.variant.title || '', description: item.variant.description || '',
@@ -13157,12 +13545,14 @@ document.addEventListener('click', e => {
         _chain: item.variant._chain || null,
         _category: item.variant._category || null,
         ...(item.variant._phys ? { _phys: true } : {}),
-      });
+      }, item.variant);
+      state.db.push(rec);
       save();
       jlog('posted', item.variant._chain || null, {
         rec: recUid, product: item.variant._product || null, category: item.variant._category || null, region: item.region,
-        title: item.variant.title || '', scan: jScanLevel(item.variant),
+        title: item.variant.title || '', scan: jScanLevel(item.variant), physMode: !!item.variant._phys,
       });
+      if (item.variant._generated) jlog('edited', rec._chain, editedData(rec));
       toast('Отмечено как размещено: ' + item.region);
       showFinalDialog(recId);
       break;
@@ -13273,10 +13663,18 @@ document.addEventListener('change', e => {
   const act = el.dataset.act;
   if (!act) return;
 
+  if (act === 'catalog-select') {
+    renderProductCatalogFields(el.value);
+    return;
+  }
   if (act === 'cat') {
-    state.form.category = el.value; save(); reForm(); return;
+    catalogFormIsNew = false;
+    state.form.category = el.value;
+    if (catalogReady || catalogProduct(catalogProductName(state.form))) applyCatalogProduct(state.form);
+    save(); reForm(); return;
   }
   if (act === 'field') {
+    catalogFormIsNew = false;
     if (el.dataset.k === 'games' && subGamesField(el)) { save(); return; }
     state.form[el.dataset.k] = el.value;
     if (el.dataset.k === 'subType') {
@@ -13285,6 +13683,15 @@ document.addEventListener('change', e => {
       if (t.startsWith('PS Plus')) state.form.platforms = ['PS4', 'PS5'];
       else if (t === 'Game Pass Ultimate') state.form.platforms = ['Xbox'];
       else if (t === 'EA Play') state.form.platforms = ['PS4', 'PS5', 'Xbox'];
+      if (catalogReady || catalogProduct(t) || !catalogProductName(state.form)) applyCatalogProduct(state.form);
+      save(); reForm(); return;
+    }
+    if (el.dataset.k === 'aiService' && (catalogReady || catalogProduct(el.value))) {
+      applyCatalogProduct(state.form); save(); reForm(); return;
+    }
+    if (el.dataset.k === 'aiDuration' && (catalogReady || catalogProduct(catalogProductName(state.form)))) {
+      state.form.aiPrice = String(catalogProduct(catalogProductName(state.form))?.prices?.[el.value] || '');
+      if (state.form._catalogApplied) state.form._catalogApplied.aiPrice = state.form.aiPrice;
       save(); reForm(); return;
     }
     save(); return;
@@ -13299,8 +13706,12 @@ document.addEventListener('change', e => {
 
 document.addEventListener('input', e => {
   const el = e.target;
+  if (el.dataset.resultEdit) { updateResultEditor(el); return; }
+  const catalogFields = el.closest('#product-catalog-fields');
+  if (catalogFields) catalogFields.dataset.dirty = 'true';
   const act = el.dataset.act;
   if (act === 'field') {
+    catalogFormIsNew = false;
     if (!(el.dataset.k === 'games' && subGamesField(el))) state.form[el.dataset.k] = el.value;
     // Запасной путь для браузеров без field-sizing: подгоняем высоту по тексту
     if (el.classList.contains('notes-grow') && !CSS.supports('field-sizing', 'content')) {
@@ -13309,6 +13720,7 @@ document.addEventListener('input', e => {
     clearTimeout(el._t); el._t = setTimeout(save, 400);
   }
   if (act === 'dur-price') {
+    catalogFormIsNew = false;
     state.form.durations[+el.dataset.i].price = el.value;
     clearTimeout(el._t); el._t = setTimeout(save, 400);
   }
@@ -13379,6 +13791,8 @@ jFlush();
 syncPullVoice().catch(() => {});
 // Подписи — тоже сразу, чтобы первая же генерация шла с ними (см. syncPullSigPools)
 syncPullSigPools().catch(() => {});
+if (lsRaw('avito_admin_token') && syncEnabled()) syncProductCatalog();
+window.addEventListener('online', () => { if (lsRaw('avito_admin_token') && syncEnabled()) syncProductCatalog(); });
 // Вернулись на вкладку, пролежавшую в фоне, — сначала забираем, что пришло с других
 // устройств (F21); отправка и сама заберёт, но так новое видно сразу
 document.addEventListener('visibilitychange', () => {
@@ -13386,6 +13800,7 @@ document.addEventListener('visibilitychange', () => {
   // Подписи могли поправить на другом устройстве или на сервере — по версии пула
   // Не чаще раза в 2 минуты: перед отправкой настроек сверка идёт и так
   try { if (document.visibilityState === 'visible' && Date.now() - _sigPullAt > SYNC_PULL_FRESH) syncPullSigPools().catch(() => {}); } catch(e) {}
+  if (document.visibilityState === 'visible' && Date.now() - catalogPullAt > SYNC_PULL_FRESH && lsRaw('avito_admin_token') && syncEnabled()) syncProductCatalog();
 });
 
 // GFX-13: шрифты грузятся асинхронно — если канвас с текстом успел отрисоваться

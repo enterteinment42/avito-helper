@@ -237,7 +237,7 @@ export async function runTruncate(browser, base, t) {
       await doGenDescriptionsForTitles();
       const r = {
         salvaged: salv.map(v => v.id),
-        pairs: state.results.map(v => `${v.title}|${v.description}`),
+        pairs: state.results.map(v => `${v.title}|${stripDigitalHeader(v.description)}`),
         toasts: window.__toasts.slice(),
       };
       window.toast = origToast;

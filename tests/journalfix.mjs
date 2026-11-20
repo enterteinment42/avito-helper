@@ -112,13 +112,14 @@ export async function runJournalfix(browser, base, t) {
       return out;
     }, [SIG_A, SIG_B, GEN, GAME_FORM]);
 
-    t.ok('пустой пул — описание как у модели', r.emptyPool.every((d, i) => d === `Тело варианта ${i + 1}. Оформляется онлайн. PS4 PS5`), JSON.stringify(r.emptyPool));
+    const header = 'Перед покупкой сначала свяжитесь со мной через кнопку «написать» для уточнения деталей.\n\n';
+    t.ok('пустой пул — шапка и описание модели', r.emptyPool.every((d, i) => d === `${header}Тело варианта ${i + 1}. Оформляется онлайн. PS4 PS5`), JSON.stringify(r.emptyPool));
     t.ok('с пулом каждый вариант кончается подписью из пула',
-      r.descs.every((d, i) => d === `Тело варианта ${i + 1}. Оформляется онлайн. PS4 PS5\n\n${r.sigs[i]}`) && r.sigs.every(s => s === SIG_A || s === SIG_B),
+      r.descs.every((d, i) => d === `${header}Тело варианта ${i + 1}. Оформляется онлайн. PS4 PS5\n\n${r.sigs[i]}`) && r.sigs.every(s => s === SIG_A || s === SIG_B),
       JSON.stringify(r.descs));
     t.ok('соседние варианты — с разными подписями', r.sigs[0] !== r.sigs[1] && r.sigs[1] !== r.sigs[2], JSON.stringify(r.sigs));
     t.ok('🔄 меняет подпись, тело на месте', r.swap.after !== r.swap.before
-      && r.swap.desc === `Тело варианта 1. Оформляется онлайн. PS4 PS5\n\n${r.swap.after}`, JSON.stringify(r.swap));
+      && r.swap.desc === `${header}Тело варианта 1. Оформляется онлайн. PS4 PS5\n\n${r.swap.after}`, JSON.stringify(r.swap));
     t.ok('пул изменился после генерации — 🔄 оставляет одну подпись, а не две', r.swapAfterEdit.one, r.swapAfterEdit.d1);
     t.eq('игровая подписка берёт подпись из пула подписок', r.subSig, 'PS Plus.\n\nПодпись подписки.');
     t.eq('AI-подписка — из того же пула подписок', r.aiSig, 'Claude.\n\nПодпись подписки.');
