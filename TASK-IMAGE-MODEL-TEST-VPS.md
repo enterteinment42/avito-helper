@@ -26,8 +26,26 @@
 
 ## Итог пробы (заполнить после)
 
-- [ ] фото получено, скрипт прогнан
-- [ ] 2.5-sunburst (эталон)
-- [ ] 2.6-sunburst
-- [ ] nano-banana-2.1
-- [ ] файлы переданы Денису
+- [x] фото получено (из чата, `~/image-test/xbox.jpg`, в git не кладётся), скрипт прогнан 23.11
+- [x] 2.5-sunburst (эталон) — 41 с, $0.060965, quality=high, ошибок нет
+- [x] 2.6-sunburst — 30 с, $0.060965, quality=high, ошибок нет
+- [x] nano-banana-2.1 — 12 с, $0.0390825, дефолтное качество, ошибок нет
+- [x] файлы переданы Денису в чат сессии 23.11 (лежат в `~/image-test-run/image-test-out/`)
+- [x] повтор 2.5/2.6 — 45 с / 31 с, по $0.060965 (`~/image-test-run/run2/image-test-out/`). Поведение устойчивое:
+  2.6 оба раза оставляет фон исходного фото (комнату владельца), 2.5 оба раза строит сцену заново.
+  Во втором прогоне у 2.6 на ТВ читается «Grand Theft Auto» — латиница Денису подходит, кириллица — нет.
+
+**Решение Дениса 23.11:** берём `openai/gpt-image-2.6-sunburst`. `OPENROUTER_IMAGE_MODEL` в
+`poigraem-backend/.env` переключён владельцем 23.11 ~15:00 UTC (копия старого — `~/backups/env-before-image26-*.bak`),
+`poigraem-api` перезапущен, `/health` ok. Первый боевой вызов `/api/image` на 2.6 ещё не проверен.
+Промпт сцен — под 2.6, без фона с исходного фото: `TASK-SCENE-PROMPT-26-WINDOWS.md`.
+
+⚠️ **Gemini сравнён не на равных** (ревью скрипта 23.11): он шёл через chat/completions без параметра
+качества, а боевой `/api/image` ходит на `/api/v1/images`, где у gemini параметр `resolution`.
+Его $0.039 и 12 с НЕ сопоставимы с $0.061 у GPT на `quality=high` и не предсказывают поведение на сервере.
+Если когда-нибудь пробовать Gemini всерьёз — через `/images` с `resolution` (сверить `GET /api/v1/images/models`).
+Прочие находки ревью (картинка ссылкой, не-JSON ответ, маршрут по слову `sunburst`) — скрипт разовый, не чинили.
+
+⚠️ Схема из задачи не сработала: OpenAI-модели отвечают 404 на chat/completions («image generation model… use /api/v1/images»).
+Для них скрипт исправлен на `/api/v1/images` (`prompt`, `input_references`, `aspect_ratio: 3:4`, `quality: high`); исправленная копия — `~/image-test-run/image-model-test.mjs`,
+в `tests/image-model-test.mjs` репозитория правка ещё не внесена (Windows-сессия). Gemini идёт через chat/completions без параметра качества.
