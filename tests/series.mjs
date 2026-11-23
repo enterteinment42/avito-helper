@@ -105,7 +105,9 @@ export async function runSeries(browser, base, t) {
       return {
         busy, n: r.length, order: r.map((q, k) => q.body.input_references[0].image_url.url === angles[k]),
         room: r.map(q => q.body.input_references.length === 2 && q.body.input_references[1].image_url.url.startsWith('data:image/jpeg')),
-        rule: r.every(q => q.body.prompt.includes('ПРИЛОЖЕНЫ ДВЕ КАРТИНКИ') && q.body.prompt.startsWith(stagedPrompt(s))),
+        rule: r.every(q => q.body.prompt.includes('ПРИЛОЖЕНЫ ДВЕ КАРТИНКИ') && q.body.prompt.startsWith(stagedPrompt(s, true))),
+        // Код-ревью 23.11: «ракурс не повторяй» спорило с «товар бери с этого ракурса»
+        noRebuild: r.every(q => !/сцену построй заново|не повторяй/.test(q.body.prompt)),
         q: r.map(q => q.body.quality), maxLen: Math.max(...r.map(q => q.len)), done: s.items.every(it => it.dataUrl),
         ev: window.__jlog.filter(x => x.ev === 'staged' && x.data.index > 0).map(x => [x.data.index, x.data.room]),
       };
@@ -113,6 +115,7 @@ export async function runSeries(browser, base, t) {
     t.ok('на время серии карточка занята: фото не сменить, повторный тап не оплачивается', rest.busy.vb && rest.busy.guard && rest.busy.dis, JSON.stringify(rest.busy));
     t.ok('остальные 4 — по одному, каждый со своим ракурсом по порядку', rest.n === 4 && rest.order.every(Boolean) && rest.done, JSON.stringify(rest));
     t.ok('вторым референсом — первый кадр, ужатый в JPEG; в промпте роли картинок названы', rest.room.every(Boolean) && rest.rule, JSON.stringify(rest));
+    t.ok('кадры с комнатой не просят «построй сцену заново / ракурс не повторяй»', rest.noRebuild);
     t.ok('тело каждого запроса под лимитом сервера (большой PNG первого кадра ужат)', rest.maxLen < 1500000, String(rest.maxLen));
     t.ok('качество остальных — текущее (черновик первого → финал остальных), в журнале room: true', rest.q.every(q => q === 'high') && JSON.stringify(rest.ev) === JSON.stringify([[1, true], [2, true], [3, true], [4, true]]), JSON.stringify(rest));
 

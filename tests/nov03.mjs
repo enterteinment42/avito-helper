@@ -66,6 +66,10 @@ export async function runNov03(browser, base, t) {
         refs: req.body.input_references.length,
         quality: req.body.quality,
         rule: req.body.prompt.includes('черновик этого же кадра'),
+        // Код-ревью 23.11: «построй сцену заново» спорило с «повтори черновик точнее»
+        draftRebuild: /сцену построй заново|не повторяй/.test(req.body.prompt),
+        draftBgRule: req.body.prompt.includes('НЕ переносить'),
+        draftPrompt: window.__req[0].body.prompt,
         scene: st.img.scene === draftScene,
         polished: st.img.polished === true && st.img.quality === 'high',
         btnGone: !stagedCardHTML().includes('data-act="staged-polish"'),
@@ -79,6 +83,9 @@ export async function runNov03(browser, base, t) {
     t.ok('доводка шлёт два референса: фото и черновик', r.refs === 2);
     t.ok('качество доводки — финал', r.quality === 'high' && r.polished);
     t.ok('в промпте правило «повтори черновик»', r.rule);
+    t.ok('черновик просит построить сцену заново', /сцену построй заново/.test(r.draftPrompt));
+    t.ok('доводка НЕ просит строить сцену заново — она повторяет черновик', !r.draftRebuild);
+    t.ok('но фон с фото товара не берёт и при доводке', r.draftBgRule);
     t.ok('сцена — черновика, а не переключённая после', r.scene);
     t.ok('у финала кнопки нет, повторно не доводится', r.btnGone && r.noRepeat);
     t.ok('консоль чистая', consoleErrors.length === 0, consoleErrors.join('\n'));
